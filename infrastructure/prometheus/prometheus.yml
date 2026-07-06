@@ -1,0 +1,138 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    project: 'gitOracle'
+    environment: 'development'
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+
+  # ─── Spring Boot Services (via Actuator /actuator/prometheus) ─
+  - job_name: 'error-ingestor'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8081']
+        labels:
+          service: 'error-ingestor'
+          layer: 'java-service'
+
+  - job_name: 'git-forensics'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8082']
+        labels:
+          service: 'git-forensics'
+          layer: 'java-service'
+
+  - job_name: 'orchestrator'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8083']
+        labels:
+          service: 'orchestrator'
+          layer: 'java-service'
+
+  - job_name: 'test-runner'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8084']
+        labels:
+          service: 'test-runner'
+          layer: 'java-service'
+
+  - job_name: 'github-bot'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8085']
+        labels:
+          service: 'github-bot'
+          layer: 'java-service'
+
+  # ─── Python AI Agents (via /metrics endpoint) ─────────────────
+  - job_name: 'investigator-agent'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:9001']
+        labels:
+          service: 'investigator'
+          layer: 'ai-agent'
+
+  - job_name: 'fixer-agent'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:9002']
+        labels:
+          service: 'fixer'
+          layer: 'ai-agent'
+
+  - job_name: 'reviewer-agent'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:9003']
+        labels:
+          service: 'reviewer'
+          layer: 'ai-agent'
+
+  - job_name: 'planner-agent'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:9004']
+        labels:
+          service: 'planner'
+          layer: 'ai-agent'
+
+  - job_name: 'prompt-registry'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:9005']
+        labels:
+          service: 'prompt-registry'
+          layer: 'ai-infra'
+
+  - job_name: 'guardrails'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:9006']
+        labels:
+          service: 'guardrails'
+          layer: 'ai-infra'
+
+  # ─── Infrastructure Services ──────────────────────────────────
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka:9101']
+        labels:
+          service: 'kafka'
+          layer: 'infrastructure'
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: 'redis'
+          layer: 'infrastructure'
+
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          service: 'postgres'
+          layer: 'infrastructure'
+
+  - job_name: 'neo4j'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['neo4j:2004']
+        labels:
+          service: 'neo4j'
+          layer: 'infrastructure'
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+          layer: 'observability'
