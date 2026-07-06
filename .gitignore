@@ -1,0 +1,55 @@
+# ─── Secrets & Config ────────────────────────────────────────
+.env
+secrets/
+
+# ─── Models (large binary files) ─────────────────────────────
+models/*.gguf
+models/*.bin
+models/*.safetensors
+
+# ─── Java ────────────────────────────────────────────────────
+**/target/
+**/.gradle/
+**/build/
+**/*.class
+**/*.jar
+**/*.war
+**/.idea/
+**/*.iml
+**/out/
+
+# ─── Python ──────────────────────────────────────────────────
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.venv/
+**/venv/
+**/.env
+**/*.egg-info/
+**/dist/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# ─── Node / React ────────────────────────────────────────────
+**/node_modules/
+**/dist/
+**/.next/
+**/.vite/
+
+# ─── Docker volumes (local dev) ──────────────────────────────
+.docker-volumes/
+
+# ─── OS ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Logs ────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── IDE ─────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
