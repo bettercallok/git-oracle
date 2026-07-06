@@ -1,0 +1,36 @@
+# ============================================================
+# GitOracle — LLM Server (llama.cpp)
+# Shared model runtime for all agents.
+# ============================================================
+
+name: git-oracle-llm
+
+networks:
+  git-oracle-net:
+    name: git-oracle-net
+    external: true
+
+services:
+  llama-server:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    container_name: git-oracle-llm-server
+    restart: unless-stopped
+    networks:
+      - git-oracle-net
+    ports:
+      - "${LLM_SERVER_PORT:-8090}:8080"
+    volumes:
+      - ../../models:/models:ro
+    command: >
+      --model /models/qwen2.5-coder-7b-instruct-q4_k_m.gguf
+      --ctx-size ${LLM_CTX_SIZE:-8192}
+      --threads ${LLM_THREADS:-4}
+      --parallel 4
+      --host 0.0.0.0
+      --port 8080
+    healthcheck:
+      test: ["CMD-SHELL", "apt-get update && apt-get install -y curl && curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
