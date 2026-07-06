@@ -1,0 +1,30 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    url: http://prometheus:9090
+    access: proxy
+    isDefault: true
+    jsonData:
+      httpMethod: POST
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+
+  - name: PostgreSQL
+    type: postgres
+    uid: postgres
+    url: postgres:5432
+    user: ${GF_DATASOURCE_PG_USER}
+    secureJsonData:
+      password: ${GF_DATASOURCE_PG_PASSWORD}
+    jsonData:
+      database: gitOracle
+      sslmode: disable
+      maxOpenConns: 5
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+      postgresVersion: 1600
+      timescaledb: false
