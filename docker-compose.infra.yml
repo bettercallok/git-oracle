@@ -1,0 +1,376 @@
+# ============================================================
+# GitOracle — Infrastructure docker-compose
+# Starts all data stores, message brokers, and observability
+# services. Does NOT start application services.
+#
+# Usage:
+#   docker compose -f docker-compose.infra.yml up -d
+#   docker compose -f docker-compose.infra.yml down -v   (nuke everything)
+# ============================================================
+
+name: git-oracle-infra
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  git-oracle-net:
+    name: git-oracle-net
+    driver: bridge
+
+volumes:
+  postgres-data:
+  neo4j-data:
+  neo4j-logs:
+  neo4j-import:
+  redis-data:
+  qdrant-data:
+  kafka-data:
+  prometheus-data:
+  grafana-data:
+  langfuse-data:
+
+services:
+
+  # ============================================================
+  # PostgreSQL 16 + pgvector
+  # Stores: agent jobs, audit log, prompt versions, agent memory,
+  #         eval results, human feedback, repo procedures
+  # Also hosts the Langfuse database
+  # ============================================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: git-oracle-postgres
+    restart: unless-stopped
+    networks: [git-oracle-net]
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gitOracle}
+      POSTGRES_USER: ${POSTGRES_USER:-gitOracle}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gitOracle} -d ${POSTGRES_DB:-gitOracle}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging: *default-logging
+    shm_size: 128mb
+    command: >
+      postgres
+        -c max_connections=200
+        -c shared_buffers=256MB
+        -c effective_cache_size=768MB
+        -c maintenance_work_mem=64MB
+        -c checkpoint_completion_target=0.9
+        -c wal_buffers=16MB
+        -c default_statistics_target=100
+        -c random_page_cost=1.1
+        -c effective_io_concurrency=200
+        -c work_mem=4MB
+        -c log_min_duration_statement=1000
+        -c log_checkpoints=on
+
+  # ============================================================
+  # Neo4j 5 — Causal Git Graph
+  # Stores: commit nodes, file nodes, bug nodes, developer nodes,
+  #         causal relationships (INTRODUCED, CAUSED, RESOLVES)
+  # ============================================================
+  neo4j:
+    image: neo4j:5.20-community
+    container_name: git-oracle-neo4j
+    restart: unless-stopped
+    networks: [git-oracle-net]
+    ports:
+      - "${NEO4J_HTTP_PORT:-7475}:7474"     # Browser UI
+      - "${NEO4J_BOLT_PORT:-7688}:7687"     # Bolt protocol (drivers)
+    environment:
+      NEO4J_AUTH: "${NEO4J_AUTH:?NEO4J_AUTH is required}"
+      NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*,gds.*"
+      NEO4J_dbms_security_procedures_allowlist: "apoc.*,gds.*"
+      NEO4J_server_memory_heap_initial__size: "512m"
+      NEO4J_server_memory_heap_max__size: "1G"
+      NEO4J_server_memory_pagecache_size: "512m"
+      NEO4J_db_transaction_timeout: "60s"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - neo4j-import:/var/lib/neo4j/import
+      - ./infrastructure/neo4j:/neo4j-init:ro
+    healthcheck:
+      test: ["CMD", "wget", "-O", "/dev/null", "-q", "http://localhost:7474"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    logging: *default-logging
+
+  # Init container — runs init.cypher after Neo4j is healthy
+  neo4j-init:
+    image: neo4j:5.20-community
+    container_name: git-oracle-neo4j-init
+    networks: [git-oracle-net]
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      NEO4J_PASSWORD: ${POSTGRES_PASSWORD:?NEO4J_PASSWORD is required}
+    volumes:
+      - ./infrastructure/neo4j:/neo4j-init:ro
+    entrypoint: ["/bin/bash", "-c"]
+    command: >
+      "echo '⏳ Running Neo4j schema init...' &&
+      cypher-shell
+        -u neo4j
+        -p $${NEO4J_PASSWORD}
+        -a bolt://neo4j:7687
+        --file /neo4j-init/init.cypher &&
+      echo '✅ Neo4j schema initialised.'"
+    restart: on-failure
+
+  # ============================================================
+  # Redis 7 — Task Queue, Session Cache, Dedup Cache
+  # Stores: test-requests queue, test-results pubsub,
+  #         review sessions, prompt cache, error dedup keys
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: git-oracle-redis
+    restart: unless-stopped
+    networks: [git-oracle-net]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: >
+      redis-server
+        --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+        --maxmemory 512mb
+        --maxmemory-policy allkeys-lru
+        --appendonly yes
+        --appendfsync everysec
+        --save 900 1
+        --save 300 10
+        --save 60 10000
+        --loglevel notice
+        --tcp-keepalive 300
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *default-logging
+
+  # ============================================================
+  # Qdrant — Vector Database for Agent Semantic Memory
+  # Stores: cross-job repository knowledge (facts about codebases)
+  # Purpose-built vector DB, faster than pgvector for large recall
+  # ============================================================
+  qdrant:
+    image: qdrant/qdrant:v1.9.3
+    container_name: git-oracle-qdrant
+    restart: unless-stopped
+    networks: [git-oracle-net]
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"    # REST API + Web UI
+      - "${QDRANT_GRPC_PORT:-6334}:6334"    # gRPC
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__LOG_LEVEL: INFO
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging: *default-logging
+
+  # ============================================================
+  # Apache Kafka 3.7 (KRaft mode — no Zookeeper required)
+  # Event backbone for all 16 GitOracle pipeline topics
+  # ============================================================
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: git-oracle-kafka
+    restart: unless-stopped
+    networks: [git-oracle-net]
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"          # External (host access)
+    environment:
+      # KRaft mode — no Zookeeper
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+
+      # Listeners
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      # Performance & reliability
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_COMPRESSION_TYPE: lz4
+      KAFKA_MESSAGE_MAX_BYTES: 10485760
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+    logging: *default-logging
+
+  # Init container — creates all 16 Kafka topics after broker is healthy
+  kafka-init:
+    image: apache/kafka:3.8.0
+    container_name: git-oracle-kafka-init
+    networks: [git-oracle-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./infrastructure/kafka/create-topics.sh:/create-topics.sh:ro
+    entrypoint: ["/bin/bash", "/create-topics.sh"]
+    restart: on-failure
+
+  # Kafka Web UI — browse topics, messages, consumer groups
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: git-oracle-kafka-ui
+    restart: unless-stopped
+    networks: [git-oracle-net]
+    ports:
+      - "8089:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: git-oracle
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: PLAINTEXT
+      SERVER_SERVLET_CONTEXT_PATH: /
+      AUTH_TYPE: "disabled"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    logging: *default-logging
+
+  # ============================================================
+  # Prometheus — Metrics Collection
+  # Scrapes all Spring Boot services and Python agents
+  # ============================================================
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: git-oracle-prometheus
+    restart: unless-stopped
+    networks: [git-oracle-net]
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.console.libraries=/usr/share/prometheus/console_libraries
+      - --web.console.templates=/usr/share/prometheus/consoles
+      - --web.enable-lifecycle
+      - --web.enable-admin-api
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging: *default-logging
+
+  # ============================================================
+  # Grafana — Observability Dashboard
+  # Pre-loaded with GitOracle pipeline dashboard
+  # Access: http://localhost:3001  admin / ${GRAFANA_ADMIN_PASSWORD}
+  # ============================================================
+  grafana:
+    image: grafana/grafana:10.4.4
+    container_name: git-oracle-grafana
+    restart: unless-stopped
+    networks: [git-oracle-net]
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_DOMAIN: localhost
+      GF_SERVER_ROOT_URL: http://localhost:${GRAFANA_PORT:-3001}
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+      # Datasource env vars (for PostgreSQL datasource)
+      GF_DATASOURCE_PG_USER: ${POSTGRES_USER:-gitOracle}
+      GF_DATASOURCE_PG_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
+
+  # ============================================================
+  # Langfuse — LLM Observability (Self-Hosted)
+  # Captures: every prompt, response, token count, latency
+  # per LLM call. Trace hierarchy: job → agent_step → llm_call
+  # Access: http://localhost:3002
+  # ============================================================
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: git-oracle-langfuse
+    restart: unless-stopped
+    networks: [git-oracle-net]
+    ports:
+      - "${LANGFUSE_PORT:-3002}:3000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gitOracle}:${POSTGRES_PASSWORD}@postgres:5432/langfuse
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3002}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?LANGFUSE_NEXTAUTH_SECRET is required}
+      SALT: ${LANGFUSE_SALT:?LANGFUSE_SALT is required}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/3000' 2>/dev/null || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    logging: *default-logging
