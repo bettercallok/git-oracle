@@ -1,0 +1,11 @@
+plugins {
+    id 'org.springframework.boot'
+}
+
+dependencies {
+    implementation project(':git-oracle-core')
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    
+    // Test
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
