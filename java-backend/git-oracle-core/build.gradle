@@ -1,0 +1,19 @@
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+    api 'org.springframework.boot:spring-boot-starter-data-jpa'
+    api 'org.springframework.boot:spring-boot-starter-data-neo4j'
+    api 'org.springframework.kafka:spring-kafka'
+    api 'com.fasterxml.jackson.core:jackson-databind'
+    api 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+    
+    // Postgres specific
+    runtimeOnly 'org.postgresql:postgresql'
+}
+
+// Since this is a library, disable the bootJar task and enable the standard jar task
+tasks.named('jar') {
+    enabled = true
+}
