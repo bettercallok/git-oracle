@@ -12,7 +12,7 @@ networks:
 
 services:
   llama-server:
-    image: ghcr.io/ggerganov/llama.cpp:server
+    image: ghcr.io/ggml-org/llama.cpp:server
     container_name: git-oracle-llm-server
     restart: unless-stopped
     networks:
