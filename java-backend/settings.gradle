@@ -2,3 +2,4 @@ rootProject.name = 'git-oracle-backend'
 
 include 'git-oracle-core'
 include 'api-gateway'
+include 'orchestrator'

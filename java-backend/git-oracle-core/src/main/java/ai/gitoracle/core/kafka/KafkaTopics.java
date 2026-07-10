@@ -20,4 +20,5 @@ public final class KafkaTopics {
 
     public static final String JOB_ESCALATED = "job-escalated";
     public static final String FEEDBACK_RECEIVED = "feedback-received";
+    public static final String AUDIT_EVENT = "audit-event";
 }
