@@ -1,0 +1,7 @@
+FROM /Users/omkhatri/Git Oracle/models/qwen2.5-coder-7b-instruct-q4_k_m.gguf
+
+PARAMETER temperature 0.2
+PARAMETER num_ctx 8192
+PARAMETER stop "<|im_end|>"
+
+SYSTEM """You are an expert AI coding agent for the GitOracle system. You analyze bugs, plan fixes, and generate high-quality patches."""

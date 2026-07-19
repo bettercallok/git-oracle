@@ -6,17 +6,25 @@ import logging
 from datetime import datetime, timezone
 from typing import Type, TypeVar, Dict, List, Optional
 from pydantic import BaseModel
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 # Load .env so we pick up LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, etc.
-load_dotenv()
+load_dotenv(find_dotenv())
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
-ORCHESTRATOR_URL = "http://localhost:8083"
-LLM_MODEL_NAME   = "qwen2.5-coder-7b-q4_k_m"
+ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8083")
+
+# ─── LLM Backend Configuration ────────────────────────────────────────────────
+# LLM_BASE_URL controls which inference backend is used.
+# Swap this env var to change backends without touching any agent code:
+#   Mac dev (Ollama native Metal GPU): http://localhost:11434/v1/chat/completions
+#   Linux+NVIDIA (llama.cpp Docker):   http://localhost:8090/v1/chat/completions
+#   Cloud (Together.ai, Groq, etc.):   https://api.together.xyz/v1/chat/completions
+LLM_BASE_URL   = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1/chat/completions")
+LLM_MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "qwen2.5-coder:7b-instruct-q4_K_M")
 
 # ─── Langfuse Client (singleton) ──────────────────────────────────────────────
 # Initialised once at module-load. Fails silently if env vars are missing so
@@ -91,7 +99,7 @@ async def llm_structured(
     output_schema: Type[T],
     max_tokens: int = 2048,
     temperature: float = 0.2,
-    base_url: str = "http://localhost:8090/v1/chat/completions",
+    base_url: str = LLM_BASE_URL,   # defaults to env var — swap backend by changing .env
     job_id:     Optional[str] = None,
     agent_name: str = "unknown",
     trace_id:   Optional[str] = None,
@@ -107,14 +115,16 @@ async def llm_structured(
     json_schema = output_schema.model_json_schema()
 
     payload = {
-        "messages": messages,
-        "max_tokens": max_tokens,
+        "model":       LLM_MODEL_NAME,   # Required by Ollama; ignored by llama.cpp
+        "messages":    messages,
+        "max_tokens":  max_tokens,
         "temperature": temperature,
-        "stream": False,
+        "stream":      False,
         "response_format": {
             "type": "json_schema",
             "json_schema": {
-                "name": output_schema.__name__,
+                "name":   output_schema.__name__,
+                "strict": True,
                 "schema": json_schema,
             }
         }
