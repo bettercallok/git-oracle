@@ -8,3 +8,4 @@ langfuse>=2.0.0,<3.0.0
 python-dotenv>=1.0.0
 tenacity>=8.3.0
 pgvector>=0.2.0
+qdrant-client>=1.9.0,<1.10.0
