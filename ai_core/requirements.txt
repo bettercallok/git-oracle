@@ -6,3 +6,4 @@ asyncpg>=0.28.0
 redis>=5.0.0
 langfuse>=2.0.0,<3.0.0
 python-dotenv>=1.0.0
+tenacity>=8.3.0

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Type, TypeVar, Dict, List, Optional
 from pydantic import BaseModel
 from dotenv import load_dotenv, find_dotenv
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Load .env so we pick up LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, etc.
 load_dotenv(find_dotenv())
@@ -14,6 +15,10 @@ load_dotenv(find_dotenv())
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+
+class LLMUnavailableError(Exception):
+    """Raised when the primary LLM (and fallback, if configured) is unreachable."""
+    pass
 
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8083")
 
@@ -25,6 +30,10 @@ ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8083")
 #   Cloud (Together.ai, Groq, etc.):   https://api.together.xyz/v1/chat/completions
 LLM_BASE_URL   = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1/chat/completions")
 LLM_MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "qwen2.5-coder:7b-instruct-q4_K_M")
+
+# Fallback Configuration
+LLM_FALLBACK_BASE_URL = os.environ.get("LLM_FALLBACK_BASE_URL")
+LLM_FALLBACK_MODEL_NAME = os.environ.get("LLM_FALLBACK_MODEL_NAME")
 
 # ─── Langfuse Client (singleton) ──────────────────────────────────────────────
 # Initialised once at module-load. Fails silently if env vars are missing so
@@ -92,6 +101,21 @@ def _trace_to_langfuse(
         logger.warning(f"Langfuse tracing error (non-fatal): {e}")
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException, httpx.ReadError)),
+    reraise=True
+)
+async def _execute_llm_request(client: httpx.AsyncClient, base_url: str, payload: dict) -> httpx.Response:
+    """Execute LLM request with exponential backoff for transient network errors."""
+    logger.debug(f"Attempting LLM call to {base_url}")
+    response = await client.post(base_url, json=payload)
+    if response.status_code >= 500:
+        response.raise_for_status()
+    return response
+
+
 # ─── Core Function ────────────────────────────────────────────────────────────
 
 async def llm_structured(
@@ -132,22 +156,41 @@ async def llm_structured(
 
     start_time = datetime.now(timezone.utc)
 
-    async with httpx.AsyncClient(timeout=1200.0) as client:
+    async with httpx.AsyncClient(timeout=120.0) as client:
         try:
-            response = await client.post(base_url, json=payload)
-            response.raise_for_status()
+            # 1. Primary Attempt
+            response = await _execute_llm_request(client, base_url, payload)
+            used_model = LLM_MODEL_NAME
+        except Exception as primary_e:
+            logger.warning(f"Primary LLM ({base_url}) failed: {primary_e}")
+            if LLM_FALLBACK_BASE_URL and LLM_FALLBACK_MODEL_NAME:
+                logger.info(f"Attempting fallback LLM: {LLM_FALLBACK_BASE_URL}")
+                payload["model"] = LLM_FALLBACK_MODEL_NAME
+                try:
+                    # 2. Fallback Attempt
+                    response = await _execute_llm_request(client, LLM_FALLBACK_BASE_URL, payload)
+                    used_model = LLM_FALLBACK_MODEL_NAME
+                except Exception as fallback_e:
+                    logger.error(f"Fallback LLM also failed: {fallback_e}")
+                    raise LLMUnavailableError("Both primary and fallback LLM servers are unavailable.") from fallback_e
+            else:
+                raise LLMUnavailableError(f"Primary LLM server is unavailable and no fallback configured: {primary_e}") from primary_e
 
+        # 3. Process Response
+        try:
+            response.raise_for_status()
+            
             end_time    = datetime.now(timezone.utc)
             data        = response.json()
             raw_content = data["choices"][0]["message"]["content"]
             usage       = data.get("usage", {})
             tokens_used = usage.get("total_tokens", 0)
 
-            # 1. Report tokens to the Java Orchestrator budget tracker
+            # 4. Report tokens to the Java Orchestrator budget tracker
             if job_id and tokens_used:
                 await _report_tokens(job_id, tokens_used, agent_name)
 
-            # 2. Send full trace to Langfuse (non-blocking, silent failure)
+            # 5. Send full trace to Langfuse (non-blocking, silent failure)
             _trace_to_langfuse(
                 trace_id=trace_id or job_id,
                 agent_name=agent_name,
@@ -158,11 +201,11 @@ async def llm_structured(
                 end_time=end_time,
             )
 
-            # 3. Validate output against the Pydantic schema
+            # 6. Validate output against the Pydantic schema
             return output_schema.model_validate_json(raw_content)
 
         except httpx.HTTPError as e:
-            logger.error(f"HTTP error calling LLM server: {e}")
+            logger.error(f"HTTP error parsing LLM response: {e}")
             raise
         except Exception as e:
             logger.error(f"Failed to parse LLM structured output: {e}")
