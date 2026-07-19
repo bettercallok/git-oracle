@@ -9,6 +9,8 @@ from uuid import uuid4
 from dotenv import load_dotenv, find_dotenv
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qmodels
+import redis.asyncio as redis
+from pydantic import BaseModel
 
 # Load env variables globally
 load_dotenv(find_dotenv())
@@ -197,3 +199,49 @@ class SemanticMemory:
             })
             
         return facts
+
+
+class RepoProcedures(BaseModel):
+    test_command: str
+    lint_command: Optional[str] = None
+    required_env_vars: List[str] = []
+    known_flaky_tests: List[str] = []
+    setup_commands: List[str] = []
+
+
+class ProceduralMemory:
+    """
+    Procedural Memory for GitOracle agents.
+    Stores repository operation instructions (test commands, etc.) in Redis.
+    """
+    def __init__(self):
+        redis_host = os.environ.get("REDIS_HOST", "localhost")
+        redis_port = int(os.environ.get("REDIS_PORT", "6379"))
+        redis_password = os.environ.get("REDIS_PASSWORD", "GitOracle_Redis_2025")
+        self.redis = redis.Redis(
+            host=redis_host, 
+            port=redis_port, 
+            password=redis_password,
+            decode_responses=True
+        )
+
+    def _get_key(self, tenant_id: str, repo: str) -> str:
+        return f"procedures:{tenant_id}:{repo}"
+
+    async def save_procedures(self, tenant_id: str, repo: str, procedures: RepoProcedures):
+        """Save repo procedures as JSON in Redis."""
+        logger.info(f"[Procedural] Saving procedures for {repo}")
+        key = self._get_key(tenant_id, repo)
+        await self.redis.set(key, procedures.model_dump_json())
+
+    async def load_procedures(self, tenant_id: str, repo: str) -> Optional[RepoProcedures]:
+        """Load repo procedures from Redis and parse into Pydantic model."""
+        logger.info(f"[Procedural] Loading procedures for {repo}")
+        key = self._get_key(tenant_id, repo)
+        data = await self.redis.get(key)
+        
+        if not data:
+            return None
+            
+        return RepoProcedures.model_validate_json(data)
+
