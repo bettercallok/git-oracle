@@ -1,0 +1,22 @@
+{
+  "event_id": "e921d7b1a6c44930869a3b610c1f2025",
+  "project": "omkhatri/test-repo",
+  "culprit": "UserService.processPayment",
+  "exception": {
+    "values": [
+      {
+        "type": "NullPointerException",
+        "value": "Cannot invoke \"User.getId()\" because \"user\" is null",
+        "stacktrace": {
+          "frames": [
+            {
+              "filename": "src/main/java/com/example/UserService.java",
+              "function": "processPayment",
+              "lineno": 45
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

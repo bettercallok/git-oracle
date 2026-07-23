@@ -1,0 +1,7 @@
+{
+  "language": "java",
+  "framework": "spring-boot",
+  "bug_type": "null_pointer_exception",
+  "complexity": "low",
+  "tags": ["validation", "npe", "guard_clause"]
+}

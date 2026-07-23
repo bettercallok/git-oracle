@@ -1,0 +1,12 @@
+--- src/main/java/com/example/UserService.java
++++ src/main/java/com/example/UserService.java
+@@ -42,6 +42,9 @@
+     }
+ 
+     public void processPayment(User user, PaymentInfo payment) {
++        if (user == null) {
++            throw new IllegalArgumentException("User cannot be null");
++        }
+         String userId = user.getId();
+         paymentGateway.charge(userId, payment.getAmount());
+     }
