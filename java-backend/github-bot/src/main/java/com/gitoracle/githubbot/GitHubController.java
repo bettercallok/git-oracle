@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import org.kohsuke.github.GitHub;
+import org.kohsuke.github.GHRepository;
 
 @RestController
 public class GitHubController {
@@ -29,12 +30,39 @@ public class GitHubController {
             GitHub github = githubClient.getAuthenticatedGitHub();
             logger.info("Successfully authenticated with GitHub as app.");
             
-            // Note: Since this is just the skeleton to verify auth and markdown generation,
-            // we will not actually open a real PR on the user's repo yet to avoid spamming them.
-            // But the authentication works!
-            logger.info("TODO (Layer 6 Phase 3): Use github.getRepository('{}') to create the branch and PR.", request.getRepoFullName());
+            // Phase 3: Create the Pull Request
+            GHRepository repo = github.getRepository(request.getRepoFullName());
+            String defaultBranch = repo.getDefaultBranch();
+            String sha = repo.getBranch(defaultBranch).getSHA1();
             
-            return "Successfully authenticated and generated Markdown!";
+            String newBranchName = "gitoracle-fix-" + request.getJobId().substring(0, 8);
+            repo.createRef("refs/heads/" + newBranchName, sha);
+            logger.info("Created new branch: {}", newBranchName);
+            
+            // Note: The AI returns a patch diff string. For a true Git patch application in Java,
+            // we would normally clone the repo locally, run `git apply`, and push. 
+            // Since this API is stateless, we will simulate the commit by writing the patch 
+            // to a `.patch` file on the repo for human review as part of the PR.
+            // (In a production GitOracle, the orchestrator handles the local git tree).
+            String patchFilePath = "gitoracle-fixes/fix-" + request.getJobId().substring(0, 8) + ".patch";
+            repo.createContent()
+                .path(patchFilePath)
+                .content(request.getPatchDiff())
+                .message("chore: apply GitOracle patch for " + request.getJobId())
+                .branch(newBranchName)
+                .commit();
+            logger.info("Committed patch file to branch.");
+            
+            // Open the Pull Request
+            repo.createPullRequest(
+                "🤖 GitOracle Autonomous Fix: " + request.getCommitMessage(),
+                newBranchName,
+                defaultBranch,
+                markdown
+            );
+            logger.info("Successfully opened Pull Request on {}", request.getRepoFullName());
+            
+            return "Successfully authenticated, created branch, and opened PR!";
         } catch (Exception e) {
             logger.error("Failed to process PR request", e);
             return "Error: " + e.getMessage();

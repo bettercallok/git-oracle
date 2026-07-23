@@ -16,3 +16,7 @@ These rules apply specifically to the GitOracle project workspace. They dictate 
 
 ## Git & Workflow
 - **Commit History:** Keep commits atomic, well-described, and logically grouped (e.g., `feat(core): ...`).
+
+## AI Context Management
+
+- **Retrieval First:** Offload massive datasets (like git histories or large error stacks) to Qdrant/pgvector and retrieve only the top-K most relevant snippets. Ensure the context window (`ctx-size 8192`) is rigorously respected.

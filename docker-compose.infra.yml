@@ -45,7 +45,7 @@ services:
     image: pgvector/pgvector:pg16
     container_name: git-oracle-postgres
     restart: unless-stopped
-    networks: [git-oracle-net]
+    networks: [ git-oracle-net ]
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
     environment:
@@ -57,7 +57,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gitOracle} -d ${POSTGRES_DB:-gitOracle}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gitOracle} -d ${POSTGRES_DB:-gitOracle}" ]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -88,10 +88,10 @@ services:
     image: neo4j:5.20-community
     container_name: git-oracle-neo4j
     restart: unless-stopped
-    networks: [git-oracle-net]
+    networks: [ git-oracle-net ]
     ports:
-      - "${NEO4J_HTTP_PORT:-7475}:7474"     # Browser UI
-      - "${NEO4J_BOLT_PORT:-7688}:7687"     # Bolt protocol (drivers)
+      - "${NEO4J_HTTP_PORT:-7475}:7474" # Browser UI
+      - "${NEO4J_BOLT_PORT:-7688}:7687" # Bolt protocol (drivers)
     environment:
       NEO4J_AUTH: "${NEO4J_AUTH:?NEO4J_AUTH is required}"
       NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
@@ -107,7 +107,7 @@ services:
       - neo4j-import:/var/lib/neo4j/import
       - ./infrastructure/neo4j:/neo4j-init:ro
     healthcheck:
-      test: ["CMD", "wget", "-O", "/dev/null", "-q", "http://localhost:7474"]
+      test: [ "CMD", "wget", "-O", "/dev/null", "-q", "http://localhost:7474" ]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -118,7 +118,7 @@ services:
   neo4j-init:
     image: neo4j:5.20-community
     container_name: git-oracle-neo4j-init
-    networks: [git-oracle-net]
+    networks: [ git-oracle-net ]
     depends_on:
       neo4j:
         condition: service_healthy
@@ -126,10 +126,9 @@ services:
       NEO4J_PASSWORD: ${POSTGRES_PASSWORD:?NEO4J_PASSWORD is required}
     volumes:
       - ./infrastructure/neo4j:/neo4j-init:ro
-    entrypoint: ["/bin/bash", "-c"]
+    entrypoint: [ "/bin/bash", "-c" ]
     command: >
-      "echo '⏳ Running Neo4j schema init...' &&
-      cypher-shell
+      "echo '⏳ Running Neo4j schema init...' && cypher-shell
         -u neo4j
         -p $${NEO4J_PASSWORD}
         -a bolt://neo4j:7687
@@ -146,7 +145,7 @@ services:
     image: redis:7-alpine
     container_name: git-oracle-redis
     restart: unless-stopped
-    networks: [git-oracle-net]
+    networks: [ git-oracle-net ]
     ports:
       - "${REDIS_PORT:-6379}:6379"
     command: >
@@ -164,7 +163,7 @@ services:
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -180,10 +179,10 @@ services:
     image: qdrant/qdrant:v1.9.3
     container_name: git-oracle-qdrant
     restart: unless-stopped
-    networks: [git-oracle-net]
+    networks: [ git-oracle-net ]
     ports:
-      - "${QDRANT_HTTP_PORT:-6333}:6333"    # REST API + Web UI
-      - "${QDRANT_GRPC_PORT:-6334}:6334"    # gRPC
+      - "${QDRANT_HTTP_PORT:-6333}:6333" # REST API + Web UI
+      - "${QDRANT_GRPC_PORT:-6334}:6334" # gRPC
     volumes:
       - qdrant-data:/qdrant/storage
     environment:
@@ -191,7 +190,7 @@ services:
       QDRANT__SERVICE__GRPC_PORT: 6334
       QDRANT__LOG_LEVEL: INFO
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
+      test: [ "CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -206,9 +205,9 @@ services:
     image: apache/kafka:3.8.0
     container_name: git-oracle-kafka
     restart: unless-stopped
-    networks: [git-oracle-net]
+    networks: [ git-oracle-net ]
     ports:
-      - "${KAFKA_PORT:-9092}:9092"          # External (host access)
+      - "${KAFKA_PORT:-9092}:9092" # External (host access)
     environment:
       # KRaft mode — no Zookeeper
       KAFKA_NODE_ID: 1
@@ -236,7 +235,7 @@ services:
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list" ]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -247,13 +246,13 @@ services:
   kafka-init:
     image: apache/kafka:3.8.0
     container_name: git-oracle-kafka-init
-    networks: [git-oracle-net]
+    networks: [ git-oracle-net ]
     depends_on:
       kafka:
         condition: service_healthy
     volumes:
       - ./infrastructure/kafka/create-topics.sh:/create-topics.sh:ro
-    entrypoint: ["/bin/bash", "/create-topics.sh"]
+    entrypoint: [ "/bin/bash", "/create-topics.sh" ]
     restart: on-failure
 
   # Kafka Web UI — browse topics, messages, consumer groups
@@ -261,7 +260,7 @@ services:
     image: provectuslabs/kafka-ui:latest
     container_name: git-oracle-kafka-ui
     restart: unless-stopped
-    networks: [git-oracle-net]
+    networks: [ git-oracle-net ]
     ports:
       - "8089:8080"
     environment:
@@ -283,7 +282,7 @@ services:
     image: prom/prometheus:v2.52.0
     container_name: git-oracle-prometheus
     restart: unless-stopped
-    networks: [git-oracle-net]
+    networks: [ git-oracle-net ]
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
@@ -298,7 +297,7 @@ services:
       - --web.enable-lifecycle
       - --web.enable-admin-api
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/healthy"]
+      test: [ "CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/healthy" ]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -316,7 +315,7 @@ services:
     image: grafana/grafana:10.4.4
     container_name: git-oracle-grafana
     restart: unless-stopped
-    networks: [git-oracle-net]
+    networks: [ git-oracle-net ]
     ports:
       - "${GRAFANA_PORT:-3001}:3000"
     environment:
@@ -337,7 +336,7 @@ services:
       prometheus:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/health"]
+      test: [ "CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/health" ]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -354,7 +353,7 @@ services:
     image: langfuse/langfuse:2
     container_name: git-oracle-langfuse
     restart: unless-stopped
-    networks: [git-oracle-net]
+    networks: [ git-oracle-net ]
     ports:
       - "${LANGFUSE_PORT:-3002}:3000"
     environment:
@@ -368,7 +367,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/3000' 2>/dev/null || exit 1"]
+      test: [ "CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/3000' 2>/dev/null || exit 1" ]
       interval: 20s
       timeout: 10s
       retries: 10
