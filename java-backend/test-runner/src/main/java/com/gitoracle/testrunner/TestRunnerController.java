@@ -21,7 +21,15 @@ public class TestRunnerController {
         logger.info("Identified framework: {}", request.getFramework());
         
         // Approach A: MOCK Docker Execution using Virtual Threads
-        // TODO (Approach B): Wire up docker-java client, mount volume, and run command in container
+        // TODO (Approach B): Wire up docker-java client, mount volume, and run command in container.
+        // Layer 7d (Security + Guardrails): Container MUST run with maximum isolation:
+        // HostConfig.newHostConfig()
+        //     .withNetworkMode("none")           // no network access
+        //     .withMemory(512 * 1024 * 1024L)   // 512MB RAM limit
+        //     .withCpuCount(2L)                  // 2 CPU cores max
+        //     .withReadonlyRootfs(false)         // allow writes for test build
+        //     .withCapDrop(Arrays.asList("ALL")) // drop all Linux capabilities
+        //     .withSecurityOpts(List.of("no-new-privileges"));
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             Future<TestResult> future = executor.submit(() -> runMockContainer(request));
             // 120s hard timeout to prevent runaway tests
