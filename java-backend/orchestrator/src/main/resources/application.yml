@@ -5,19 +5,26 @@ spring:
   application:
     name: orchestrator
   datasource:
-    url: jdbc:postgresql://localhost:5433/gitOracle
-    username: gitOracle
-    password: GitOracle_PG_2025
+    url: jdbc:postgresql://localhost:5432/gitoracledb
+    username: gitoracle
+    password: gitoraclepassword
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
-      ddl-auto: none
+      ddl-auto: update
     open-in-view: false
   kafka:
     bootstrap-servers: localhost:9092
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      group-id: orchestrator-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
 
 logging:
   level:
