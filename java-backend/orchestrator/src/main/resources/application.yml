@@ -28,4 +28,13 @@ spring:
 
 logging:
   level:
-    ai.gitoracle: INFO
+    ai.gitoracle: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: prometheus
+  endpoint:
+    prometheus:
+      enabled: true

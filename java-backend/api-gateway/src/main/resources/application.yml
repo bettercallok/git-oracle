@@ -24,3 +24,12 @@ logging:
   level:
     com.gitoracle.apigateway: INFO
     org.springframework.cloud.gateway: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: prometheus
+  endpoint:
+    prometheus:
+      enabled: true
