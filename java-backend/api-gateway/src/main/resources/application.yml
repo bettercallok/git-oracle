@@ -1,11 +1,26 @@
 server:
-  port: ${API_GATEWAY_PORT:8080}
+  port: 8080
 
 spring:
   application:
     name: api-gateway
-  kafka:
-    bootstrap-servers: ${KAFKA_EXTERNAL_HOST:localhost}:${KAFKA_PORT:9092}
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+  cloud:
+    gateway:
+      routes:
+        - id: github-bot-route
+          uri: http://localhost:8085
+          predicates:
+            - Path=/pull-request/**, /github/**
+        - id: test-runner-route
+          uri: http://localhost:8084
+          predicates:
+            - Path=/test/**
+        - id: orchestrator-route
+          uri: http://localhost:8083
+          predicates:
+            - Path=/orchestrator/**
+
+logging:
+  level:
+    com.gitoracle.apigateway: INFO
+    org.springframework.cloud.gateway: INFO
