@@ -18,7 +18,7 @@ spring:
         - id: orchestrator-route
           uri: http://localhost:8083
           predicates:
-            - Path=/orchestrator/**
+            - Path=/orchestrator/**, /admin/**
 
 logging:
   level:
