@@ -1,0 +1,9 @@
+{
+  "id": "20260723_222333",
+  "repo": "omkhatri/test-repo",
+  "type": "episodic",
+  "narrative": "[FAILED FIX] Attempted surgical_patch for NullPointerException. PR was rejected/reverted. Do NOT repeat this approach.",
+  "confidence": 0.0,
+  "feedback": "STRONG_NEGATIVE",
+  "timestamp": "2026-07-23T16:53:33.808920"
+}
