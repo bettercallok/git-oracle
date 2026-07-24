@@ -1,0 +1,16 @@
+[project]
+name = "gitOracle-cli"
+version = "0.1.0"
+description = "Developer CLI for GitOracle AI System"
+authors = [
+    { name = "GitOracle Team", email = "hello@gitoracle.ai" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1.7",
+    "rich>=13.7.1",
+    "requests>=2.31.0"
+]
+
+[project.scripts]
+gitOracle = "gitOracle.main:cli"
