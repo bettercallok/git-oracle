@@ -31,7 +31,8 @@ export default function Simulator() {
       const res = await fetch('http://localhost:8080/webhook/github', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'X-Tenant-ID': '00000000-0000-0000-0000-000000000000'
         },
         body: JSON.stringify(parsed)
       });

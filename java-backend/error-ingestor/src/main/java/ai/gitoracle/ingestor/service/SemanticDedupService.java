@@ -57,14 +57,13 @@ public class SemanticDedupService {
 
             // 3. Persist new job
             AgentJob job = new AgentJob();
-            job.setId(UUID.randomUUID());
+            job.setTenant(entityManager.getReference(ai.gitoracle.core.model.postgres.Tenant.class, tenantId));
             job.setRepo(repo);
             job.setState("QUEUED");
             job.setErrorId(errorId);
-            job.setCreatedAt(OffsetDateTime.now());
-            job.setUpdatedAt(OffsetDateTime.now());
             
             entityManager.persist(job);
+            entityManager.flush(); // Flush to ensure ID is generated before using it in the event
             logger.info("Saved new job {} for error {}", job.getId(), errorId);
 
             // 4. Publish to Kafka
