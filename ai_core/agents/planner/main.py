@@ -107,6 +107,24 @@ Constrain the Fixer Agent by setting 'max_lines_to_change' to the absolute minim
         logger.error(f"Planning failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ==========================================
+# Phase 3: Real Kafka Event Integration
+# ==========================================
+import asyncio
+from shared.kafka_consumer import KafkaEventConsumer
+
+async def handle_planner_job(payload: dict):
+    logger.info(f"Received Kafka event for planning: {payload}")
+    # In a fully realized system, this would parse the event, execute create_plan, 
+    # and then publish a FIX_PLAN_READY event back to the Orchestrator via a Kafka Producer.
+    pass
+
+@app.on_event("startup")
+async def startup_event():
+    # Start the Kafka consumer in a background task
+    consumer = KafkaEventConsumer(topic="job.events.plan", group_id="planner-agent-group")
+    asyncio.create_task(consumer.consume(handle_planner_job))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=9004)
