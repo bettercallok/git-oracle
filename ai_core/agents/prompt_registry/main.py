@@ -1,7 +1,8 @@
 import os
 import json
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware, HTTPException
 from pydantic import BaseModel
 import asyncpg
 import redis.asyncio as redis
@@ -24,6 +25,13 @@ async def lifespan(app: FastAPI):
     await redis_client.close()
 
 app = FastAPI(title="GitOracle Prompt Registry", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class PromptVersion(BaseModel):
     content: str

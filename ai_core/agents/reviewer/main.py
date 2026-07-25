@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 from enum import Enum
@@ -14,6 +15,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="GitOracle Reviewer Agent", version="1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class ReviewStance(str, Enum):
     DEFEND            = "defend"            # reviewer concern is wrong

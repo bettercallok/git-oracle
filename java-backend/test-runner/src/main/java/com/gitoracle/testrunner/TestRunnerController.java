@@ -67,6 +67,7 @@ public class TestRunnerController {
 
             CreateContainerResponse container = dockerClient.createContainerCmd("python:3.11-alpine")
                 .withHostConfig(hostConfig)
+                .withUser("1000:1000")             // ensure non-root execution
                 .withWorkingDir("/repo")
                 .withCmd("sh", "-c", request.getFramework().getCommand())
                 .exec();

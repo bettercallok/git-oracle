@@ -26,6 +26,17 @@ spring:
         spring.json.trusted.packages: "*"
   cloud:
     gateway:
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins: "*"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
+            allowedHeaders: "*"
       routes:
         - id: error_ingestor_api
           uri: http://localhost:8081
@@ -33,12 +44,20 @@ spring:
             - Path=/webhook/**
           filters:
             - PreserveHostHeader=true
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 50
+                redis-rate-limiter.burstCapacity: 100
         - id: orchestrator_api
           uri: http://localhost:8083
           predicates:
             - Path=/api/v1/jobs/**, /api/v1/escalations/**, /api/v1/evals/**, /admin/**
           filters:
             - PreserveHostHeader=true
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 50
+                redis-rate-limiter.burstCapacity: 100
 
 server:
   port: 8080

@@ -1,10 +1,18 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware, HTTPException
 from pydantic import BaseModel
 import uvicorn
 from injection_detector import detect_injection
 from patch_scanner import scan_patch, PatchScanResult
 
 app = FastAPI(title="GitOracle Guardrails Engine")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class TextPayload(BaseModel):
     text: str
