@@ -31,11 +31,15 @@ def analyze(repo, commit):
         transient=True,
     ) as progress:
         progress.add_task(description="Submitting to API Gateway...", total=None)
-        time.sleep(1)
-        # Mock request
-        # response = requests.post(f"{API_URL}/jobs/analyze", json={"repo": repo, "commit": commit})
-        job_id = str(uuid.uuid4())
         
+        try:
+            response = requests.post(f"{API_URL}/jobs", json={"repoUrl": repo, "commitHash": commit, "jobType": "analyze"})
+            response.raise_for_status()
+            job_id = response.json().get("id", str(uuid.uuid4()))
+        except Exception as e:
+            console.print(f"[bold red]Failed to submit job:[/bold red] {e}")
+            return
+            
     console.print(f"[bold green]✓[/bold green] Analysis job started. Job ID: [cyan]{job_id}[/cyan]")
     console.print(f"Watch progress with: [bold]gitOracle watch --job {job_id}[/bold]")
 
@@ -55,9 +59,19 @@ def fix(repo, commit, error, file, line):
         transient=True,
     ) as progress:
         progress.add_task(description="Submitting to Fixer Agent...", total=None)
-        time.sleep(1.2)
-        job_id = str(uuid.uuid4())
-        
+        try:
+            response = requests.post(f"{API_URL}/jobs", json={
+                "repoUrl": repo, 
+                "commitHash": commit,
+                "errorMessage": f"{error} in {file}:{line}",
+                "jobType": "fix"
+            })
+            response.raise_for_status()
+            job_id = response.json().get("id", str(uuid.uuid4()))
+        except Exception as e:
+            console.print(f"[bold red]Failed to submit job:[/bold red] {e}")
+            return
+            
     console.print(f"[bold green]✓[/bold green] Fix job queued. Job ID: [cyan]{job_id}[/cyan]")
     console.print(f"Watch progress with: [bold]gitOracle watch --job {job_id}[/bold]")
 
@@ -75,24 +89,37 @@ def watch(job):
         TimeElapsedColumn()
     ) as progress:
         
-        task = progress.add_task("[cyan]Initializing pipeline...", total=100)
+        task = progress.add_task("[cyan]Connecting to API Gateway...", total=100)
         
-        time.sleep(1)
-        progress.update(task, advance=15, description="[blue]Cloning repository state (git-forensics)...")
+        status = "PENDING"
+        progress_val = 0
         
-        time.sleep(2)
-        progress.update(task, advance=20, description="[magenta]Planner Agent building strategy...")
+        while status not in ["SUCCESS", "FAILED", "ESCALATED"]:
+            try:
+                resp = requests.get(f"{API_URL}/jobs/{job}")
+                resp.raise_for_status()
+                data = resp.json()
+                status = data.get("status", "RUNNING")
+                
+                if status == "RUNNING" and progress_val < 80:
+                    progress_val += 10
+                    progress.update(task, completed=progress_val, description="[yellow]Agents working on job...")
+                elif status == "SUCCESS":
+                    progress.update(task, completed=100, description="[bold green]✓ Job completed successfully!")
+                elif status == "FAILED":
+                    progress.update(task, completed=100, description="[bold red]✗ Job failed.")
+                elif status == "ESCALATED":
+                    progress.update(task, completed=100, description="[bold magenta]⚠ Job escalated for human review.")
+                    
+            except Exception as e:
+                progress.update(task, description=f"[red]Error fetching status: {e}")
+                time.sleep(2)
+                continue
+                
+            if status not in ["SUCCESS", "FAILED", "ESCALATED"]:
+                time.sleep(2)
         
-        time.sleep(2.5)
-        progress.update(task, advance=30, description="[yellow]Fixer Agent generating patch...")
-        
-        time.sleep(2)
-        progress.update(task, advance=20, description="[green]Guardrails validation in progress...")
-        
-        time.sleep(1.5)
-        progress.update(task, advance=15, description="[bold green]✓ Fix merged successfully!")
-        
-    console.print("\n[bold]Final Status:[/bold] [green]SUCCESS[/green]")
+    console.print(f"\n[bold]Final Status:[/bold] [green]{status}[/green]")
     console.print("[dim]View full trace at: http://localhost:5173/job/" + job + "[/dim]")
 
 @cli.command()
