@@ -118,6 +118,50 @@ ensure your host machine meets the following requirements:
 5. **interact with gitoracle**
    open the dashboard in your browser or utilize the `gitOracle` CLI tool to begin analyzing and modifying your codebase securely.
 
+## system interaction flow & github bot
+
+gitoracle relies on a highly decoupled event-driven architecture. here is how the primary components interact during a standard workflow, such as fixing an issue reported on github:
+
+1. **github bot webhook:** when a user comments on a pull request or opens an issue, the gitoracle github bot receives the event.
+2. **api gateway ingestion:** the bot forwards the payload to the java API gateway (`/api/v1/github/webhook`).
+3. **event publishing:** the API gateway validates the webhook and publishes a task event to the kafka bus (e.g., `task.fix.requested`).
+4. **ai orchestrator consumption:** the python AI core (agent orchestrator) consumes this event.
+5. **context retrieval (rag):** the orchestrator queries neo4j for repository structure and qdrant for relevant code snippets and previous error traces to build a comprehensive context window.
+6. **llm reasoning:** the orchestrator dispatches the compiled prompt to the specific agent (e.g., fixer agent), which interfaces with the local `llama.cpp` server (qwen2.5-coder) to generate a solution.
+7. **guardrails validation:** before the solution is accepted, the output is published to a validation topic where the java guardrails service checks it against security and syntax policies.
+8. **execution & feedback:** once approved, the orchestrator commits the fix, pushes it back to github, and replies to the original PR comment.
+
+## core API endpoints
+
+the java API gateway exposes several crucial REST endpoints for external clients (dashboard, CLI, github):
+
+- `POST /api/v1/github/webhook`: entry point for all github bot interactions (issues, PRs, comments).
+- `POST /api/v1/jobs`: manually trigger a new agentic job (e.g., analysis, fix, refactor).
+- `GET /api/v1/jobs/{id}`: poll the status of a specific background job.
+- `GET /api/v1/prompts/{agent}`: fetch the active system prompt for a specific agent from the postgreSQL registry.
+- `POST /api/v1/prompts/{agent}/activate`: switch the active prompt version for A/B testing or rollbacks.
+
+## frontend dashboard
+
+the frontend dashboard (built with typescript, react, and vite) serves as the visual command center for the gitoracle platform. its primary roles include:
+
+- **real-time job tracking:** monitor the progress of AI agents as they work on tasks, providing visual traces of their thoughts, context retrievals, and LLM inferences.
+- **prompt management:** a visual interface for the prompt registry to edit, version, and activate system prompts for various agents without touching python code or SQL.
+- **system health monitoring:** view live latency, kafka topic backlogs, and the status of the local LLM server.
+- **human-in-the-loop review:** when the guardrails service flags a potentially unsafe code change, the dashboard provides a diff view for developers to manually approve or reject the AI's proposal.
+
+## CLI reference
+
+the `gitOracle` CLI tool (`cli/gitOracle/main.py`) provides power users with terminal-based control over the AI agents.
+
+- `gitoracle analyze --repo <url> --commit <hash>`: triggers a deep architectural analysis job for a specific commit.
+- `gitoracle fix --repo <url> --commit <hash> --error <msg> --file <path> --line <num>`: manually triggers the fixer agent to resolve a specific error at a given line of code.
+- `gitoracle watch --job <uuid>`: attaches to a running job and streams its progress and status directly to the terminal.
+- `gitoracle status`: displays a health check table of all microservices, databases, and the LLM server.
+- `gitoracle eval --golden-dir <dir> [--report <file>]`: runs the evaluation harness against a directory of golden test cases to benchmark agent accuracy and latency.
+- `gitoracle prompts list --agent <name>`: lists all prompt versions (active and inactive) for a specific agent.
+- `gitoracle prompts activate --agent <name> --version <version>`: hot-swaps the active prompt for a given agent.
+
 ## development guidelines
 
 - **event-driven first:** prefer asynchronous kafka events over synchronous REST calls for inter-service communication to maintain system resilience.
