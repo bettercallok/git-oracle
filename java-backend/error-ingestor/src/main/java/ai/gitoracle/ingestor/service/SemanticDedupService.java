@@ -34,7 +34,7 @@ public class SemanticDedupService {
         String stackTrace = (String) payload.getOrDefault("stacktrace", "");
 
         // 1. Get embedding for the stack trace (mocked via dummy vector for now)
-        String embeddingStr = generateMockEmbedding(stackTrace);
+        String embeddingStr = generateEmbedding(stackTrace);
 
         // 2. Perform semantic deduplication using pgvector
         // Check if there's a recent job with cosine similarity > 0.92
@@ -85,11 +85,33 @@ public class SemanticDedupService {
         }
     }
 
-    private String generateMockEmbedding(String text) {
-        // Mocking a 384-dimensional vector string
+    private String generateEmbedding(String text) {
+        try {
+            org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
+            java.util.Map<String, String> request = java.util.Map.of(
+                "model", "all-minilm",
+                "prompt", text != null ? text : ""
+            );
+            
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> response = restTemplate.postForObject(
+                "http://localhost:11434/api/embeddings", 
+                request, 
+                java.util.Map.class
+            );
+            
+            if (response != null && response.containsKey("embedding")) {
+                Object embeddingObj = response.get("embedding");
+                return mapper.writeValueAsString(embeddingObj);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to fetch real embedding from LLM server, falling back to zeros", e);
+        }
+        
+        // Fallback to zeros if LLM server is unreachable
         StringBuilder sb = new StringBuilder("[");
         for (int i = 0; i < 384; i++) {
-            sb.append(Math.random());
+            sb.append("0.0");
             if (i < 383) sb.append(",");
         }
         sb.append("]");

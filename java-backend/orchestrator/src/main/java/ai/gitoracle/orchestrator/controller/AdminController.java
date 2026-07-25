@@ -32,16 +32,44 @@ public class AdminController {
         return ResponseEntity.ok(Map.of("status", "UPDATED", "tenantId", tenantId));
     }
 
+    private final jakarta.persistence.EntityManager entityManager;
+
+    public AdminController(jakarta.persistence.EntityManager entityManager) {
+        this.entityManager = entityManager;
+    }
+
     @GetMapping("/tenants/{id}/metrics")
     public ResponseEntity<Map<String, Object>> getTenantMetrics(@PathVariable("id") String tenantId) {
         logger.info("Fetching metrics for tenant {}", tenantId);
-        // Mock metrics response
-        return ResponseEntity.ok(Map.of(
-            "tenantId", tenantId,
-            "tokensUsed", 45000,
-            "jobsCompleted", 12,
-            "avgSuccessRate", 0.92
-        ));
+        
+        try {
+            UUID tenantUuid = UUID.fromString(tenantId);
+            
+            Long jobsCompleted = entityManager.createQuery(
+                "SELECT COUNT(j) FROM AgentJob j WHERE j.tenantId = :tenantId AND j.state = 'COMPLETED'", Long.class)
+                .setParameter("tenantId", tenantUuid)
+                .getSingleResult();
+                
+            Long totalJobs = entityManager.createQuery(
+                "SELECT COUNT(j) FROM AgentJob j WHERE j.tenantId = :tenantId", Long.class)
+                .setParameter("tenantId", tenantUuid)
+                .getSingleResult();
+                
+            double avgSuccessRate = totalJobs > 0 ? (double) jobsCompleted / totalJobs : 0.0;
+            
+            return ResponseEntity.ok(Map.of(
+                "tenantId", tenantId,
+                "tokensUsed", 45000, // Still hardcoded as token tracking requires external API aggregator in this version
+                "jobsCompleted", jobsCompleted,
+                "avgSuccessRate", avgSuccessRate
+            ));
+        } catch (Exception e) {
+            logger.error("Failed to fetch real metrics", e);
+            return ResponseEntity.ok(Map.of(
+                "tenantId", tenantId,
+                "error", "Failed to fetch metrics"
+            ));
+        }
     }
 
     @PostMapping("/prompts/{agent}/activate")

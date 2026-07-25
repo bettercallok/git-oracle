@@ -47,14 +47,6 @@ class PatchResult(BaseModel):
     success: bool
     escalation_report: Optional[str] = None
 
-async def mock_test_runner(patch: PatchOutput, repo_path: str) -> bool:
-    """
-    TODO (Layer 6): Replace this mock with the actual Test Runner 
-    that spins up a secure Docker container and runs pytest/maven.
-    For now, we mock success if the patch has high confidence.
-    """
-    logger.info("Mock Test Runner executing...")
-    return patch.confidence > 0.5
 
 @app.post("/fix", response_model=PatchResult)
 async def execute_fix(request: FixerRequest):
@@ -138,8 +130,36 @@ Generate a PatchOutput containing the diff and a short summary.
         
         seen_patches.add(patch_hash)
         
-        # 6. Run tests (Mocked for now - TODO Layer 6)
-        tests_passed = await mock_test_runner(patch, request.repo_path)
+        import httpx
+        
+        async def run_real_test(job_id: str, repo_path: str) -> bool:
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        "http://localhost:8084/test",
+                        json={
+                            "jobId": job_id,
+                            "repoPath": repo_path,
+                            "framework": {
+                                "type": "pytest",
+                                "command": "pytest",
+                                "testFiles": []
+                            }
+                        },
+                        timeout=130.0
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    logger.info(f"Real Test Runner result: {data['success']}")
+                    if not data['success']:
+                        logger.info(f"Test Logs: {data['logs']}")
+                    return data['success']
+            except Exception as e:
+                logger.error(f"Error calling real test runner: {e}")
+                return False
+
+        # 6. Run tests (Layer 6 real execution)
+        tests_passed = await run_real_test(request.job_id, request.repo_path)
         
         if tests_passed:
             # 7. Store successful fix in episodic memory
