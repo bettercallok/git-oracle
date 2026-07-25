@@ -36,11 +36,12 @@ export default function Simulator() {
         body: JSON.stringify(parsed)
       });
       
+      const text = await res.text();
       let data = null;
       try {
-        data = await res.json();
+        data = JSON.parse(text);
       } catch (e) {
-        data = await res.text();
+        data = text;
       }
       
       setResponse({ status: res.status, data });
