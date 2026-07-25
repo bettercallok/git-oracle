@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Activity, ShieldAlert, GitMerge, FileWarning, BarChart2, BrainCircuit, Settings } from 'lucide-react';
+import { Activity, ShieldAlert, GitMerge, FileWarning, BarChart2, BrainCircuit, Settings, TerminalSquare } from 'lucide-react';
 import JobFeed from './pages/JobFeed';
 import JobDetail from './pages/JobDetail';
 import EscalationQueue from './pages/EscalationQueue';
@@ -8,6 +8,7 @@ import RiskHeatmap from './pages/RiskHeatmap';
 import EvalDashboard from './pages/EvalDashboard';
 import LangfuseEmbed from './pages/LangfuseEmbed';
 import AdminSettings from './pages/AdminSettings';
+import Simulator from './pages/Simulator';
 
 // Page wrapper for animations
 function PageWrapper({ children }: { children: React.ReactNode }) {
@@ -34,6 +35,7 @@ function AnimatedRoutes() {
         <Route path="/risk" element={<PageWrapper><RiskHeatmap /></PageWrapper>} />
         <Route path="/eval" element={<PageWrapper><EvalDashboard /></PageWrapper>} />
         <Route path="/langfuse" element={<PageWrapper><LangfuseEmbed /></PageWrapper>} />
+        <Route path="/simulator" element={<PageWrapper><Simulator /></PageWrapper>} />
         <Route path="/settings" element={<PageWrapper><AdminSettings /></PageWrapper>} />
       </Routes>
     </AnimatePresence>
@@ -64,6 +66,9 @@ function App() {
             </NavLink>
             <NavLink to="/langfuse" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
               <BrainCircuit size={16} /> Langfuse Traces
+            </NavLink>
+            <NavLink to="/simulator" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+              <TerminalSquare size={16} /> Simulator
             </NavLink>
             <div style={{ margin: '16px 0', height: 1, background: 'var(--border-subtle)' }} />
             <NavLink to="/settings" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
