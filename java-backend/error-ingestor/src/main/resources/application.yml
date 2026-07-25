@@ -1,6 +1,6 @@
 spring:
   application:
-    name: api-gateway
+    name: error-ingestor
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}
     username: ${POSTGRES_USER:gitOracle}
@@ -8,40 +8,20 @@ spring:
   jpa:
     hibernate:
       ddl-auto: validate
-    show-sql: true
-    properties:
-      hibernate:
-        format_sql: true
+    show-sql: false
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     consumer:
-      group-id: api-gateway-group
+      group-id: error-ingestor-group
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.trusted.packages: "*"
-  cloud:
-    gateway:
-      routes:
-        - id: error_ingestor_api
-          uri: http://localhost:8081
-          predicates:
-            - Path=/webhook/**
-          filters:
-            - PreserveHostHeader=true
-        - id: orchestrator_api
-          uri: http://localhost:8083
-          predicates:
-            - Path=/api/v1/jobs/**, /api/v1/escalations/**, /api/v1/evals/**, /admin/**
-          filters:
-            - PreserveHostHeader=true
 
 server:
-  port: 8080
+  port: 8081
 
 management:
   endpoints:

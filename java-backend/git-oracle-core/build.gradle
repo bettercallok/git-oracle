@@ -8,6 +8,8 @@ dependencies {
     api 'org.springframework.kafka:spring-kafka'
     api 'com.fasterxml.jackson.core:jackson-databind'
     api 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+    api 'com.pgvector:pgvector:0.1.4'
+    api 'org.eclipse.jgit:org.eclipse.jgit:6.8.0.202311291450-r'
     
     // Postgres specific
     runtimeOnly 'org.postgresql:postgresql'

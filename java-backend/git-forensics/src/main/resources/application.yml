@@ -1,32 +1,24 @@
 spring:
   application:
-    name: orchestrator
-  datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}
-    username: ${POSTGRES_USER:gitOracle}
-    password: ${POSTGRES_PASSWORD:gitOracle}
-  jpa:
-    hibernate:
-      ddl-auto: validate
-    show-sql: true
-    properties:
-      hibernate:
-        format_sql: true
+    name: git-forensics
+  neo4j:
+    uri: bolt://${NEO4J_HOST:localhost}:${NEO4J_PORT:7687}
+    authentication:
+      username: ${NEO4J_USER:neo4j}
+      password: ${NEO4J_PASSWORD:password}
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     consumer:
-      group-id: orchestrator-group
+      group-id: git-forensics-group
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.trusted.packages: "*"
 
 server:
-  port: 8083
+  port: 8082
 
 management:
   endpoints:
