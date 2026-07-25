@@ -1,35 +1,38 @@
-server:
-  port: 8080
-
 spring:
   application:
     name: api-gateway
-  cloud:
-    gateway:
-      routes:
-        - id: github-bot-route
-          uri: http://localhost:8085
-          predicates:
-            - Path=/pull-request/**, /github/**
-        - id: test-runner-route
-          uri: http://localhost:8084
-          predicates:
-            - Path=/test/**
-        - id: orchestrator-route
-          uri: http://localhost:8083
-          predicates:
-            - Path=/orchestrator/**, /admin/**
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}
+    username: ${POSTGRES_USER:gitOracle}
+    password: ${POSTGRES_PASSWORD:gitOracle}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      group-id: api-gateway-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
 
-logging:
-  level:
-    com.gitoracle.apigateway: INFO
-    org.springframework.cloud.gateway: INFO
+server:
+  port: 8080
 
 management:
   endpoints:
     web:
       exposure:
-        include: prometheus
-  endpoint:
-    prometheus:
-      enabled: true
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}

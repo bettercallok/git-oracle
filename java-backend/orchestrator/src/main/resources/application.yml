@@ -1,20 +1,19 @@
-server:
-  port: 8083
-
 spring:
   application:
     name: orchestrator
   datasource:
-    url: jdbc:postgresql://localhost:5432/gitoracledb
-    username: gitoracle
-    password: gitoraclepassword
-    driver-class-name: org.postgresql.Driver
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}
+    username: ${POSTGRES_USER:gitOracle}
+    password: ${POSTGRES_PASSWORD:gitOracle}
   jpa:
     hibernate:
-      ddl-auto: update
-    open-in-view: false
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -26,15 +25,14 @@ spring:
       properties:
         spring.json.trusted.packages: "*"
 
-logging:
-  level:
-    ai.gitoracle: DEBUG
+server:
+  port: 8081
 
 management:
   endpoints:
     web:
       exposure:
-        include: prometheus
-  endpoint:
-    prometheus:
-      enabled: true
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}
