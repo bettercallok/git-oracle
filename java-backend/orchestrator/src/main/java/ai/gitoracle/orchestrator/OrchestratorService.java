@@ -44,21 +44,13 @@ public class OrchestratorService {
         
         logger.info("Job {} created. Triggering AI Planner...", job.getId());
         
-        // 2. MOCK: Call the Python AI via HTTP (or Kafka).
-        // Since we are mocking the AI engine for now, we will immediately publish a FIX_GENERATED event.
-        simulateAiGeneratingFix(job.getId());
-    }
-
-    private void simulateAiGeneratingFix(UUID jobId) {
-        new Thread(() -> {
-            try {
-                Thread.sleep(2000); // Simulate AI thinking
-                logger.info("AI finished planning. Publishing to {}...", KafkaTopics.FIX_GENERATED);
-                kafkaTemplate.send(KafkaTopics.FIX_GENERATED, Map.of("jobId", jobId.toString(), "patch", "--- a/file\n+++ b/file"));
-            } catch (Exception e) {
-                logger.error("Simulation error", e);
-            }
-        }).start();
+        // 2. Publish event to Python Planner Agent
+        Map<String, Object> plannerPayload = new HashMap<>();
+        plannerPayload.put("job_id", job.getId().toString());
+        plannerPayload.put("repo_url", event.getRepoUrl());
+        plannerPayload.put("error_id", event.getErrorId());
+        
+        kafkaTemplate.send("job.events.plan", plannerPayload);
     }
 
     @KafkaListener(topics = KafkaTopics.FIX_GENERATED, groupId = "orchestrator-group")

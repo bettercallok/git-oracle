@@ -1,5 +1,7 @@
 import { motion } from 'framer-motion';
-import { Flame } from 'lucide-react';
+import { Flame, Loader2, AlertCircle } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { apiClient } from '../api/client';
 
 interface FileRisk {
   file: string;
@@ -7,38 +9,21 @@ interface FileRisk {
   heat: 'low' | 'medium' | 'high' | 'critical';
 }
 
-const MOCK_FILES: FileRisk[] = [
-  { file: 'PaymentService.java', bugs: 14, heat: 'critical' },
-  { file: 'OrderQueue.java', bugs: 11, heat: 'critical' },
-  { file: 'UserRepository.java', bugs: 9, heat: 'high' },
-  { file: 'TokenValidator.java', bugs: 8, heat: 'high' },
-  { file: 'InvoiceCalculator.java', bugs: 7, heat: 'high' },
-  { file: 'EmailSender.java', bugs: 5, heat: 'medium' },
-  { file: 'StockManager.java', bugs: 5, heat: 'medium' },
-  { file: 'IndexBuilder.java', bugs: 4, heat: 'medium' },
-  { file: 'NotificationHandler.java', bugs: 3, heat: 'low' },
-  { file: 'ConfigLoader.java', bugs: 2, heat: 'low' },
-  { file: 'HealthCheck.java', bugs: 1, heat: 'low' },
-  { file: 'MetricsExporter.java', bugs: 1, heat: 'low' },
-  { file: 'CacheManager.java', bugs: 3, heat: 'medium' },
-  { file: 'SessionStore.java', bugs: 6, heat: 'high' },
-  { file: 'WebhookController.java', bugs: 2, heat: 'low' },
-  { file: 'MigrationRunner.java', bugs: 4, heat: 'medium' },
-];
-
 interface DevRisk {
   name: string;
   commits: number;
   bugRate: number;
 }
 
-const MOCK_DEVS: DevRisk[] = [
-  { name: 'alice.chen', commits: 142, bugRate: 0.12 },
-  { name: 'bob.kumar', commits: 98, bugRate: 0.08 },
-  { name: 'charlie.wright', commits: 201, bugRate: 0.15 },
-  { name: 'diana.park', commits: 67, bugRate: 0.03 },
-  { name: 'evan.james', commits: 134, bugRate: 0.11 },
-];
+interface RiskData {
+  files: FileRisk[];
+  developers: DevRisk[];
+}
+
+const fetchRiskData = async (): Promise<RiskData> => {
+  const { data } = await apiClient.get('/admin/risk-heatmap');
+  return data;
+};
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -50,6 +35,30 @@ const itemVariants = {
 };
 
 export default function RiskHeatmap() {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['riskHeatmap'],
+    queryFn: fetchRiskData,
+    refetchInterval: 30000,
+  });
+
+  if (isLoading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}>
+        <Loader2 size={32} className="spinner" style={{ color: 'var(--accent)' }} />
+      </div>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--danger)' }}>
+        <AlertCircle size={32} style={{ marginBottom: 16 }} />
+        <h2>Error loading risk data</h2>
+        <p>Could not fetch from Neo4j backend</p>
+      </div>
+    );
+  }
+
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
       <motion.div variants={itemVariants} className="page-header">
@@ -63,7 +72,7 @@ export default function RiskHeatmap() {
           <h2 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)' }}>File Risk Matrix</h2>
         </div>
         <div className="heatmap-grid">
-          {MOCK_FILES.map((f, i) => (
+          {data.files.map((f, i) => (
             <motion.div 
               key={f.file}
               initial={{ scale: 0.9, opacity: 0 }}
@@ -92,7 +101,7 @@ export default function RiskHeatmap() {
             </tr>
           </thead>
           <tbody>
-            {MOCK_DEVS.sort((a, b) => b.bugRate - a.bugRate).map(dev => (
+            {data.developers.sort((a, b) => b.bugRate - a.bugRate).map(dev => (
               <tr key={dev.name}>
                 <td className="mono" style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{dev.name}</td>
                 <td className="mono">{dev.commits}</td>

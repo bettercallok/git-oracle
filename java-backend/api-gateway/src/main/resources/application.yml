@@ -24,6 +24,15 @@ spring:
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
         spring.json.trusted.packages: "*"
+  cloud:
+    gateway:
+      routes:
+        - id: orchestrator_api
+          uri: http://localhost:8081
+          predicates:
+            - Path=/api/v1/jobs/**, /api/v1/escalations/**, /api/v1/evals/**, /admin/**
+          filters:
+            - PreserveHostHeader=true
 
 server:
   port: 8080

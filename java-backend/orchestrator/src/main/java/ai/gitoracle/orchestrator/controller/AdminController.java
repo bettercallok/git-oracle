@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -59,6 +60,28 @@ public class AdminController {
             "runId", "eval-994",
             "accuracy", 0.98,
             "regressionDetected", false
+        ));
+    }
+
+    @GetMapping("/risk-heatmap")
+    public ResponseEntity<Map<String, Object>> getRiskHeatmap() {
+        logger.info("Fetching risk heatmap from Neo4j...");
+        // In a fully integrated system, this would execute a Cypher query against Neo4j
+        // For now, we simulate the backend returning the graph analysis result
+        return ResponseEntity.ok(Map.of(
+            "files", List.of(
+                Map.of("file", "PaymentService.java", "bugs", 14, "heat", "critical"),
+                Map.of("file", "OrderQueue.java", "bugs", 11, "heat", "critical"),
+                Map.of("file", "UserRepository.java", "bugs", 9, "heat", "high"),
+                Map.of("file", "TokenValidator.java", "bugs", 8, "heat", "high"),
+                Map.of("file", "EmailSender.java", "bugs", 5, "heat", "medium")
+            ),
+            "developers", List.of(
+                Map.of("name", "alice.chen", "commits", 142, "bugRate", 0.12),
+                Map.of("name", "bob.kumar", "commits", 98, "bugRate", 0.08),
+                Map.of("name", "charlie.wright", "commits", 201, "bugRate", 0.15),
+                Map.of("name", "diana.park", "commits", 67, "bugRate", 0.03)
+            )
         ));
     }
 }
