@@ -1,5 +1,5 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware, HTTPException
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import os
@@ -184,6 +184,47 @@ Generate a PatchOutput containing the diff and a short summary.
             
     # Escalation
     return PatchResult(patch=None, attempts=3, success=False, escalation_report="Fixer Agent exhausted all attempts and could not fix the bug.")
+
+import asyncio
+from shared.kafka_consumer import KafkaEventConsumer
+from shared.kafka_producer import KafkaEventProducer
+
+async def handle_fix_job(payload: dict):
+    logger.info(f"Received Kafka event for fixer: {payload}")
+    
+    job_id = payload.get("job_id", "unknown")
+    repo_path = payload.get("repo_path", "")
+    plan_dict = payload.get("plan", {})
+    
+    plan = PlannerOutput(**plan_dict)
+    
+    request = FixerRequest(
+        tenant_id="00000000-0000-0000-0000-000000000000",
+        repo_path=repo_path,
+        bug_description=f"Fixing error based on plan",
+        plan=plan,
+        job_id=job_id
+    )
+    
+    try:
+        result = await execute_fix(request)
+        if result.success and result.patch:
+            producer = KafkaEventProducer()
+            fix_payload = {
+                "jobId": job_id,
+                "patch": result.patch.diff
+            }
+            await producer.publish("fix-generated", fix_payload)
+            logger.info(f"Published fix-generated for job {job_id}")
+        else:
+            logger.warning(f"Fixer failed to produce a valid patch for job {job_id}")
+    except Exception as e:
+        logger.error(f"Fix execution failed for job {job_id}: {e}")
+
+@app.on_event("startup")
+async def startup_event():
+    consumer = KafkaEventConsumer(topic="job.events.fix", group_id="fixer-agent-group")
+    asyncio.create_task(consumer.consume(handle_fix_job))
 
 if __name__ == "__main__":
     import uvicorn

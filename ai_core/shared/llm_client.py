@@ -21,11 +21,24 @@ class LLMClient:
             "max_tokens": 4096
         }
         
+        # Adding OPENAI_API_KEY support for cloud providers
+        headers = {}
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+            
+        # Optional: Groq requires 'model' field even for standard completions endpoint sometimes,
+        # but let's try injecting model name from env if needed.
+        model_name = os.environ.get("LLM_MODEL_NAME")
+        if model_name:
+            payload["model"] = model_name
+        
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.base_url}/chat/completions",
+                    f"{self.base_url}",
                     json=payload,
+                    headers=headers,
                     timeout=300.0 # Generation can take a while
                 )
                 response.raise_for_status()

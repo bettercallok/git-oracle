@@ -107,10 +107,10 @@ def _trace_to_langfuse(
     retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException, httpx.ReadError)),
     reraise=True
 )
-async def _execute_llm_request(client: httpx.AsyncClient, base_url: str, payload: dict) -> httpx.Response:
+async def _execute_llm_request(client: httpx.AsyncClient, base_url: str, payload: dict, headers: Optional[dict] = None) -> httpx.Response:
     """Execute LLM request with exponential backoff for transient network errors."""
     logger.debug(f"Attempting LLM call to {base_url}")
-    response = await client.post(base_url, json=payload)
+    response = await client.post(base_url, json=payload, headers=headers)
     if response.status_code >= 500:
         response.raise_for_status()
     return response
@@ -138,28 +138,38 @@ async def llm_structured(
     """
     json_schema = output_schema.model_json_schema()
 
+    # Inject schema into the system prompt since we are using json_object mode
+    schema_instruction = f"\n\nYou MUST return ONLY valid JSON matching this schema:\n{json.dumps(json_schema)}"
+    
+    # Create a new list to avoid mutating the original
+    processed_messages = list(messages)
+    if processed_messages and processed_messages[0]["role"] == "system":
+        processed_messages[0] = {"role": "system", "content": processed_messages[0]["content"] + schema_instruction}
+    else:
+        processed_messages.insert(0, {"role": "system", "content": schema_instruction})
+
     payload = {
         "model":       LLM_MODEL_NAME,   # Required by Ollama; ignored by llama.cpp
-        "messages":    messages,
+        "messages":    processed_messages,
         "max_tokens":  max_tokens,
         "temperature": temperature,
         "stream":      False,
         "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name":   output_schema.__name__,
-                "strict": True,
-                "schema": json_schema,
-            }
+            "type": "json_object"
         }
     }
 
     start_time = datetime.now(timezone.utc)
 
+    headers = {}
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
             # 1. Primary Attempt
-            response = await _execute_llm_request(client, base_url, payload)
+            response = await _execute_llm_request(client, base_url, payload, headers=headers)
             used_model = LLM_MODEL_NAME
         except Exception as primary_e:
             logger.warning(f"Primary LLM ({base_url}) failed: {primary_e}")
@@ -168,7 +178,7 @@ async def llm_structured(
                 payload["model"] = LLM_FALLBACK_MODEL_NAME
                 try:
                     # 2. Fallback Attempt
-                    response = await _execute_llm_request(client, LLM_FALLBACK_BASE_URL, payload)
+                    response = await _execute_llm_request(client, LLM_FALLBACK_BASE_URL, payload, headers=headers)
                     used_model = LLM_FALLBACK_MODEL_NAME
                 except Exception as fallback_e:
                     logger.error(f"Fallback LLM also failed: {fallback_e}")

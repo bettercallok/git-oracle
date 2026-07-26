@@ -1,5 +1,5 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware, HTTPException
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 from enum import Enum
@@ -120,12 +120,49 @@ Constrain the Fixer Agent by setting 'max_lines_to_change' to the absolute minim
 # ==========================================
 import asyncio
 from shared.kafka_consumer import KafkaEventConsumer
+from shared.kafka_producer import KafkaEventProducer
 
 async def handle_planner_job(payload: dict):
     logger.info(f"Received Kafka event for planning: {payload}")
-    # In a fully realized system, this would parse the event, execute create_plan, 
-    # and then publish a FIX_PLAN_READY event back to the Orchestrator via a Kafka Producer.
-    pass
+    
+    # 1. Parse Kafka payload
+    job_id = payload.get("job_id", "unknown-job")
+    repo_path = payload.get("repo_path", "")
+    error_id = payload.get("error_id", "unknown")
+    
+    # In a full system, we would query the Investigator Agent here, but for now we mock it
+    investigation = InvestigationResult(
+        ranked_causes=[],
+        narrative="NullPointerException during Webhook processing",
+        confidence_score=0.9,
+        affected_files=[],
+        recommended_strategy="surgical_patch"
+    )
+    
+    request = PlannerRequest(
+        tenant_id="00000000-0000-0000-0000-000000000000",
+        repo_path=repo_path,
+        bug_description=f"Error {error_id} occurred in the system.",
+        investigation_result=investigation,
+        job_id=job_id
+    )
+    
+    try:
+        # 2. Execute AI Planning
+        plan = await create_plan(request)
+        logger.info(f"Generated Plan for job {job_id}: {plan.strategy}")
+        
+        # 3. Publish to next step (Fixer)
+        producer = KafkaEventProducer()
+        fix_payload = {
+            "job_id": job_id,
+            "repo_path": repo_path,
+            "plan": plan.dict()
+        }
+        await producer.publish("job.events.fix", fix_payload)
+        logger.info(f"Published job.events.fix for job {job_id}")
+    except Exception as e:
+        logger.error(f"Planning failed for job {job_id}: {e}")
 
 @app.on_event("startup")
 async def startup_event():

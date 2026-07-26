@@ -147,58 +147,70 @@ class SemanticMemory:
 
     async def learn_fact(self, repo: str, fact: str, source: str, confidence: float = 1.0):
         """Upsert a new semantic fact into Qdrant."""
-        await self.initialize_collection()
-        
-        logger.info(f"[Semantic] Learning new fact for {repo}: '{fact[:50]}...'")
-        embedding = await embed_text(fact)
-        
-        await self.client.upsert(
-            collection_name=self.collection_name,
-            points=[
-                qmodels.PointStruct(
-                    id=str(uuid4()),
-                    vector=embedding,
-                    payload={
-                        "repo": repo,
-                        "fact": fact,
-                        "source": source,
-                        "confidence": confidence
-                    }
-                )
-            ]
-        )
+        try:
+            await self.initialize_collection()
+            
+            logger.info(f"[Semantic] Learning new fact for {repo}: '{fact[:50]}...'")
+            embedding = await embed_text(fact)
+            
+            await self.client.upsert(
+                collection_name=self.collection_name,
+                points=[
+                    qmodels.PointStruct(
+                        id=str(uuid4()),
+                        vector=embedding,
+                        payload={
+                            "repo": repo,
+                            "fact": fact,
+                            "source": source,
+                            "confidence": confidence
+                        }
+                    )
+                ]
+            )
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"Skipping learn_fact due to embedding API error (likely using Groq): {e}")
+        except Exception as e:
+            logger.warning(f"Failed to learn fact: {e}")
 
     async def retrieve_facts(self, repo: str, query: str, top_k: int = 3) -> List[Dict]:
         """Search Qdrant for facts relevant to the query, filtered by repo."""
-        await self.initialize_collection()
-        
-        logger.info(f"[Semantic] Retrieving facts for {repo} similar to: '{query}'")
-        query_vector = await embed_text(query)
-        
-        search_result = await self.client.search(
-            collection_name=self.collection_name,
-            query_vector=query_vector,
-            query_filter=qmodels.Filter(
-                must=[
-                    qmodels.FieldCondition(
-                        key="repo",
-                        match=qmodels.MatchValue(value=repo)
-                    )
-                ]
-            ),
-            limit=top_k
-        )
-        
-        facts = []
-        for scored_point in search_result:
-            facts.append({
-                "fact": scored_point.payload.get("fact"),
-                "source": scored_point.payload.get("source"),
-                "confidence": scored_point.payload.get("confidence"),
-                "score": scored_point.score  # Cosine similarity score
-            })
+        try:
+            await self.initialize_collection()
             
-        return facts
+            logger.info(f"[Semantic] Retrieving facts for {repo} similar to: '{query}'")
+            query_vector = await embed_text(query)
+            
+            search_result = await self.client.search(
+                collection_name=self.collection_name,
+                query_vector=query_vector,
+                query_filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="repo",
+                            match=qmodels.MatchValue(value=repo)
+                        )
+                    ]
+                ),
+                limit=top_k
+            )
+            
+            facts = []
+            for scored_point in search_result:
+                facts.append({
+                    "fact": scored_point.payload.get("fact"),
+                    "source": scored_point.payload.get("source"),
+                    "confidence": scored_point.payload.get("confidence"),
+                    "score": scored_point.score  # Cosine similarity score
+                })
+                
+            return facts
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"Skipping retrieve_facts due to embedding API error: {e}")
+            return []
+        except Exception as e:
+            logger.warning(f"Failed to retrieve facts: {e}")
+            return []
 
 
 class RepoProcedures(BaseModel):
