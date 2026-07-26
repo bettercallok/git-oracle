@@ -54,7 +54,11 @@ public class TestRunnerController {
             dockerClient.pullImageCmd("python:3.11-alpine").start().awaitCompletion();
             
             logger.info("Creating secure Docker container...");
-            String repoPath = "/Users/omkhatri/Git Oracle"; // Ideally passed dynamically
+            String repoPath = request.getRepoPath(); // Dynamically get repo path
+            if (repoPath == null || repoPath.isEmpty()) {
+                throw new IllegalArgumentException("Repo path cannot be null or empty");
+            }
+            logger.info("Mounting workspace: {}", repoPath);
             
             HostConfig hostConfig = HostConfig.newHostConfig()
                 .withNetworkMode("none")           // no network access

@@ -51,7 +51,7 @@ spring:
         - id: orchestrator_api
           uri: http://localhost:8083
           predicates:
-            - Path=/api/v1/jobs/**, /api/v1/escalations/**, /api/v1/evals/**, /admin/**
+            - Path=/api/v1/jobs/**, /api/v1/escalations/**, /api/v1/evals/**, /api/v1/admin/**
           filters:
             - PreserveHostHeader=true
             - name: RequestRateLimiter

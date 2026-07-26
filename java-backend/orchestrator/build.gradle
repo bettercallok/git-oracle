@@ -4,6 +4,8 @@ plugins {
 
 dependencies {
     implementation project(':git-oracle-core')
+    implementation 'org.kohsuke:github-api:1.318'
+    implementation 'org.eclipse.jgit:org.eclipse.jgit:6.9.0.202403050737-r'
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.kafka:spring-kafka'

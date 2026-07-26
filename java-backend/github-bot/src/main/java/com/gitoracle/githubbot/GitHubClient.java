@@ -26,7 +26,7 @@ public class GitHubClient {
     private final String privateKeyPath;
 
     public GitHubClient() {
-        Dotenv dotenv = Dotenv.load();
+        Dotenv dotenv = Dotenv.configure().ignoreIfMissing().load();
         this.appId = dotenv.get("GITHUB_APP_ID");
         this.installationId = dotenv.get("GITHUB_INSTALLATION_ID");
         this.privateKeyPath = dotenv.get("GITHUB_PRIVATE_KEY_PATH");

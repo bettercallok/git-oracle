@@ -4,6 +4,7 @@ import ai.gitoracle.core.kafka.KafkaTopics;
 import ai.gitoracle.core.kafka.event.ErrorIngestedEvent;
 import ai.gitoracle.core.model.postgres.AgentJob;
 import ai.gitoracle.orchestrator.token.AgentJobRepository;
+import ai.gitoracle.orchestrator.service.WorkspaceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -23,11 +24,13 @@ public class OrchestratorService {
     
     private final AgentJobRepository jobRepository;
     private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final WorkspaceService workspaceService;
     private final RestTemplate restTemplate = new RestTemplate();
 
-    public OrchestratorService(AgentJobRepository jobRepository, KafkaTemplate<String, Object> kafkaTemplate) {
+    public OrchestratorService(AgentJobRepository jobRepository, KafkaTemplate<String, Object> kafkaTemplate, WorkspaceService workspaceService) {
         this.jobRepository = jobRepository;
         this.kafkaTemplate = kafkaTemplate;
+        this.workspaceService = workspaceService;
     }
 
     @KafkaListener(topics = KafkaTopics.ERROR_INGESTED, groupId = "orchestrator-group")
@@ -38,16 +41,31 @@ public class OrchestratorService {
         AgentJob job = new AgentJob();
         job.setId(UUID.randomUUID());
         job.setRepo(event.getRepoUrl());
+        job.setErrorId(event.getErrorId());
+        
+        // Set the tenant to fix NOT NULL constraint
+        ai.gitoracle.core.model.postgres.Tenant tenant = new ai.gitoracle.core.model.postgres.Tenant();
+        if (event.getTenantId() != null) {
+            tenant.setId(event.getTenantId());
+        } else {
+            tenant.setId(UUID.fromString("00000000-0000-0000-0000-000000000000"));
+        }
+        job.setTenant(tenant);
+        
         job.setState("INVESTIGATING");
         job.setCreatedAt(OffsetDateTime.now());
         jobRepository.save(job);
         
         logger.info("Job {} created. Triggering AI Planner...", job.getId());
         
-        // 2. Publish event to Python Planner Agent
+        // 2. Clone the repository into a dynamic workspace
+        String repoPath = workspaceService.cloneRepository(event.getRepoUrl(), job.getId());
+        
+        // 3. Publish event to Python Planner Agent
         Map<String, Object> plannerPayload = new HashMap<>();
         plannerPayload.put("job_id", job.getId().toString());
         plannerPayload.put("repo_url", event.getRepoUrl());
+        plannerPayload.put("repo_path", repoPath);
         plannerPayload.put("error_id", event.getErrorId());
         
         kafkaTemplate.send("job.events.plan", plannerPayload);
@@ -67,7 +85,13 @@ public class OrchestratorService {
         // 3. Call the Java Test Runner (:8084)
         try {
             logger.info("Calling Test Runner API at :8084...");
-            var testRequest = Map.of("jobId", jobIdStr, "patchData", event.get("patch"), "framework", "JUNIT5");
+            String repoPath = "/tmp/gitoracle-workspaces/" + jobIdStr;
+            var testRequest = Map.of(
+                "jobId", jobIdStr,
+                "repoPath", repoPath,
+                "patchData", event.get("patch"), 
+                "framework", "JUNIT5"
+            );
             var response = restTemplate.postForObject("http://localhost:8084/test", testRequest, Map.class);
             
             if (response != null && Boolean.TRUE.equals(response.get("passed"))) {

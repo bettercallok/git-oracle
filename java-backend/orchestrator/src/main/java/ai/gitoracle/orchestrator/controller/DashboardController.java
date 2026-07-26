@@ -14,7 +14,6 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1")
-@CrossOrigin(origins = "*") // Allow dashboard to access
 @Transactional
 public class DashboardController {
 

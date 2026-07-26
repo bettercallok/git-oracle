@@ -2,18 +2,16 @@ package ai.gitoracle.orchestrator;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.boot.autoconfigure.data.neo4j.Neo4jReactiveDataAutoConfiguration;
-
 import org.springframework.context.annotation.Bean;
 import org.springframework.boot.CommandLineRunner;
 import jakarta.persistence.EntityManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootApplication(exclude = {Neo4jReactiveDataAutoConfiguration.class})
-@EntityScan(basePackages = "ai.gitoracle.core.model.postgres")
+@EntityScan(basePackages = {"ai.gitoracle.core.model.postgres", "ai.gitoracle.core.entity"})
 @EnableJpaRepositories(basePackages = {"ai.gitoracle.core.model.postgres", "ai.gitoracle.orchestrator"})
 public class OrchestratorApplication {
     public static void main(String[] args) {
