@@ -72,7 +72,7 @@ env-check:
 # ─── Infrastructure ───────────────────────────────────────────
 infra-up: env-check
 	@echo "🚀 Starting GitOracle infrastructure..."
-	@$(COMPOSE_INFRA) up -d --remove-orphans
+	@$(COMPOSE_INFRA) up -d
 	@echo ""
 	@echo "✅ Infrastructure starting. Waiting for health checks..."
 	@sleep 5
