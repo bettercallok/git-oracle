@@ -5,7 +5,7 @@ import { apiClient } from '../api/client';
 
 interface Job {
   id: string;
-  repoUrl: string;
+  repo: string;
   errorMessage: string;
 }
 
@@ -122,7 +122,7 @@ export default function EscalationQueue() {
                       <span className="badge badge-warning">Conf: {esc.confidenceScore?.toFixed(2) || 'N/A'}</span>
                       <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{new Date(esc.createdAt).toLocaleTimeString()}</span>
                     </div>
-                    <div style={{ fontWeight: 500, marginBottom: 4, color: 'var(--text-primary)' }}>{esc.job?.repoUrl?.replace('https://github.com/','')}</div>
+                    <div style={{ fontWeight: 500, marginBottom: 4, color: 'var(--text-primary)' }}>{esc.job?.repo?.replace('https://github.com/','')}</div>
                     <div className="mono" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: 12 }}>{esc.job?.errorMessage}</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--danger)', fontWeight: 500 }}>
                       <ShieldAlert size={14} /> {esc.reason}

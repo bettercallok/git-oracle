@@ -6,7 +6,7 @@ import { apiClient } from '../api/client';
 
 interface Job {
   id: string;
-  repoUrl: string;
+  repo: string;
   errorMessage: string;
   status: string;
   tokensUsed: number;
@@ -77,7 +77,7 @@ export default function JobDetail() {
       <motion.div variants={itemVariants} className="stat-grid">
         <div className="card">
           <div className="stat-label">Repository</div>
-          <div style={{ fontSize: '1.1rem', fontWeight: 500, color: 'var(--text-primary)' }}>{job.repoUrl.replace('https://github.com/','')}</div>
+          <div style={{ fontSize: '1.1rem', fontWeight: 500, color: 'var(--text-primary)' }}>{job.repo.replace('https://github.com/','')}</div>
         </div>
         <div className="card">
           <div className="stat-label">Tokens Used</div>

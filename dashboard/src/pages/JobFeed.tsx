@@ -26,7 +26,7 @@ function useNumberTicker(target: number, duration: number = 800) {
 // --- Types & Data ---
 interface Job {
   id: string;
-  repoUrl: string;
+  repo: string;
   commitHash: string;
   errorMessage: string;
   status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'ESCALATED';
@@ -131,7 +131,7 @@ export default function JobFeed() {
                       {job.id.substring(0,8)}
                     </Link>
                   </td>
-                  <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{job.repoUrl.replace('https://github.com/','')}</td>
+                  <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{job.repo.replace('https://github.com/','')}</td>
                   <td style={{ maxWidth: 280, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{job.errorMessage}</td>
                   <td className="mono">{job.tokensUsed}</td>
                   <td>{statusBadge(job.status)}</td>
