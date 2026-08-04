@@ -68,13 +68,12 @@ nohup python agents/prompt_registry/main.py </dev/null > prompt_registry.log 2>&
 echo $! > prompt_registry.pid
 nohup python agents/guardrails/main.py </dev/null > guardrails.log 2>&1 &
 echo $! > guardrails.pid
+nohup python -m agents.commit_analyst.main </dev/null > commit_analyst.log 2>&1 &
+echo $! > commit_analyst.pid
 cd ..
 
-echo "🧠 Starting Local LLM Server..."
-cd llm-server
-nohup ./start.sh </dev/null > llm.log 2>&1 &
-echo $! > llm.pid
-cd ..
+# LLM inference uses external API (configured via LLM_BASE_URL in .env)
+# No local llama.cpp server needed.
 
 echo "🎨 Starting Dashboard UI..."
 cd dashboard

@@ -66,16 +66,16 @@ services:
     shm_size: 128mb
     command: >
       postgres
-        -c max_connections=200
-        -c shared_buffers=256MB
-        -c effective_cache_size=768MB
-        -c maintenance_work_mem=64MB
+        -c max_connections=100
+        -c shared_buffers=128MB
+        -c effective_cache_size=256MB
+        -c maintenance_work_mem=32MB
         -c checkpoint_completion_target=0.9
-        -c wal_buffers=16MB
+        -c wal_buffers=4MB
         -c default_statistics_target=100
         -c random_page_cost=1.1
         -c effective_io_concurrency=200
-        -c work_mem=4MB
+        -c work_mem=2MB
         -c log_min_duration_statement=1000
         -c log_checkpoints=on
 
@@ -97,9 +97,9 @@ services:
       NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
       NEO4J_dbms_security_procedures_unrestricted: "apoc.*,gds.*"
       NEO4J_dbms_security_procedures_allowlist: "apoc.*,gds.*"
-      NEO4J_server_memory_heap_initial__size: "512m"
-      NEO4J_server_memory_heap_max__size: "1G"
-      NEO4J_server_memory_pagecache_size: "512m"
+      NEO4J_server_memory_heap_initial__size: "256m"
+      NEO4J_server_memory_heap_max__size: "256m"
+      NEO4J_server_memory_pagecache_size: "128m"
       NEO4J_db_transaction_timeout: "60s"
     volumes:
       - neo4j-data:/data
@@ -126,15 +126,8 @@ services:
       NEO4J_PASSWORD: ${POSTGRES_PASSWORD:?NEO4J_PASSWORD is required}
     volumes:
       - ./infrastructure/neo4j:/neo4j-init:ro
-    entrypoint: [ "/bin/bash", "-c" ]
-    command: >
-      "echo '⏳ Running Neo4j schema init...' && cypher-shell
-        -u neo4j
-        -p $${NEO4J_PASSWORD}
-        -a bolt://neo4j:7687
-        --file /neo4j-init/init.cypher &&
-      echo '✅ Neo4j schema initialised.'"
-    restart: on-failure
+    command: bash -c "echo '⏳ Running Neo4j schema init...' && cypher-shell -u neo4j -p $${NEO4J_PASSWORD} -a bolt://neo4j:7687 --file /neo4j-init/init.cypher && echo '✅ Neo4j schema initialised.'"
+    restart: "no"
 
   # ============================================================
   # Redis 7 — Task Queue, Session Cache, Dedup Cache
@@ -213,6 +206,7 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_HEAP_OPTS: "-Xmx256m -Xms256m"
 
       # Listeners
       KAFKA_LISTENERS: INTERNAL://0.0.0.0:9094,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
@@ -235,7 +229,7 @@ services:
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
-      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list" ]
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9094 --list" ]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -352,7 +346,7 @@ services:
   langfuse:
     image: langfuse/langfuse:2
     container_name: git-oracle-langfuse
-    restart: unless-stopped
+    restart: "no"
     networks: [ git-oracle-net ]
     ports:
       - "${LANGFUSE_PORT:-3002}:3000"

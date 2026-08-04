@@ -7,7 +7,7 @@
 
 set -e
 
-KAFKA_BOOTSTRAP="kafka:9092"
+KAFKA_BOOTSTRAP="kafka:9094"
 REPLICATION=1
 KAFKA_TOPICS="/opt/kafka/bin/kafka-topics.sh"
 

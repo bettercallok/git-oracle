@@ -6,11 +6,11 @@ gitoracle is an enterprise-grade, event-driven autonomous AI coding assistant de
 
 in modern software development, integrating AI capabilities directly into the IDE and workflow can drastically increase productivity. however, most powerful AI tools rely on third-party cloud APIs (like OpenAI or Anthropic), which introduces significant security and privacy risks when handling proprietary enterprise codebases. gitoracle solves this by providing a local, self-hosted multi-agent system that mimics the capabilities of advanced cloud-based agents while running entirely on your infrastructure.
 
-by utilizing local models (specifically `qwen2.5-coder` via `llama.cpp`) and offloading massive contextual datasets to a highly optimized vector and graph database stack, gitoracle maintains a tight, highly relevant context window, enabling lightning-fast and accurate AI completions, refactors, and architectural suggestions.
+by utilizing a configurable OpenAI-compatible LLM API (e.g. OpenAI, Anthropic, or an external self-hosted model) and offloading massive contextual datasets to a highly optimized vector and graph database stack, gitoracle maintains a tight, highly relevant context window, enabling lightning-fast and accurate AI completions, refactors, and architectural suggestions.
 
 ## key features
 
-- **100% local LLM execution:** relies on a local `llama.cpp` server running `qwen2.5-coder` for complete data privacy. no third-party APIs are utilized for core code generation.
+- **Configurable LLM API:** seamlessly connect to any OpenAI-compatible endpoint. Local `llama.cpp` server has been deprecated to improve inference performance and flexibility.
 - **event-driven microservices architecture:** unlike traditional monolithic AI wrappers, gitoracle uses a decoupled architecture where all inter-service communication flows through kafka topics, ensuring high speed, fault tolerance, and resilience.
 - **advanced context management (RAG):** offloads massive datasets—such as multi-year git histories, large error stacks, and full repository structures—to qdrant (vector DB) and pgvector. it retrieves only the top-k most relevant snippets to strictly adhere to the model's 8192 token context limit.
 - **dynamic prompt registry:** avoids brittle hardcoded python strings. all agent instructions, personas, and task prompts are dynamically fetched from a postgreSQL prompt registry, allowing for easy updates and A/B testing of AI behaviors.
@@ -27,7 +27,7 @@ by utilizing local models (specifically `qwen2.5-coder` via `llama.cpp`) and off
 ### python AI core (agentic logic)
 - **python 3.11+ & fastapi:** handles asynchronous agent coordination and high-speed API endpoints.
 - **pydantic:** enforces strict data validation for all LLM inputs and outputs.
-- **llama.cpp:** serves the local `qwen2.5-coder` model with GPU acceleration.
+- **external API:** configurable via `.env` to route inference to standard API endpoints.
 
 ### infrastructure & storage
 - **apache kafka:** the central event bus connecting java services and python agents.
@@ -80,7 +80,7 @@ graph TD
 - `dashboard/`: the modern web-based UI for interacting with the AI assistant.
 - `cli/`: the command-line interface `gitOracle/main.py` for terminal-based workflows.
 - `infrastructure/`: docker compose manifests (`docker-compose.yml`, `docker-compose.infra.yml`) for spinning up kafka, databases, and caches.
-- `llm-server/`: configuration, model weights, and runner scripts for the local `llama.cpp` instance.
+- `llm-server/`: *(deprecated)* previously contained configuration and scripts for local `llama.cpp`.
 
 ## deployment & setup
 
@@ -122,21 +122,21 @@ ensure your host machine meets the following requirements:
 
 gitoracle relies on a highly decoupled event-driven architecture. here is how the primary components interact during a standard workflow, such as fixing an issue reported on github:
 
-1. **github bot webhook:** when a user comments on a pull request or opens an issue, the gitoracle github bot receives the event.
-2. **api gateway ingestion:** the bot forwards the payload to the java API gateway (`/api/v1/github/webhook`).
-3. **event publishing:** the API gateway validates the webhook and publishes a task event to the kafka bus (e.g., `task.fix.requested`).
-4. **ai orchestrator consumption:** the python AI core (agent orchestrator) consumes this event.
-5. **context retrieval (rag):** the orchestrator queries neo4j for repository structure and qdrant for relevant code snippets and previous error traces to build a comprehensive context window.
-6. **llm reasoning:** the orchestrator dispatches the compiled prompt to the specific agent (e.g., fixer agent), which interfaces with the local `llama.cpp` server (qwen2.5-coder) to generate a solution.
-7. **guardrails validation:** before the solution is accepted, the output is published to a validation topic where the java guardrails service checks it against security and syntax policies.
-8. **execution & feedback:** once approved, the orchestrator commits the fix, pushes it back to github, and replies to the original PR comment.
+1. **github bot webhook:** when a user comments on a pull request or opens an issue, the gitoracle github bot receives the event or a workflow run failure triggers the webhook.
+2. **api gateway / orchestrator ingestion:** the bot forwards the payload to the java API gateway or directly to the orchestrator (`/webhook/github`).
+3. **event publishing:** the orchestrator creates an `agent_job` in PostgreSQL and publishes a `job.events.plan` task event to the kafka bus.
+4. **ai planner consumption:** the python AI core (planner agent) consumes this event, generates a multi-step execution plan using the LLM, and publishes `job.events.fix`.
+5. **context retrieval (rag) & fixing:** the fixer agent retrieves relevant code snippets and previous error traces from Qdrant/pgvector episodic memory to build a comprehensive context window, and applies a codebase patch.
+6. **test runner verification:** the orchestrator calls the java Test Runner natively to execute containerized tests (e.g. Pytest, Gradle) on the AI-generated patch to verify success before merging.
+7. **github bot pr creation:** once tests pass, the orchestrator triggers the GitHub Bot to create a pull request with the autonomous fix and a detailed markdown summary of the agent's work.
 
 ## core API endpoints
 
-the java API gateway exposes several crucial REST endpoints for external clients (dashboard, CLI, github):
+the java API gateway and orchestrator expose several crucial REST endpoints for external clients:
 
-- `POST /api/v1/github/webhook`: entry point for all github bot interactions (issues, PRs, comments).
-- `POST /api/v1/jobs`: manually trigger a new agentic job (e.g., analysis, fix, refactor).
+- `POST /webhook/github`: entry point for all github bot interactions (issues, PRs, workflow failures).
+- `POST /test`: internal Test Runner endpoint for executing containerized verification suites.
+- `POST /pull-request`: internal GitHub Bot endpoint for opening autonomous PRs.
 - `GET /api/v1/jobs/{id}`: poll the status of a specific background job.
 - `GET /api/v1/prompts/{agent}`: fetch the active system prompt for a specific agent from the postgreSQL registry.
 - `POST /api/v1/prompts/{agent}/activate`: switch the active prompt version for A/B testing or rollbacks.
