@@ -33,18 +33,41 @@ public class GitHubClient {
         logger.info("Initialized GitHubClient for App ID: {}", this.appId);
     }
 
+    public String getLatestInstallationToken() throws Exception {
+        String keyContent = new String(Files.readAllBytes(Paths.get(privateKeyPath)), StandardCharsets.UTF_8)
+            .replaceAll("-----BEGIN PRIVATE KEY-----", "")
+            .replaceAll("-----END PRIVATE KEY-----", "")
+            .replaceAll("\\s+", "");
+        
+        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(Base64.getDecoder().decode(keyContent));
+        KeyFactory kf = KeyFactory.getInstance("RSA");
+        PrivateKey privateKey = kf.generatePrivate(keySpec);
+
+        long nowMillis = System.currentTimeMillis();
+        long expMillis = nowMillis + (9 * 60 * 1000);
+
+        String headerJson = "{\"alg\":\"RS256\",\"typ\":\"JWT\"}";
+        String payloadJson = "{\"iat\":" + (nowMillis / 1000) + ",\"exp\":" + (expMillis / 1000) + ",\"iss\":" + appId + "}";
+
+        String headerB64 = Base64.getUrlEncoder().withoutPadding().encodeToString(headerJson.getBytes(StandardCharsets.UTF_8));
+        String payloadB64 = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.getBytes(StandardCharsets.UTF_8));
+
+        String dataToSign = headerB64 + "." + payloadB64;
+
+        java.security.Signature sig = java.security.Signature.getInstance("SHA256withRSA");
+        sig.initSign(privateKey);
+        sig.update(dataToSign.getBytes(StandardCharsets.UTF_8));
+        byte[] signatureBytes = sig.sign();
+
+        String signatureB64 = Base64.getUrlEncoder().withoutPadding().encodeToString(signatureBytes);
+        String jwt = dataToSign + "." + signatureB64;
+
+        GitHub appClient = new GitHubBuilder().withJwtToken(jwt).build();
+        return appClient.getApp().getInstallationById(Long.parseLong(installationId)).createToken().create().getToken();
+    }
+
     public GitHub getAuthenticatedGitHub() throws Exception {
-        // The Kohsuke GitHub API library has a built-in JWTTokenProvider 
-        // that automatically handles PKCS#1 vs PKCS#8 decoding!
-        JWTTokenProvider jwtProvider = new JWTTokenProvider(appId, new File(privateKeyPath));
-        
-        // Connect as the GitHub App
-        GitHub appClient = new GitHubBuilder().withAuthorizationProvider(jwtProvider).build();
-        
-        // Exchange for an Installation Token
-        String installationToken = appClient.getApp().getInstallationById(Long.parseLong(installationId)).createToken().create().getToken();
-        
-        // Return a fully authenticated client acting as the installation
+        String installationToken = getLatestInstallationToken();
         return new GitHubBuilder().withAppInstallationToken(installationToken).build();
     }
 }

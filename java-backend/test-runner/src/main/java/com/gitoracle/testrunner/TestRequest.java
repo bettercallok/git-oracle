@@ -2,6 +2,7 @@ package com.gitoracle.testrunner;
 
 public class TestRequest {
     private String tenantId;
+    private String repoUrl;       // GitHub URL for cloning (e.g. https://github.com/owner/repo)
     private String repoPath;
     private String patchDiff;
     private String jobId;
@@ -11,6 +12,9 @@ public class TestRequest {
 
     public String getTenantId() { return tenantId; }
     public void setTenantId(String tenantId) { this.tenantId = tenantId; }
+
+    public String getRepoUrl() { return repoUrl; }
+    public void setRepoUrl(String repoUrl) { this.repoUrl = repoUrl; }
 
     public String getRepoPath() { return repoPath; }
     public void setRepoPath(String repoPath) { this.repoPath = repoPath; }

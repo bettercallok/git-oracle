@@ -15,7 +15,8 @@ import java.util.UUID;
  * to keep the Orchestrator informed of their token consumption.
  */
 @RestController
-@RequestMapping("/budget")
+@RequestMapping("/api/v1/budget")
+@CrossOrigin(origins = "*", allowedHeaders = "*", methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.OPTIONS})
 @RequiredArgsConstructor
 @Slf4j
 public class BudgetController {

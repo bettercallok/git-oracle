@@ -22,8 +22,8 @@ public class OrchestratorApplication {
     public CommandLineRunner initDefaultTenant(EntityManager entityManager, TransactionTemplate transactionTemplate) {
         return args -> {
             transactionTemplate.execute(status -> {
-                String sql = "INSERT INTO tenants (id, org_name, github_app_installation_id, is_active, created_at, updated_at) " +
-                             "VALUES ('00000000-0000-0000-0000-000000000000', 'Default Tenant', '123456', true, NOW(), NOW()) " +
+                String sql = "INSERT INTO tenants (id, org_name, github_app_installation_id, created_at) " +
+                             "VALUES ('00000000-0000-0000-0000-000000000000', 'Default Tenant', '123456', NOW()) " +
                              "ON CONFLICT (org_name) DO NOTHING";
                 entityManager.createNativeQuery(sql).executeUpdate();
                 System.out.println("Ensured default tenant exists via native query!");

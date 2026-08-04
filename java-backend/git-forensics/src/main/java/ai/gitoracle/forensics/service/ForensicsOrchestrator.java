@@ -33,10 +33,13 @@ public class ForensicsOrchestrator {
             // 1. Shallow clone the repo
             File repoDir = jGitService.shallowClone(event.getRepoUrl());
             
-            // 2. Parse blame and populate Neo4j Graph
-            neo4jGraphService.populateGraph(event.getRepoUrl(), repoDir);
+            // 2. Extract History
+            java.util.List<JGitService.CommitData> history = jGitService.extractHistory(repoDir);
             
-            // 3. Publish FORENSICS_COMPLETE (In a full implementation we'd pass the actual forensics payload)
+            // 3. Parse blame and populate Neo4j Graph
+            neo4jGraphService.populateGraph(event.getRepoUrl(), history);
+            
+            // 4. Publish FORENSICS_COMPLETE (In a full implementation we'd pass the actual forensics payload)
             Map<String, Object> forensicsEvent = Map.of(
                 "jobId", event.getJobId().toString(),
                 "repoUrl", event.getRepoUrl(),

@@ -12,8 +12,9 @@ public class Escalation {
     @Id
     private UUID id;
 
-    @Column(name = "job_id")
-    private UUID jobId;
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "job_id")
+    private ai.gitoracle.core.model.postgres.AgentJob job;
 
     private String reason;
     

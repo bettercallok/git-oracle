@@ -8,6 +8,11 @@ import org.springframework.web.bind.annotation.RestController;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GHRepository;
 
+import java.io.File;
+import java.nio.file.Files;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+
 @RestController
 public class GitHubController {
     private static final Logger logger = LoggerFactory.getLogger(GitHubController.class);
@@ -24,34 +29,41 @@ public class GitHubController {
         
         try {
             String markdown = generateMarkdown(request);
-            logger.info("Generated PR Markdown:\n{}", markdown);
             
             // Connect to GitHub
             GitHub github = githubClient.getAuthenticatedGitHub();
-            logger.info("Successfully authenticated with GitHub as app.");
-            
-            // Phase 3: Create the Pull Request
+            String token = githubClient.getLatestInstallationToken();
             GHRepository repo = github.getRepository(request.getRepoFullName());
             String defaultBranch = repo.getDefaultBranch();
-            String sha = repo.getBranch(defaultBranch).getSHA1();
             
             String newBranchName = "gitoracle-fix-" + request.getJobId().substring(0, 8);
-            repo.createRef("refs/heads/" + newBranchName, sha);
-            logger.info("Created new branch: {}", newBranchName);
             
-            // Note: The AI returns a patch diff string. For a true Git patch application in Java,
-            // we would normally clone the repo locally, run `git apply`, and push. 
-            // Since this API is stateless, we will simulate the commit by writing the patch 
-            // to a `.patch` file on the repo for human review as part of the PR.
-            // (In a production GitOracle, the orchestrator handles the local git tree).
-            String patchFilePath = "gitoracle-fixes/fix-" + request.getJobId().substring(0, 8) + ".patch";
-            repo.createContent()
-                .path(patchFilePath)
-                .content(request.getPatchDiff())
-                .message("chore: apply GitOracle patch for " + request.getJobId())
-                .branch(newBranchName)
-                .commit();
-            logger.info("Committed patch file to branch.");
+            // Stateful Git Operations
+            String workDir = "/tmp/gitoracle-bot/" + UUID.randomUUID().toString();
+            new File(workDir).mkdirs();
+            
+            String cloneUrl = "https://x-access-token:" + token + "@github.com/" + request.getRepoFullName() + ".git";
+            
+            logger.info("Cloning repository into {}", workDir);
+            runCommand(workDir, "git", "clone", "-c", "credential.helper=", cloneUrl, ".");
+            
+            logger.info("Creating branch {}", newBranchName);
+            runCommand(workDir, "git", "checkout", "-b", newBranchName);
+            
+            // Write patch file and apply
+            File patchFile = new File(workDir, "fix.patch");
+            Files.writeString(patchFile.toPath(), request.getPatchDiff());
+            
+            logger.info("Applying patch...");
+            runCommand(workDir, "git", "apply", "fix.patch");
+            patchFile.delete(); // cleanup
+            
+            logger.info("Committing and pushing...");
+            runCommand(workDir, "git", "config", "user.name", "GitOracle Bot");
+            runCommand(workDir, "git", "config", "user.email", "bot@gitoracle.ai");
+            runCommand(workDir, "git", "add", ".");
+            runCommand(workDir, "git", "commit", "-m", "🤖 GitOracle Autonomous Fix: " + request.getCommitMessage());
+            runCommand(workDir, "git", "-c", "credential.helper=", "push", "origin", newBranchName);
             
             // Open the Pull Request
             repo.createPullRequest(
@@ -62,15 +74,29 @@ public class GitHubController {
             );
             logger.info("Successfully opened Pull Request on {}", request.getRepoFullName());
             
-            return "Successfully authenticated, created branch, and opened PR!";
+            // Cleanup
+            runCommand("/tmp", "rm", "-rf", workDir);
+            
+            return "Successfully authenticated, created branch, pushed code, and opened PR!";
         } catch (Exception e) {
             logger.error("Failed to process PR request", e);
             return "Error: " + e.getMessage();
         }
     }
     
+    private void runCommand(String dir, String... command) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.directory(new File(dir));
+        Process p = pb.start();
+        if (!p.waitFor(60, TimeUnit.SECONDS) || p.exitValue() != 0) {
+            String error = new String(p.getErrorStream().readAllBytes());
+            throw new RuntimeException("Command failed: " + String.join(" ", command) + " -> " + error);
+        }
+    }
+    
     private String generateMarkdown(PullRequestRequest req) {
         return String.format(
+            "<!-- gitoracle:job_id:%s -->\n" +
             "<!-- gitOracle:metadata\n" +
             "{\n" +
             "  \"job_id\": \"%s\",\n" +
@@ -92,7 +118,8 @@ public class GitHubController {
             "### Root Cause\n%s\n\n" +
             "### What Changed\n%s\n\n" +
             "### Test Results\n✅ %d/%d passed · Coverage %+.2f%%\n\n" +
-            "---\n*This PR was generated autonomously by GitOracle. Questions? The Reviewer Agent will respond to your comments.*",
+            "---\n*This PR was generated autonomously by GitOracle. Not satisfied? Use the [GitOracle Dashboard](http://localhost:5173) to regenerate with your instructions.*",
+            req.getJobId(),
             req.getJobId(), req.getRootCommit(), req.getCausalScore(), req.getFixStrategy(), req.getFixAttempts(),
             req.getTestsPassed(), req.getTestsTotal(), req.getCoverageDelta(), req.getQualityScore(), req.getTokenBudgetUsed(),
             req.getRootCommit(), req.getCausalScore() * 100, req.getQualityScore() * 100, req.getFixAttempts(),

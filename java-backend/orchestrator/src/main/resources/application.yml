@@ -2,21 +2,27 @@ spring:
   application:
     name: orchestrator
   datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}
+    url: jdbc:postgresql://${POSTGRES_HOST:127.0.0.1}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}
     username: ${POSTGRES_USER:gitOracle}
-    password: ${POSTGRES_PASSWORD:gitOracle}
+    password: ${POSTGRES_PASSWORD:GitOracle_PG_2025}
+    hikari:
+      connection-timeout: 10000
+      maximum-pool-size: 5
   jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: update
     show-sql: true
     properties:
       hibernate:
         format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_HOST:127.0.0.1}:${KAFKA_PORT:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      compression-type: none
     consumer:
       group-id: orchestrator-group
       auto-offset-reset: earliest
@@ -36,3 +42,18 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+
+logging:
+  level:
+    root: WARN
+    ai.gitoracle: INFO
+    org.springframework.kafka: WARN
+    org.hibernate.SQL: WARN
+  file:
+    name: orchestrator.log
+  logback:
+    rollingpolicy:
+      max-file-size: 50MB
+      max-history: 5
+      total-size-cap: 200MB
+      clean-history-on-start: false

@@ -1,11 +1,11 @@
 package com.gitoracle.testrunner;
 
 public enum TestFramework {
-    MAVEN("mvn test -q"),
-    GRADLE("./gradlew test --quiet"),
-    PYTEST("python -m pytest -v --tb=short --json-report"),
-    NPM_JEST("npm test -- --json"),
-    CARGO("cargo test 2>&1"),
+    MAVEN("mvn test -q --no-transfer-progress"),
+    GRADLE("./gradlew test --no-daemon --quiet"),
+    PYTEST("python -m pytest -v --tb=short"),
+    NPM_JEST("npx jest --no-coverage"),
+    CARGO("cargo test"),
     GO_TEST("go test ./... -v"),
     UNKNOWN(null);
 

@@ -2,7 +2,7 @@ spring:
   application:
     name: git-forensics
   neo4j:
-    uri: bolt://${NEO4J_HOST:localhost}:${NEO4J_PORT:7687}
+    uri: bolt://${NEO4J_HOST:localhost}:${NEO4J_PORT:7688}
     authentication:
       username: ${NEO4J_USER:neo4j}
       password: ${NEO4J_PASSWORD:password}
@@ -28,3 +28,18 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+
+logging:
+  level:
+    root: WARN
+    ai.gitoracle: INFO
+    org.springframework.kafka: WARN
+    org.hibernate.SQL: WARN
+  file:
+    name: git-forensics.log
+  logback:
+    rollingpolicy:
+      max-file-size: 50MB
+      max-history: 5
+      total-size-cap: 200MB
+      clean-history-on-start: false

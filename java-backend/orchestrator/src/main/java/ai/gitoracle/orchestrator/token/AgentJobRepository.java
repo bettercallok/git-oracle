@@ -17,7 +17,7 @@ public interface AgentJobRepository extends JpaRepository<AgentJob, UUID> {
      * Returns the number of rows affected (0 if job not found).
      */
     @Modifying
-    @Query("UPDATE AgentJob j SET j.tokenBudgetUsed = j.tokenBudgetUsed + :tokens WHERE j.id = :jobId")
+    @Query("UPDATE AgentJob j SET j.tokenBudgetUsed = COALESCE(j.tokenBudgetUsed, 0) + :tokens WHERE j.id = :jobId")
     int incrementTokens(@Param("jobId") UUID jobId, @Param("tokens") int tokens);
 
     @Query("SELECT j.tokenBudgetUsed FROM AgentJob j WHERE j.id = :jobId")

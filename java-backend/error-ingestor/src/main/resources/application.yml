@@ -2,23 +2,33 @@ spring:
   application:
     name: error-ingestor
   datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}
+    url: jdbc:postgresql://${POSTGRES_HOST:127.0.0.1}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}
     username: ${POSTGRES_USER:gitOracle}
-    password: ${POSTGRES_PASSWORD:gitOracle}
+    password: ${POSTGRES_PASSWORD:GitOracle_PG_2025}
+    hikari:
+      connection-timeout: 10000
+      maximum-pool-size: 5
   jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
-      ddl-auto: validate
+      ddl-auto: update
     show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_HOST:127.0.0.1}:${KAFKA_PORT:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      compression-type: none
     consumer:
       group-id: error-ingestor-group
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
 
 server:
   port: 8081
@@ -31,3 +41,18 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+
+logging:
+  level:
+    root: WARN
+    ai.gitoracle: INFO
+    org.springframework.kafka: WARN
+    org.hibernate.SQL: WARN
+  file:
+    name: error-ingestor.log
+  logback:
+    rollingpolicy:
+      max-file-size: 50MB
+      max-history: 5
+      total-size-cap: 200MB
+      clean-history-on-start: false

@@ -1,19 +1,22 @@
 spring:
   application:
     name: api-gateway
+
+
   datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}
+    url: jdbc:postgresql://${POSTGRES_HOST:127.0.0.1}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}
     username: ${POSTGRES_USER:gitOracle}
-    password: ${POSTGRES_PASSWORD:gitOracle}
+    password: ${POSTGRES_PASSWORD:GitOracle_PG_2025}
   jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
-      ddl-auto: validate
-    show-sql: true
+      ddl-auto: none
+    show-sql: false
     properties:
       hibernate:
-        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_HOST:127.0.0.1}:${KAFKA_PORT:9092}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -39,7 +42,7 @@ spring:
             allowedHeaders: "*"
       routes:
         - id: error_ingestor_api
-          uri: http://localhost:8081
+          uri: http://127.0.0.1:8081
           predicates:
             - Path=/webhook/**
           filters:
@@ -48,10 +51,20 @@ spring:
               args:
                 redis-rate-limiter.replenishRate: 50
                 redis-rate-limiter.burstCapacity: 100
-        - id: orchestrator_api
-          uri: http://localhost:8083
+        - id: git_forensics_api
+          uri: http://127.0.0.1:8082
           predicates:
-            - Path=/api/v1/jobs/**, /api/v1/escalations/**, /api/v1/evals/**, /api/v1/admin/**
+            - Path=/api/v1/risk
+          filters:
+            - PreserveHostHeader=true
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 50
+                redis-rate-limiter.burstCapacity: 100
+        - id: orchestrator_api
+          uri: http://127.0.0.1:8083
+          predicates:
+            - Path=/api/v1/**
           filters:
             - PreserveHostHeader=true
             - name: RequestRateLimiter
@@ -70,3 +83,19 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+
+logging:
+  level:
+    root: WARN
+    ai.gitoracle: INFO
+    org.springframework.kafka: WARN
+    org.springframework.cloud.gateway: WARN
+    org.hibernate.SQL: WARN
+  file:
+    name: api-gateway.log
+  logback:
+    rollingpolicy:
+      max-file-size: 50MB
+      max-history: 5
+      total-size-cap: 200MB
+      clean-history-on-start: false

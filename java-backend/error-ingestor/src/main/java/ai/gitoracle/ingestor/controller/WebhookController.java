@@ -4,20 +4,29 @@ import ai.gitoracle.ingestor.service.SemanticDedupService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @RestController
 @RequestMapping("/webhook")
 public class WebhookController {
 
     private static final Logger logger = LoggerFactory.getLogger(WebhookController.class);
-    private final SemanticDedupService dedupService;
+    private static final Pattern JOB_ID_PATTERN =
+        Pattern.compile("<!--\\s*gitoracle:job_id:([0-9a-fA-F\\-]{36})\\s*-->");
 
-    public WebhookController(SemanticDedupService dedupService) {
+    private final SemanticDedupService dedupService;
+    private final KafkaTemplate<String, Object> kafkaTemplate;
+
+    public WebhookController(SemanticDedupService dedupService, KafkaTemplate<String, Object> kafkaTemplate) {
         this.dedupService = dedupService;
+        this.kafkaTemplate = kafkaTemplate;
     }
 
     @PostMapping("/{tenantId}/sentry")
@@ -27,12 +36,7 @@ public class WebhookController {
             @RequestHeader(value = "X-Sentry-Signature", required = false) String sig) {
         
         logger.info("Received Sentry webhook for tenant: {}", tenantId);
-        
-        // In a full implementation, we'd verify the HMAC signature here
-        // signatureVerifier.verify(payload, sig);
-
         dedupService.ingest(tenantId, payload);
-        
         return ResponseEntity.accepted().build();
     }
 
@@ -43,45 +47,117 @@ public class WebhookController {
             @RequestBody Map<String, Object> payload) {
         
         logger.info("Received GitHub webhook for tenant: {} (Event: {})", tenantId, githubEvent);
-        
-        // Parse GitHub Actions workflow_run event
+
+        // --- PR Review Comment (line-level comment on diff) ---
+        if ("pull_request_review_comment".equals(githubEvent)) {
+            return handleReviewComment(tenantId, payload, "pull_request_review_comment");
+        }
+
+        // --- Issue Comment (general PR/issue comment) ---
+        if ("issue_comment".equals(githubEvent)) {
+            String action = (String) payload.get("action");
+            if ("created".equals(action)) {
+                return handleReviewComment(tenantId, payload, "issue_comment");
+            }
+            return ResponseEntity.accepted().build();
+        }
+
+        // --- GitHub Actions workflow_run failure ---
         if ("workflow_run".equals(githubEvent)) {
             String action = (String) payload.get("action");
-            
             @SuppressWarnings("unchecked")
             Map<String, Object> workflowRun = (Map<String, Object>) payload.get("workflow_run");
-            
             @SuppressWarnings("unchecked")
             Map<String, Object> repository = (Map<String, Object>) payload.get("repository");
-            
+
             if ("completed".equals(action) && workflowRun != null && repository != null) {
                 String conclusion = (String) workflowRun.get("conclusion");
-                
                 if ("failure".equals(conclusion)) {
                     String repoName = (String) repository.get("full_name");
                     Long runIdLong = ((Number) workflowRun.get("id")).longValue();
                     String runId = String.valueOf(runIdLong);
-                    
                     logger.info("Parsed failed workflow_run for repository: {} (Run ID: {})", repoName, runId);
-                    
-                    // Create an internal payload for dedupService using the extracted real data
                     Map<String, Object> internalPayload = Map.of(
-                        "repo", "https://github.com/" + repoName,
-                        "error_id", "run-" + runId,
-                        "stacktrace", "GitHub Actions Run Failed: " + runId // We'll fetch real logs in the next phase
+                        "repo",       "https://github.com/" + repoName,
+                        "error_id",   "run-" + runId,
+                        "stacktrace", "GitHub Actions Run Failed: " + runId
                     );
-                    
                     dedupService.ingest(tenantId, internalPayload);
-                    return ResponseEntity.accepted().build();
                 } else {
                     logger.info("Ignoring successful workflow_run.");
                 }
             }
-        } else {
-            // Fallback for custom mocked payload or other events
-            dedupService.ingest(tenantId, payload);
+            return ResponseEntity.accepted().build();
         }
-        
+
+        // Fallback: custom/mocked payload
+        dedupService.ingest(tenantId, payload);
+        return ResponseEntity.accepted().build();
+    }
+
+    /**
+     * Handles both issue_comment and pull_request_review_comment events.
+     * Extracts the gitoracle job ID from the PR body (embedded as an HTML comment by the GitHub Bot),
+     * then publishes a job.events.review.received event to Kafka for the Orchestrator.
+     */
+    @SuppressWarnings("unchecked")
+    private ResponseEntity<Void> handleReviewComment(UUID tenantId, Map<String, Object> payload, String eventType) {
+        // Extract comment body
+        Map<String, Object> comment = (Map<String, Object>) payload.get("comment");
+        if (comment == null) return ResponseEntity.accepted().build();
+
+        String commentBody = (String) comment.get("body");
+        if (commentBody == null || commentBody.isBlank()) return ResponseEntity.accepted().build();
+
+        // Extract PR body (contains the embedded job_id marker)
+        String jobId = null;
+
+        // Try pull_request block first (review comment)
+        Map<String, Object> pr = (Map<String, Object>) payload.get("pull_request");
+        if (pr != null) {
+            String prBody = (String) pr.get("body");
+            if (prBody != null) {
+                Matcher m = JOB_ID_PATTERN.matcher(prBody);
+                if (m.find()) jobId = m.group(1);
+            }
+        }
+        // Fallback: try issue block (issue_comment on PR)
+        if (jobId == null) {
+            Map<String, Object> issue = (Map<String, Object>) payload.get("issue");
+            if (issue != null) {
+                String issueBody = (String) issue.get("body");
+                if (issueBody != null) {
+                    Matcher m = JOB_ID_PATTERN.matcher(issueBody);
+                    if (m.find()) jobId = m.group(1);
+                }
+            }
+        }
+
+        // Extract repo
+        Map<String, Object> repository = (Map<String, Object>) payload.get("repository");
+        String repoFullName = repository != null ? (String) repository.get("full_name") : "unknown/unknown";
+
+        // Extract commenter login
+        Map<String, Object> sender = (Map<String, Object>) payload.get("sender");
+        String commenter = sender != null ? (String) sender.get("login") : "unknown";
+
+        if (jobId != null) {
+            logger.info("Review comment on GitOracle PR — job: {} commenter: {} comment: '{}'",
+                        jobId, commenter, commentBody.substring(0, Math.min(80, commentBody.length())));
+
+            Map<String, Object> reviewEvent = new HashMap<>();
+            reviewEvent.put("job_id",      jobId);
+            reviewEvent.put("comment",     commentBody);
+            reviewEvent.put("commenter",   commenter);
+            reviewEvent.put("repo",        "https://github.com/" + repoFullName);
+            reviewEvent.put("event_type",  eventType);
+            reviewEvent.put("tenant_id",   tenantId.toString());
+
+            kafkaTemplate.send("job.events.review.received", reviewEvent);
+        } else {
+            logger.info("Review comment received but no GitOracle job ID found in PR body. Ignoring.");
+        }
+
         return ResponseEntity.accepted().build();
     }
 }
