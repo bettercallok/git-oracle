@@ -1,8 +1,18 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+
+const formatTime = (raw: string | null | undefined): string => {
+  if (!raw) return '—';
+  const d = new Date(raw);
+  if (isNaN(d.getTime()) || d.getFullYear() < 2000) return '—';
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
+  });
+};
 
 // --- Custom Number Ticker Hook ---
 function useNumberTicker(target: number, duration: number = 800) {
@@ -29,7 +39,7 @@ interface Job {
   repo: string;
   commitHash: string;
   errorMessage: string;
-  status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'ESCALATED';
+  state: string; // QUEUED, RUNNING, INVESTIGATING, FIXING, TESTING, REGENERATING, PR_OPENED, SUCCESS, FAILED, ESCALATED
   createdAt: string;
   tokensUsed: number;
 }
@@ -41,9 +51,20 @@ const fetchJobs = async (): Promise<Job[]> => {
 
 const SPARKLINE = [2, 4, 3, 7, 5, 8, 4, 6, 9, 5, 8, 7];
 
-const statusBadge = (status: Job['status']) => {
-  const map = { SUCCESS: 'badge-success', RUNNING: 'badge-warning', FAILED: 'badge-danger', ESCALATED: 'badge-info' };
-  return <span className={`badge ${map[status] || 'badge-info'}`}>{status}</span>;
+const statusBadge = (state: string) => {
+  const map: Record<string, string> = { 
+    SUCCESS: 'badge-success', 
+    PR_OPENED: 'badge-success',
+    RUNNING: 'badge-warning', 
+    INVESTIGATING: 'badge-warning',
+    FIXING: 'badge-warning',
+    TESTING: 'badge-warning',
+    REGENERATING: 'badge-warning',
+    QUEUED: 'badge-info',
+    FAILED: 'badge-danger', 
+    ESCALATED: 'badge-danger' 
+  };
+  return <span className={`badge ${map[state] || 'badge-info'}`}>{state || 'UNKNOWN'}</span>;
 };
 
 // --- Animations ---
@@ -57,6 +78,7 @@ const itemVariants = {
 };
 
 export default function JobFeed() {
+  const navigate = useNavigate();
   const { data: jobs = [], isLoading, isError } = useQuery({
     queryKey: ['jobs'],
     queryFn: fetchJobs,
@@ -64,9 +86,9 @@ export default function JobFeed() {
   });
 
   const total = useNumberTicker(jobs.length, 1000);
-  const success = useNumberTicker(jobs.filter(j => j.status === 'SUCCESS').length, 1000);
-  const running = useNumberTicker(jobs.filter(j => j.status === 'RUNNING').length, 1000);
-  const failed = useNumberTicker(jobs.filter(j => j.status === 'FAILED').length, 1000);
+  const success = useNumberTicker(jobs.filter(j => ['SUCCESS', 'PR_OPENED'].includes(j.state)).length, 1000);
+  const running = useNumberTicker(jobs.filter(j => ['RUNNING', 'INVESTIGATING', 'TESTING', 'REGENERATING'].includes(j.state)).length, 1000);
+  const failed = useNumberTicker(jobs.filter(j => ['FAILED', 'ESCALATED'].includes(j.state)).length, 1000);
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
@@ -125,17 +147,17 @@ export default function JobFeed() {
             </thead>
             <tbody>
               {jobs.map((job) => (
-                <tr key={job.id}>
+                <tr key={job.id} onClick={() => navigate(`/job/${job.id}`)} style={{ cursor: 'pointer' }} className="hover-row">
                   <td>
-                    <Link to={`/job/${job.id}`} className="mono" style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                    <Link to={`/job/${job.id}`} className="mono" onClick={(e) => e.stopPropagation()} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
                       {job.id.substring(0,8)}
                     </Link>
                   </td>
                   <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{job.repo.replace('https://github.com/','')}</td>
                   <td style={{ maxWidth: 280, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{job.errorMessage}</td>
                   <td className="mono">{job.tokensUsed}</td>
-                  <td>{statusBadge(job.status)}</td>
-                  <td style={{ fontSize: '0.82rem' }}>{new Date(job.createdAt).toLocaleTimeString()}</td>
+                  <td>{statusBadge(job.state)}</td>
+                  <td style={{ fontSize: '0.82rem' }}>{formatTime(job.createdAt)}</td>
                 </tr>
               ))}
               {jobs.length === 0 && (

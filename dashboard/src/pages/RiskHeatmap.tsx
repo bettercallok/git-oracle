@@ -21,7 +21,7 @@ interface RiskData {
 }
 
 const fetchRiskData = async (): Promise<RiskData> => {
-  const { data } = await apiClient.get('/admin/risk-heatmap');
+  const { data } = await apiClient.get('/risk');
   return data;
 };
 

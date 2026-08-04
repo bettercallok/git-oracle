@@ -3,6 +3,16 @@ import { Check, X, ShieldAlert } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 
+const formatTime = (raw: string | null | undefined): string => {
+  if (!raw) return '—';
+  const d = new Date(raw);
+  if (isNaN(d.getTime()) || d.getFullYear() < 2000) return '—';
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: true,
+  });
+};
+
 interface Job {
   id: string;
   repo: string;
@@ -120,7 +130,7 @@ export default function EscalationQueue() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                       <span className="mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{esc.id.substring(0,8)}</span>
                       <span className="badge badge-warning">Conf: {esc.confidenceScore?.toFixed(2) || 'N/A'}</span>
-                      <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{new Date(esc.createdAt).toLocaleTimeString()}</span>
+                      <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{formatTime(esc.createdAt)}</span>
                     </div>
                     <div style={{ fontWeight: 500, marginBottom: 4, color: 'var(--text-primary)' }}>{esc.job?.repo?.replace('https://github.com/','')}</div>
                     <div className="mono" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: 12 }}>{esc.job?.errorMessage}</div>
