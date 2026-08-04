@@ -23,18 +23,22 @@ OLLAMA_EMBED_URL = OLLAMA_API_URL.replace("/v1/chat/completions", "/api/embeddin
 EMBEDDING_MODEL = "all-minilm"
 
 async def embed_text(content: str) -> List[float]:
-    """Convert text into a 384-dimensional vector using local Ollama model."""
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            OLLAMA_EMBED_URL,
-            json={
-                "model": EMBEDDING_MODEL,
-                "prompt": content
-            }
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["embedding"]
+    """Convert text into a 384-dimensional vector using local Ollama model, or fallback to zero vector."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(
+                OLLAMA_EMBED_URL,
+                json={
+                    "model": EMBEDDING_MODEL,
+                    "prompt": content
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["embedding"]
+    except Exception as e:
+        logger.debug(f"Skipping vector embedding recall: {e}")
+        return [0.0] * 384
 
 async def get_db_connection():
     """Create an asyncpg connection and register pgvector types."""

@@ -9,7 +9,9 @@ class KafkaEventConsumer:
     def __init__(self, topic: str, group_id: str):
         self.topic = topic
         self.group_id = group_id
-        self.bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+        kafka_host = os.getenv("KAFKA_HOST", "127.0.0.1")
+        kafka_port = os.getenv("KAFKA_PORT", "9092")
+        self.bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", f"{kafka_host}:{kafka_port}")
         
     async def consume(self, message_handler):
         """Starts consuming from Kafka and passes parsed JSON payloads to the handler."""

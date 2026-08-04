@@ -98,6 +98,55 @@ Rank them and provide a causal_effect_score (0.0 to 1.0) and reasoning for each.
         logger.error(f"Investigation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ==========================================
+# Phase 3: Real Kafka Event Integration
+# ==========================================
+import asyncio
+from shared.kafka_consumer import KafkaEventConsumer
+from shared.kafka_producer import KafkaEventProducer
+
+async def handle_investigate_job(payload: dict):
+    logger.info(f"Received Kafka event for investigation: {payload}")
+    
+    job_id = payload.get("job_id", "unknown-job")
+    repo_path = payload.get("repo_path", "")
+    error_id = payload.get("error_id", "unknown")
+    
+    # In a full system, we'd fetch actual bug description and affected files from DB.
+    # We use some generic values here assuming the system will populate them in future iterations.
+    request = InvestigationRequest(
+        tenant_id="00000000-0000-0000-0000-000000000000",
+        repo_path=repo_path,
+        bug_description=f"Error {error_id} reported from ingestor.",
+        affected_files=[], # To be implemented via git diff inference
+        job_id=job_id
+    )
+    
+    try:
+        # 1. Execute AI Investigation
+        investigation_result = await investigate(request)
+        logger.info(f"Investigation Complete for job {job_id}")
+        
+        # 2. Publish to Planner Agent
+        producer = KafkaEventProducer()
+        plan_payload = {
+            "job_id": job_id,
+            "repo_url": payload.get("repo_url", ""),
+            "repo_path": repo_path,
+            "error_id": error_id,
+            "investigation_result": investigation_result.dict()
+        }
+        await producer.publish("job.events.plan", plan_payload)
+        logger.info(f"Published job.events.plan for job {job_id}")
+    except Exception as e:
+        logger.error(f"Investigation event failed for job {job_id}: {e}")
+
+@app.on_event("startup")
+async def startup_event():
+    # Start the Kafka consumer in a background task
+    consumer = KafkaEventConsumer(topic="job.events.investigate", group_id="investigator-agent-group")
+    asyncio.create_task(consumer.consume(handle_investigate_job))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=9001)

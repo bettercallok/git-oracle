@@ -130,14 +130,20 @@ async def handle_planner_job(payload: dict):
     repo_path = payload.get("repo_path", "")
     error_id = payload.get("error_id", "unknown")
     
-    # In a full system, we would query the Investigator Agent here, but for now we mock it
-    investigation = InvestigationResult(
-        ranked_causes=[],
-        narrative="NullPointerException during Webhook processing",
-        confidence_score=0.9,
-        affected_files=[],
-        recommended_strategy="surgical_patch"
-    )
+    # 2. Extract Investigation Result from payload
+    investigation_dict = payload.get("investigation_result", {})
+    try:
+        investigation = InvestigationResult(**investigation_dict)
+    except Exception as e:
+        logger.error(f"Failed to parse investigation_result: {e}")
+        # Fallback to a mock if the pipeline is incomplete or data is missing
+        investigation = InvestigationResult(
+            ranked_causes=[],
+            narrative="Fallback: Missing or invalid investigation data from previous step.",
+            confidence_score=0.0,
+            affected_files=[],
+            recommended_strategy="surgical_patch"
+        )
     
     request = PlannerRequest(
         tenant_id="00000000-0000-0000-0000-000000000000",

@@ -60,14 +60,13 @@ def fix(repo, commit, error, file, line):
     ) as progress:
         progress.add_task(description="Submitting to Fixer Agent...", total=None)
         try:
-            response = requests.post(f"{API_URL}/jobs", json={
+            response = requests.post(f"{API_URL}/trigger", json={
                 "repoUrl": repo, 
-                "commitHash": commit,
-                "errorMessage": f"{error} in {file}:{line}",
-                "jobType": "fix"
+                "issueDescription": f"{error} in {file}:{line} (commit {commit})",
+                "targetRepo": repo.replace("https://github.com/", "")
             })
             response.raise_for_status()
-            job_id = response.json().get("id", str(uuid.uuid4()))
+            job_id = response.json().get("jobId", str(uuid.uuid4()))
         except Exception as e:
             console.print(f"[bold red]Failed to submit job:[/bold red] {e}")
             return
@@ -137,8 +136,33 @@ def status():
     table.add_row("Fixer Agent", "✓ HEALTHY", "850ms")
     table.add_row("Guardrails", "✓ HEALTHY", "15ms")
     table.add_row("Neo4j DB", "✓ HEALTHY", "2ms")
-    table.add_row("Llama.cpp", "✓ HEALTHY", "42t/s")
 
+    console.print(table)
+
+@cli.command()
+@click.option('--repo', required=True, help="GitHub repository URL")
+def commits(repo):
+    """View recent commits for a repository."""
+    console.print(f"[bold blue]GitOracle[/bold blue] | Recent Commits for {repo}\n")
+    
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+        progress.add_task(description="Fetching from API Gateway...", total=None)
+        try:
+            resp = requests.get(f"{API_URL}/commits", params={"repoUrl": repo})
+            resp.raise_for_status()
+            commit_list = resp.json()
+        except Exception as e:
+            console.print(f"[bold red]Failed to fetch commits:[/bold red] {e}")
+            return
+            
+    table = Table(title="Recent Commits")
+    table.add_column("SHA", style="cyan", no_wrap=True)
+    table.add_column("Author", style="magenta")
+    table.add_column("Message")
+    
+    for c in commit_list[:10]: # show top 10
+        table.add_row(c.get("sha", "")[:8], c.get("author", "Unknown"), c.get("message", "").split("\n")[0])
+        
     console.print(table)
 
 @cli.command()

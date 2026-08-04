@@ -7,7 +7,9 @@ logger = logging.getLogger(__name__)
 
 class KafkaEventProducer:
     def __init__(self):
-        self.bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+        kafka_host = os.getenv("KAFKA_HOST", "127.0.0.1")
+        kafka_port = os.getenv("KAFKA_PORT", "9092")
+        self.bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", f"{kafka_host}:{kafka_port}")
         self.producer = None
         
     async def _get_producer(self):
@@ -22,7 +24,7 @@ class KafkaEventProducer:
     async def publish(self, topic: str, payload: dict):
         """Publishes a JSON payload to a Kafka topic."""
         producer = await self._get_producer()
-        await producer.send_and_wait(topic, payload)
+        await producer.send_and_wait(topic, payload, headers=[("__TypeId__", b"java.util.Map"), ("__KeyTypeId__", b"java.lang.String"), ("__ContentTypeId__", b"java.lang.String")])
         logger.debug(f"Published event to {topic}: {payload}")
         
     async def stop(self):
