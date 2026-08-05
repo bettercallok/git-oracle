@@ -94,11 +94,11 @@ public class TestRunnerController {
             }
 
             // ── Step 4: Detect framework ───────────────────────────────────────
-            TestFramework framework = detectFramework(workDir, request.getFramework());
-            logger.info("Detected framework {} for job {}", framework, jobId);
+            FrameworkConfig config = detectFramework(workDir, request.getFramework());
+            logger.info("Detected framework {} in dir {} for job {}", config.framework(), config.subDir(), jobId);
 
             // ── Step 5: Run tests in Docker ────────────────────────────────────
-            return ResponseEntity.ok(runInDocker(workDir, framework, jobId));
+            return ResponseEntity.ok(runInDocker(workDir, config, jobId));
 
         } catch (Exception e) {
             logger.error("Unexpected error running tests for job {}: {}", jobId, e.getMessage(), e);
@@ -117,37 +117,62 @@ public class TestRunnerController {
 
     // ─── Framework Detection ──────────────────────────────────────────────────
 
-    private TestFramework detectFramework(Path workDir, TestFramework hint) {
-        if (hint != null && hint != TestFramework.UNKNOWN) return hint;
+    private record FrameworkConfig(TestFramework framework, String subDir) {}
 
-        if (Files.exists(workDir.resolve("pom.xml")))             return TestFramework.MAVEN;
-        if (Files.exists(workDir.resolve("build.gradle")) ||
-            Files.exists(workDir.resolve("build.gradle.kts")))    return TestFramework.GRADLE;
-        if (Files.exists(workDir.resolve("package.json"))) {
-            // Distinguish jest vs plain npm test
-            return TestFramework.NPM_JEST;
+    private FrameworkConfig detectFramework(Path workDir, TestFramework hint) {
+        if (hint != null && hint != TestFramework.UNKNOWN) return new FrameworkConfig(hint, ".");
+
+        try {
+            // Check root first
+            FrameworkConfig rootCfg = detectInDir(workDir, ".");
+            if (rootCfg != null) return rootCfg;
+
+            // Check depth 1
+            try (var stream = Files.list(workDir)) {
+                var found = stream
+                    .filter(Files::isDirectory)
+                    .filter(p -> !p.getFileName().toString().startsWith("."))
+                    .map(p -> detectInDir(p, p.getFileName().toString()))
+                    .filter(Objects::nonNull)
+                    .findFirst();
+                if (found.isPresent()) return found.get();
+            }
+        } catch (IOException e) {
+            logger.warn("Error detecting framework", e);
         }
-        if (Files.exists(workDir.resolve("Cargo.toml")))          return TestFramework.CARGO;
-        if (Files.exists(workDir.resolve("go.mod")))              return TestFramework.GO_TEST;
-        // Default: pytest (Python)
-        return TestFramework.PYTEST;
+
+        // Default: pytest (Python) at root
+        return new FrameworkConfig(TestFramework.PYTEST, ".");
+    }
+
+    private FrameworkConfig detectInDir(Path dir, String subDir) {
+        if (Files.exists(dir.resolve("pom.xml")))             return new FrameworkConfig(TestFramework.MAVEN, subDir);
+        if (Files.exists(dir.resolve("build.gradle")) ||
+            Files.exists(dir.resolve("build.gradle.kts")))    return new FrameworkConfig(TestFramework.GRADLE, subDir);
+        if (Files.exists(dir.resolve("package.json")))        return new FrameworkConfig(TestFramework.NPM_JEST, subDir);
+        if (Files.exists(dir.resolve("Cargo.toml")))          return new FrameworkConfig(TestFramework.CARGO, subDir);
+        if (Files.exists(dir.resolve("go.mod")))              return new FrameworkConfig(TestFramework.GO_TEST, subDir);
+        if (Files.exists(dir.resolve("requirements.txt")) ||
+            Files.exists(dir.resolve("pytest.ini")) || 
+            Files.exists(dir.resolve("setup.py")))            return new FrameworkConfig(TestFramework.PYTEST, subDir);
+        return null;
     }
 
     // ─── Docker Execution ─────────────────────────────────────────────────────
 
-    private TestResult runInDocker(Path workDir, TestFramework framework, String jobId) {
-        String dockerImage = getDockerImage(framework);
-        String testCommand = getTestCommand(framework);
+    private TestResult runInDocker(Path workDir, FrameworkConfig config, String jobId) {
+        String dockerImage = getDockerImage(config.framework());
+        String testCommand = getTestCommand(config.framework());
+        String containerWorkDir = "/repo/" + config.subDir();
 
-        logger.info("Running '{}' in Docker image '{}' for job {}", testCommand, dockerImage, jobId);
+        logger.info("Running '{}' in Docker image '{}' (dir {}) for job {}", testCommand, dockerImage, containerWorkDir, jobId);
 
         try {
             List<String> dockerCmd = List.of(
                 "docker", "run", "--rm",
-                "--network=none",                              // no network inside sandbox
                 "--memory=512m", "--cpus=1",                  // resource limits
                 "-v", workDir.toAbsolutePath() + ":/repo:rw",
-                "-w", "/repo",
+                "-w", containerWorkDir.replaceAll("/\\.$", ""), // clean trailing /.
                 dockerImage,
                 "sh", "-c", testCommand
             );
@@ -161,7 +186,7 @@ public class TestRunnerController {
             }
 
             boolean passed = result.success();
-            double score   = computeQualityScore(result.output(), framework);
+            double score   = computeQualityScore(result.output(), config.framework());
 
             logger.info("Tests {} for job {} (exit={})", passed ? "PASSED" : "FAILED",
                         jobId, result.exitCode());
@@ -172,19 +197,20 @@ public class TestRunnerController {
         } catch (Exception e) {
             // Docker not available — run natively as fallback
             logger.warn("Docker unavailable ({}), running natively for job {}", e.getMessage(), jobId);
-            return runNative(workDir, framework, jobId);
+            return runNative(workDir, config, jobId);
         }
     }
 
-    private TestResult runNative(Path workDir, TestFramework framework, String jobId) {
-        String cmd = framework.getCommand();
+    private TestResult runNative(Path workDir, FrameworkConfig config, String jobId) {
+        String cmd = config.framework().getCommand();
         if (cmd == null || cmd.contains("exit 0")) {
             return new TestResult(true, 1.0, 0.0,
-                "WARN: Docker unavailable and no native command for " + framework + ". Safe-pass.");
+                "WARN: Docker unavailable and no native command for " + config.framework() + ". Safe-pass.");
         }
 
         try {
-            RunResult result = run(workDir, TIMEOUT_SECONDS, "sh", "-c", cmd);
+            Path targetDir = config.subDir().equals(".") ? workDir : workDir.resolve(config.subDir());
+            RunResult result = run(targetDir, TIMEOUT_SECONDS, "sh", "-c", cmd);
             boolean passed = result.success();
             return new TestResult(passed, passed ? 1.0 : 0.0, 0.0,
                 "[native][exit=" + result.exitCode() + "]\n" + result.output());
@@ -255,15 +281,9 @@ public class TestRunnerController {
     }
 
     private String getTestCommand(TestFramework framework) {
-        return switch (framework) {
-            case PYTEST    -> "pip install -q -r requirements.txt 2>/dev/null || true && python -m pytest -v --tb=short 2>&1";
-            case MAVEN     -> "mvn test -q --no-transfer-progress 2>&1";
-            case GRADLE    -> "./gradlew test --no-daemon --quiet 2>&1 || gradle test --no-daemon --quiet 2>&1";
-            case NPM_JEST  -> "npm ci --silent 2>/dev/null && npx jest --no-coverage 2>&1";
-            case CARGO     -> "cargo test 2>&1";
-            case GO_TEST   -> "go test ./... -v 2>&1";
-            default        -> "echo 'No test command available' && exit 1";
-        };
+        String cmd = framework.getCommand();
+        if (cmd == null) return "echo 'No test command available' && exit 1";
+        return cmd + " 2>&1";
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
