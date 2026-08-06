@@ -1,15 +1,32 @@
 import os
-import json
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware, HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import asyncpg
 import redis.asyncio as redis
 import uvicorn
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://gitOracle:gitOracle@localhost:5433/gitOracle")
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+# Build the connection string from the same POSTGRES_* env vars the other agents
+# use (see ai_core/shared/memory.py), so a single .env password works everywhere.
+# DATABASE_URL, if explicitly set, still takes precedence.
+def _default_database_url() -> str:
+    user = os.getenv("POSTGRES_USER", "gitOracle")
+    password = os.getenv("POSTGRES_PASSWORD", "GitOracle_PG_2025")
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5433")
+    db = os.getenv("POSTGRES_DB", "gitOracle")
+    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+
+def _default_redis_url() -> str:
+    host = os.getenv("REDIS_HOST", "localhost")
+    port = os.getenv("REDIS_PORT", "6379")
+    password = os.getenv("REDIS_PASSWORD", "")
+    auth = f":{password}@" if password else ""
+    return f"redis://{auth}{host}:{port}"
+
+DATABASE_URL = os.getenv("DATABASE_URL") or _default_database_url()
+REDIS_URL = os.getenv("REDIS_URL") or _default_redis_url()
 
 # Global state
 db_pool = None

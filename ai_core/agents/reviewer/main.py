@@ -1,7 +1,6 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware, HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
 from enum import Enum
 import os
 import logging

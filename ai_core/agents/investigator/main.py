@@ -1,5 +1,5 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware, HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 import git
@@ -10,6 +10,7 @@ import sys
 # Ensure ai_core modules can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
+from shared.prompt_registry import fetch_prompt
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -66,9 +67,13 @@ async def investigate(request: InvestigationRequest):
     # 1. Gather Data (The Heuristic Fallback)
     git_history = get_recent_commits(request.repo_path, request.affected_files)
     
-    # 2. Formulate Prompt
+    # 2. Fetch base prompt from the dynamic prompt registry, then formulate the full prompt
+    base_prompt = await fetch_prompt(
+        "investigator",
+        "You are the GitOracle Investigator Agent. A bug has been reported."
+    )
     prompt_text = f"""
-You are the GitOracle Investigator Agent. A bug has been reported.
+{base_prompt}
 Bug Description: {request.bug_description}
 Affected Files: {', '.join(request.affected_files)}
 
