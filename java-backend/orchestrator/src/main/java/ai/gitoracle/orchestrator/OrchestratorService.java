@@ -97,14 +97,16 @@ public class OrchestratorService {
      * later resume planning with the real findings instead of fabricated context.
      * Uses a distinct consumer group so the planner still receives the same message.
      */
-    @KafkaListener(topics = "job.events.plan", groupId = "orchestrator-plan-snoop-group")
+    @KafkaListener(topics = "job.events.plan", groupId = "orchestrator-plan-snoop-group",
+                   containerFactory = "stringValueKafkaListenerContainerFactory")
     @Transactional
-    public void persistInvestigationResult(Map<String, Object> event) {
-        String jobIdStr = (String) event.get("job_id");
-        Object investigation = event.get("investigation_result");
-        if (jobIdStr == null || investigation == null) return;
-
+    public void persistInvestigationResult(String rawJson) {
         try {
+            Map<String, Object> event = objectMapper.readValue(rawJson, Map.class);
+            String jobIdStr = (String) event.get("job_id");
+            Object investigation = event.get("investigation_result");
+            if (jobIdStr == null || investigation == null) return;
+
             String json = objectMapper.writeValueAsString(investigation);
             jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
                 job.setInvestigationResult(json);
@@ -112,7 +114,7 @@ public class OrchestratorService {
                 logger.info("Persisted investigation result for job {}", jobIdStr);
             });
         } catch (Exception e) {
-            logger.warn("Could not persist investigation result for job {}: {}", jobIdStr, e.getMessage());
+            logger.warn("Could not persist investigation result: {}", e.getMessage());
         }
     }
 
