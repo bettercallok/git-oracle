@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 import os
 import logging
+import re
 import sys
 import hashlib
 import difflib
@@ -119,6 +120,22 @@ def build_unified_diff(repo_path: str, file_path: str, search: str, replace: str
     return diff_text if diff_text else None
 
 
+# Matches path-like tokens with a file extension, e.g. "backend/signaling/views.py"
+# or "views.py". Dashboard "Ask to Fix" jobs always send plan.affected_files=[] (see
+# DashboardController.triggerFix) — the fixer never got shown any source, so it was
+# asked to reproduce an exact verbatim block from a file it never saw, and rejected
+# every attempt. Confirmed live on job 97de3e96: instructions named the file
+# explicitly ("backend/signaling/views.py's health_check function") but nothing
+# read that file into context. Extract file paths straight out of the instructions.
+_FILE_PATH_RE = re.compile(r"[\w][\w\-./]*\.[A-Za-z0-9]{1,10}")
+
+
+def extract_file_paths_from_text(text: str) -> List[str]:
+    if not text:
+        return []
+    return list(dict.fromkeys(_FILE_PATH_RE.findall(text)))
+
+
 @app.post("/fix", response_model=PatchResult)
 async def execute_fix(request: FixerRequest):
     logger.info(f"Starting ReAct loop for job {request.job_id} in {request.repo_path}")
@@ -160,8 +177,37 @@ async def execute_fix(request: FixerRequest):
                 logger.warning(f"Fallback clone into {request.repo_path} also failed: {e2}")
 
     # 1. Fetch source code for context
+    affected_files = request.plan.affected_files
+    if not affected_files:
+        candidates = extract_file_paths_from_text(
+            (request.human_instructions or "") + " " + request.bug_description
+        )
+        resolved = []
+        for candidate in candidates:
+            if os.path.isfile(os.path.join(local_src_path, candidate)):
+                resolved.append(candidate)
+                continue
+            # Instructions may name just a basename (e.g. "views.py") rather than
+            # the full relative path — search the checkout for a unique match.
+            basename = os.path.basename(candidate)
+            matches = []
+            for root, _, files in os.walk(local_src_path):
+                if ".git" in root.split(os.sep):
+                    continue
+                if basename in files:
+                    matches.append(os.path.relpath(os.path.join(root, basename), local_src_path))
+            if len(matches) == 1:
+                resolved.append(matches[0])
+            elif matches:
+                logger.warning(f"Ambiguous file reference '{candidate}': matches {matches}")
+        if resolved:
+            logger.info(f"No affected_files in plan; resolved from instructions: {resolved}")
+            affected_files = resolved
+        else:
+            logger.warning("No affected_files in plan and none could be resolved from instructions")
+
     source_context = ""
-    for file_path in request.plan.affected_files:
+    for file_path in affected_files:
         full_path = os.path.join(local_src_path, file_path)
         try:
             with open(full_path, "r") as f:

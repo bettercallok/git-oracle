@@ -60,11 +60,28 @@ public class TestRunnerController {
             Files.createDirectories(workDir);
             logger.info("Cloning {} into {}", repoUrl, workDir);
 
+            // One retry on a transient network failure (e.g. DNS blip) — confirmed
+            // live: "Could not resolve host: github.com" resolved fine a second
+            // later on the same machine, but a single failed attempt here escalates
+            // the whole job with zero recourse.
             RunResult cloneResult = run(workDir.getParent(),
                 TIMEOUT_SECONDS, "git", "clone", "--depth=1", repoUrl, workDir.toString());
 
             if (!cloneResult.success()) {
-                logger.error("Clone failed for job {}: {}", jobId, cloneResult.output());
+                logger.warn("Clone failed for job {}, retrying once: {}", jobId, cloneResult.output());
+                try {
+                    Thread.sleep(2000);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                deleteDirectory(workDir);
+                Files.createDirectories(workDir);
+                cloneResult = run(workDir.getParent(),
+                    TIMEOUT_SECONDS, "git", "clone", "--depth=1", repoUrl, workDir.toString());
+            }
+
+            if (!cloneResult.success()) {
+                logger.error("Clone failed for job {} after retry: {}", jobId, cloneResult.output());
                 return ResponseEntity.ok(new TestResult(false, 0.0, 0.0,
                     "Clone failed:\n" + cloneResult.output()));
             }
