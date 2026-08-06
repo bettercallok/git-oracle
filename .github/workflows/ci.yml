@@ -7,6 +7,28 @@ on:
     branches: [ "main" ]
 
 jobs:
+  python-lint:
+    name: Python Agent Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Lint Tools
+        run: pip install ruff mypy
+
+      - name: Run Ruff Lint
+        run: ruff check ai_core --select E9,F
+
+      - name: Run Mypy Typecheck
+        run: mypy ai_core/agents --ignore-missing-imports --no-error-summary || true
+
   java-integration-tests:
     name: Java Services Integration Tests
     runs-on: ubuntu-latest
@@ -73,7 +95,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install Eval Dependencies
-        run: pip install -r python-ai/requirements.txt
+        run: pip install -r ai_core/requirements.txt requests
 
       - name: Run Evals
         run: |
