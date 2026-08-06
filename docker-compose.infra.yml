@@ -365,7 +365,13 @@ services:
   langfuse:
     image: langfuse/langfuse:2
     container_name: git-oracle-langfuse
-    restart: "no"
+    # Was "no" — meaning if this container ever stopped (e.g. during a host
+    # crash/restart unrelated to Langfuse itself), it silently stayed down
+    # forever instead of coming back with the rest of the infra stack.
+    # Confirmed live: exited hours earlier, every other service recovered,
+    # this one didn't, and every LLM call kept logging a swallowed connection
+    # error the whole time. Match the restart policy every other service uses.
+    restart: unless-stopped
     mem_limit: 500m
     mem_reservation: 250m
     networks: [ git-oracle-net ]
@@ -378,6 +384,22 @@ services:
       SALT: ${LANGFUSE_SALT:?LANGFUSE_SALT is required}
       TELEMETRY_ENABLED: "false"
       LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
+      # Headless init: auto-provisions an org/project/user on first boot using
+      # the exact LANGFUSE_PUBLIC_KEY/SECRET_KEY ai_core already reads from
+      # .env, instead of requiring a manual signup + project-creation click-
+      # through in the UI before those keys mean anything. Confirmed live this
+      # was the root cause of "No key found for public key" / "Invalid
+      # credentials" on every LLM call: the keys in .env were well-formed but
+      # never registered anywhere, because no project had ever been created.
+      LANGFUSE_INIT_ORG_ID: gitoracle-org
+      LANGFUSE_INIT_ORG_NAME: GitOracle
+      LANGFUSE_INIT_PROJECT_ID: gitoracle-project
+      LANGFUSE_INIT_PROJECT_NAME: GitOracle
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?LANGFUSE_PUBLIC_KEY is required}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?LANGFUSE_SECRET_KEY is required}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@gitoracle.local}
+      LANGFUSE_INIT_USER_NAME: GitOracle Admin
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_NEXTAUTH_SECRET}
     depends_on:
       postgres:
         condition: service_healthy
