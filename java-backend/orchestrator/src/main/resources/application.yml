@@ -1,3 +1,8 @@
+# CORS was wide open (allowed-origins: "*") on every controller — restrict to the
+# dashboard's own origin by default; override via GITORACLE_ALLOWED_ORIGINS for other setups.
+gitoracle:
+  allowed-origins: ${GITORACLE_ALLOWED_ORIGINS:http://localhost:5173}
+
 spring:
   application:
     name: orchestrator

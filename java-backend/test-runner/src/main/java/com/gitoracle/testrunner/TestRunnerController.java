@@ -24,7 +24,7 @@ import java.util.regex.*;
  *   7. Clean up workspace
  */
 @RestController
-@CrossOrigin(origins = "*")
+@CrossOrigin(origins = "${gitoracle.allowed-origins:http://localhost:5173}")
 public class TestRunnerController {
 
     private static final Logger logger = LoggerFactory.getLogger(TestRunnerController.class);

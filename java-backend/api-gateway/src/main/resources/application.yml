@@ -37,7 +37,7 @@ spring:
       globalcors:
         cors-configurations:
           '[/**]':
-            allowedOrigins: "*"
+            allowedOrigins: "${GITORACLE_ALLOWED_ORIGINS:http://localhost:5173}"
             allowedMethods:
               - GET
               - POST

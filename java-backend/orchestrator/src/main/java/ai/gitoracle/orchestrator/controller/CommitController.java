@@ -33,7 +33,7 @@ import java.util.stream.StreamSupport;
  */
 @RestController
 @RequestMapping("/api/v1/commits")
-@CrossOrigin(origins = "*", allowedHeaders = "*",
+@CrossOrigin(origins = "${gitoracle.allowed-origins}", allowedHeaders = "*",
         methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.OPTIONS})
 public class CommitController {
 
