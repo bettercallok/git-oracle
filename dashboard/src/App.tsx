@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Activity, ShieldAlert, GitMerge, FileWarning, BarChart2, BrainCircuit, Settings, TerminalSquare, Wand2, GitFork, GitCommit } from 'lucide-react';
+import { Activity, ShieldAlert, GitMerge, FileWarning, BarChart2, BrainCircuit, Settings, TerminalSquare, Wand2, GitFork, GitCommit, Sun, Moon } from 'lucide-react';
 import JobFeed from './pages/JobFeed';
 import JobDetail from './pages/JobDetail';
 import EscalationQueue from './pages/EscalationQueue';
@@ -16,6 +16,7 @@ import CommitDetail from './pages/CommitDetail';
 import Login from './pages/Login';
 import { RepoProvider, useRepos } from './context/RepoContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ThemeProvider, useTheme } from './context/ThemeContext';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
@@ -104,8 +105,29 @@ function ActiveRepoPill() {
   );
 }
 
+function ThemeToggle() {
+  const { theme, toggleTheme } = useTheme();
+  return (
+    <button
+      onClick={toggleTheme}
+      title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        gap: 8, width: '100%', padding: '8px 10px', marginTop: 8,
+        background: 'transparent', border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-md)', color: 'var(--text-muted)',
+        cursor: 'pointer', fontSize: '0.8rem',
+      }}
+    >
+      {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+      {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+    </button>
+  );
+}
+
 function App() {
   return (
+    <ThemeProvider>
     <AuthProvider>
       <RepoProvider>
         <BrowserRouter>
@@ -153,6 +175,10 @@ function App() {
                 <Settings size={16} /> Admin Settings
               </NavLink>
             </nav>
+
+            <div style={{ padding: '0 12px 12px' }}>
+              <ThemeToggle />
+            </div>
           </aside>
 
               <main className="main-content">
@@ -163,6 +189,7 @@ function App() {
         </BrowserRouter>
       </RepoProvider>
     </AuthProvider>
+    </ThemeProvider>
   );
 }
 

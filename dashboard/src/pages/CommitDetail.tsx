@@ -101,6 +101,16 @@ function DiffLine({ line, index }: { line: string; index: number }) {
 
 function FileDiffCard({ file }: { file: CommitFile }) {
   const [expanded, setExpanded] = useState(true);
+  const [diffCopied, setDiffCopied] = useState(false);
+
+  const handleCopyDiff = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (file.patch) {
+      await copyToClipboard(file.patch);
+      setDiffCopied(true);
+      setTimeout(() => setDiffCopied(false), 1800);
+    }
+  };
 
   const statusColor: Record<string, string> = {
     added: '#4ade80', removed: '#f87171', modified: '#60a5fa',
@@ -144,6 +154,22 @@ function FileDiffCard({ file }: { file: CommitFile }) {
         )}
         {file.deletions > 0 && (
           <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: '#f87171' }}>−{file.deletions}</span>
+        )}
+        {file.patch && (
+          <span
+            role="button"
+            onClick={handleCopyDiff}
+            title="Copy diff"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: '3px 7px', borderRadius: 6,
+              background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+              color: diffCopied ? '#4ade80' : 'var(--text-muted)',
+              fontSize: '0.72rem', cursor: 'pointer', flexShrink: 0,
+            }}
+          >
+            {diffCopied ? <Check size={11} /> : <Copy size={11} />}
+          </span>
         )}
       </button>
 
@@ -282,6 +308,12 @@ export default function CommitDetail() {
   const [copied, setCopied] = useState(false);
   const [question, setQuestion] = useState('');
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  
+  // Job Trigger Modal State
+  const [showJobModal, setShowJobModal] = useState(false);
+  const [jobInstruction, setJobInstruction] = useState('');
+  const [isSubmittingJob, setIsSubmittingJob] = useState(false);
+
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -534,24 +566,27 @@ export default function CommitDetail() {
       {/* ── Apply Fix as PR shortcut ── */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <button
-          onClick={() => navigate(
-            `/fix?commitSha=${sha}&issueDescription=${encodeURIComponent(`Fix issue from commit ${commit.shortSha}: ${commit.shortMessage}`)}&repo=${encodeURIComponent(repo)}`
-          )}
+          onClick={() => {
+            setJobInstruction(`Fix issue from commit ${commit.shortSha}: ${commit.shortMessage}`);
+            setShowJobModal(true);
+          }}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 7,
             padding: '8px 16px', borderRadius: 'var(--radius-md)',
-            background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.35)',
-            color: '#a5b4fc', fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer',
-            transition: 'all 0.2s',
+            background: 'var(--graph-blue)', border: 'none',
+            color: '#fff', fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer',
+            transition: 'all 0.2s', boxShadow: '0 2px 8px rgba(99,102,241,0.2)'
           }}
           onMouseEnter={e => {
-            (e.currentTarget as HTMLButtonElement).style.background = 'rgba(99,102,241,0.22)';
+            (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(-1px)';
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 4px 12px rgba(99,102,241,0.3)';
           }}
           onMouseLeave={e => {
-            (e.currentTarget as HTMLButtonElement).style.background = 'rgba(99,102,241,0.12)';
+            (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(0)';
+            (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 2px 8px rgba(99,102,241,0.2)';
           }}
         >
-          <Wand2 size={14} /> Apply Fix as PR
+          <Wand2 size={14} /> Trigger Manual Job
         </button>
       </div>
 
@@ -760,6 +795,95 @@ export default function CommitDetail() {
                 </button>
               </div>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Job Trigger Modal ── */}
+      <AnimatePresence>
+        {showJobModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+              background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+              zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+            }}
+            onClick={() => !isSubmittingJob && setShowJobModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 10 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              onClick={e => e.stopPropagation()}
+              style={{
+                background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-lg)', width: '100%', maxWidth: 500,
+                padding: '28px 32px', boxShadow: '0 20px 40px rgba(0,0,0,0.4)',
+              }}
+            >
+              <h2 style={{ fontSize: '1.2rem', fontWeight: 700, margin: '0 0 8px 0', color: 'var(--text-primary)' }}>
+                Trigger Manual Job
+              </h2>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: 20 }}>
+                Provide details about what you want GitOracle to fix or investigate for this commit.
+              </p>
+
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                  Instructions / Bug Description
+                </label>
+                <textarea
+                  value={jobInstruction}
+                  onChange={e => setJobInstruction(e.target.value)}
+                  disabled={isSubmittingJob}
+                  placeholder="e.g. Fix the null pointer exception introduced here..."
+                  style={{
+                    width: '100%', height: 120, padding: 12, borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border-subtle)', background: 'var(--bg-base)',
+                    color: 'var(--text-primary)', fontSize: '0.9rem', resize: 'vertical',
+                    fontFamily: 'inherit'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+                <button
+                  onClick={() => setShowJobModal(false)}
+                  disabled={isSubmittingJob}
+                  className="btn btn-outline"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!jobInstruction.trim()) return;
+                    setIsSubmittingJob(true);
+                    try {
+                      const { data } = await apiClient.post('/trigger', {
+                        repoUrl: repo.startsWith('http') ? repo : \`https://github.com/\${repo}\`,
+                        issueDescription: jobInstruction.trim(),
+                        targetRepo: repo
+                      });
+                      navigate(\`/job/\${data.jobId}\`);
+                    } catch (e) {
+                      console.error('Failed to start job', e);
+                      alert('Failed to trigger job.');
+                      setIsSubmittingJob(false);
+                    }
+                  }}
+                  disabled={isSubmittingJob || !jobInstruction.trim()}
+                  className="btn btn-primary"
+                  style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                >
+                  {isSubmittingJob ? <Loader2 size={16} className="spin" /> : <Wand2 size={16} />}
+                  {isSubmittingJob ? 'Starting...' : 'Run Fixer Agent'}
+                </button>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>

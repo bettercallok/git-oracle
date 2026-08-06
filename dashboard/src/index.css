@@ -44,6 +44,35 @@
   --radius-lg: 12px;
 }
 
+:root[data-theme="light"] {
+  /* Light Mode Palette */
+  --bg-app: #F7F7F8;
+  --bg-main: #F7F7F8;
+  --bg-surface: #FFFFFF;
+  --bg-surface-hover: #F1F1F3;
+  --bg-surface-raised: #FAFAFB;
+
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.16);
+
+  --text-primary: #18181B;
+  --text-secondary: #52525B;
+  --text-muted: #71717A;
+
+  --accent: #18181B;
+  --accent-hover: #27272A;
+  --graph-blue: #5E6AD2;
+
+  --success: var(--text-primary);
+  --success-bg: rgba(0, 0, 0, 0.06);
+  --warning: var(--text-secondary);
+  --warning-bg: rgba(0, 0, 0, 0.04);
+  --danger: var(--text-muted);
+  --danger-bg: rgba(0, 0, 0, 0.03);
+  --info: #18181B;
+  --info-bg: rgba(0, 0, 0, 0.08);
+}
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { font-size: 14px; }
 
