@@ -161,7 +161,7 @@ FOR (j:AgentJob) ON (j.tenant_id);
 // ─── Relationship documentation ───────────────────────────────
 //
 // (:Commit)-[:MODIFIED]->(:File)
-// (:Commit)-[:AUTHORED_BY]->(:Developer)
+// (:Developer)-[:AUTHORED]->(:Commit)
 // (:Commit)-[:PARENT_OF]->(:Commit)           — git DAG (parent commits)
 // (:Commit)-[:INTRODUCED]->(:Bug)             — causal attribution
 // (:Commit)-[:SIMILAR_TO { cosine_sim }]->(:Commit)  — semantic similarity
