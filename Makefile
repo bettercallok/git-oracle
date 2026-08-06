@@ -6,7 +6,7 @@
 .PHONY: help infra-up infra-down infra-logs infra-ps \
         infra-reset env-check neo4j-init kafka-list \
         open-grafana open-langfuse open-kafka open-neo4j \
-        health
+        health analyst
 
 COMPOSE_INFRA = docker compose -f docker-compose.infra.yml
 SHELL := /bin/bash
@@ -34,6 +34,10 @@ help:
 	@echo "  make kafka-list       List all Kafka topics"
 	@echo "  make kafka-topics     Show topic details and partition counts"
 	@echo "  make qdrant-info      Show Qdrant collections"
+	@echo ""
+	@echo "  Agents"
+	@echo "  ───────"
+	@echo "  make analyst          Start the commit_analyst agent alone (port 9004)"
 	@echo ""
 	@echo "  Observability"
 	@echo "  ─────────────"
@@ -151,6 +155,11 @@ kafka-topics:
 
 qdrant-info:
 	@curl -s http://localhost:6333/collections | python3 -m json.tool
+
+# ─── Agents ────────────────────────────────────────────────────
+analyst:
+	@echo "🧠 Starting commit_analyst agent (port 9004)..."
+	@cd ai_core && source .venv/bin/activate && python -m agents.commit_analyst.main
 
 # ─── Browser shortcuts (macOS) ────────────────────────────────
 open-grafana:
