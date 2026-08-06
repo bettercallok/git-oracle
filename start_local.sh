@@ -8,14 +8,26 @@ fi
 
 # ─── Clear zombie processes on all service ports ───────────────
 # IMPORTANT: Only kill Java/Python/Node processes — never Docker processes.
-# Docker's com.docker.backend connects to our ports for health checks.
-# Killing it crashes Docker Desktop and brings down all containers.
+#
+# infrastructure/prometheus/prometheus.yml scrapes host.docker.internal:8081-8085
+# and :9001-9006, so Prometheus (in a container) holds an ESTABLISHED connection
+# to every one of these host ports, and `com.docker.backend` therefore appears in
+# `lsof -i :<port>` right next to the real service. That is why this loop matches
+# on the *command name* and never uses the tempting `lsof -ti | xargs kill -9`
+# shortcut: `-ti` prints bare PIDs with nothing to filter on, so it hands you
+# Docker's backend PID too, and killing it crashes Docker Desktop along with
+# every container. (This has actually happened — twice.) Use ./stop_local.sh.
 echo "🧹 Clearing any zombie app processes on service ports..."
 PORTS="8080 8081 8082 8083 8084 8085 9001 9002 9003 9004 9005 9006 9007"
 for PORT in $PORTS; do
   while IFS= read -r PROC_LINE; do
     PID=$(echo "$PROC_LINE" | awk '{print $2}')
     CMD=$(echo "$PROC_LINE" | awk '{print $1}')
+    # Explicit Docker denylist as belt-and-braces (lsof truncates COMMAND to
+    # 9 chars, hence com.docke*) on top of the allowlist below.
+    case "$CMD" in
+      com.docke*|Docker*|docker*|vpnkit*) continue ;;
+    esac
     if echo "$CMD" | grep -qiE '^(java|python[0-9.]*|node|npm|uvicorn|gradlew?)$'; then
       echo "  Killing $CMD (PID $PID) on port $PORT"
       kill -9 "$PID" 2>/dev/null || true
@@ -127,4 +139,5 @@ cd ..
 
 echo "✅ All services have been launched in the background!"
 echo "You can view the dashboard at: http://localhost:5173"
-echo "To stop everything, you can run: kill \$(cat */*.pid) && make infra-down"
+echo "To stop the app services:  ./stop_local.sh"
+echo "To stop infrastructure too: ./stop_local.sh && make infra-down"
