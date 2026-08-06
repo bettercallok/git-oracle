@@ -864,11 +864,11 @@ export default function CommitDetail() {
                     setIsSubmittingJob(true);
                     try {
                       const { data } = await apiClient.post('/trigger', {
-                        repoUrl: repo.startsWith('http') ? repo : \`https://github.com/\${repo}\`,
+                        repoUrl: repo.startsWith('http') ? repo : `https://github.com/${repo}`,
                         issueDescription: jobInstruction.trim(),
                         targetRepo: repo
                       });
-                      navigate(\`/job/\${data.jobId}\`);
+                      navigate(`/job/${data.jobId}`);
                     } catch (e) {
                       console.error('Failed to start job', e);
                       alert('Failed to trigger job.');
