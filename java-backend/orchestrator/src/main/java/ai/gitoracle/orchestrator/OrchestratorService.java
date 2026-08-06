@@ -41,26 +41,35 @@ public class OrchestratorService {
     @KafkaListener(topics = KafkaTopics.ERROR_INGESTED, groupId = "orchestrator-group")
     public void handleErrorIngested(ErrorIngestedEvent event) {
         logger.info("Orchestrator received ERROR_INGESTED event for repo: {}", event.getRepoUrl());
-        
-        // 1. Create a new AgentJob in PostgreSQL
-        AgentJob job = new AgentJob();
-        job.setRepo(event.getRepoUrl());
-        job.setErrorId(event.getErrorId());
-        
-        // Set the tenant to fix NOT NULL constraint
-        ai.gitoracle.core.model.postgres.Tenant tenant = new ai.gitoracle.core.model.postgres.Tenant();
-        if (event.getTenantId() != null) {
-            tenant.setId(event.getTenantId());
-        } else {
-            tenant.setId(UUID.fromString("00000000-0000-0000-0000-000000000000"));
+
+        // 1. Reuse the AgentJob the publisher already created (e.g. error-ingestor's
+        // SemanticDedupService persists one before publishing this event) rather than
+        // creating a second, orphaned row for the same error — event.getJobId() is
+        // exactly the field that field was already added for; it just wasn't read here.
+        AgentJob job = event.getJobId() != null
+            ? jobRepository.findById(event.getJobId()).orElse(null)
+            : null;
+
+        if (job == null) {
+            job = new AgentJob();
+            job.setRepo(event.getRepoUrl());
+            job.setErrorId(event.getErrorId());
+
+            // Set the tenant to fix NOT NULL constraint
+            ai.gitoracle.core.model.postgres.Tenant tenant = new ai.gitoracle.core.model.postgres.Tenant();
+            if (event.getTenantId() != null) {
+                tenant.setId(event.getTenantId());
+            } else {
+                tenant.setId(UUID.fromString("00000000-0000-0000-0000-000000000000"));
+            }
+            job.setTenant(tenant);
+            job.setCreatedAt(OffsetDateTime.now());
         }
-        job.setTenant(tenant);
-        
+
         job.setState("INVESTIGATING");
-        job.setCreatedAt(OffsetDateTime.now());
         jobRepository.save(job);
-        
-        logger.info("Job {} created. Triggering AI Planner...", job.getId());
+
+        logger.info("Job {} ready. Triggering AI Planner...", job.getId());
         
         // 2. Clone the repository into a dynamic workspace
         String repoPath = workspaceService.cloneRepository(event.getRepoUrl(), job.getId());
