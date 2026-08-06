@@ -4,7 +4,7 @@ spring:
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:127.0.0.1}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}
     username: ${POSTGRES_USER:gitOracle}
-    password: ${POSTGRES_PASSWORD:GitOracle_PG_2025}
+    password: ${POSTGRES_PASSWORD}
     hikari:
       connection-timeout: 10000
       maximum-pool-size: 5
@@ -38,6 +38,11 @@ management:
     web:
       exposure:
         include: health,info,prometheus
+  health:
+    # This service does not use Neo4j; disable the actuator Neo4j probe
+    # so /actuator/health isn't falsely DOWN.
+    neo4j:
+      enabled: false
   metrics:
     tags:
       application: ${spring.application.name}
