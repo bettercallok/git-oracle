@@ -143,7 +143,21 @@ async def execute_fix(request: FixerRequest):
                 git.Repo.clone_from(request.repo_url, fixer_src_path)
             local_src_path = fixer_src_path
         except Exception as e:
-            logger.warning(f"Could not set up private source checkout, falling back to {request.repo_path}: {e}")
+            # request.repo_path is only populated when an earlier pipeline stage
+            # (e.g. the investigator) already cloned it — jobs triggered via
+            # "Ask to Fix" skip that stage, so repo_path can be an empty/nonexistent
+            # directory. Confirmed live: a transient clone failure here (DNS blip)
+            # silently fell through to reading from that empty directory for all 3
+            # attempts, guaranteeing "file not found" on every retry instead of
+            # actually retrying the clone. Retry once against repo_path itself.
+            logger.warning(f"Could not set up private source checkout into {fixer_src_path}: {e}")
+            try:
+                if not os.path.isdir(os.path.join(request.repo_path, ".git")):
+                    shutil.rmtree(request.repo_path, ignore_errors=True)
+                    git.Repo.clone_from(request.repo_url, request.repo_path)
+                local_src_path = request.repo_path
+            except Exception as e2:
+                logger.warning(f"Fallback clone into {request.repo_path} also failed: {e2}")
 
     # 1. Fetch source code for context
     source_context = ""
