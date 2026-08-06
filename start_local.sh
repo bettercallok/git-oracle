@@ -40,29 +40,59 @@ else
   make infra-up
 fi
 
-echo "☕ Starting Java Microservices..."
+echo "☕ Building Java Microservices..."
 set -a
 source .env
 set +a
 
 cd java-backend
-# Each service's JVM heap is capped (~250-300MB RSS) and --no-daemon means
-# the gradle process running bootRun exits its own bookkeeping once the app
-# JVM is up rather than leaving a second persistent daemon behind — that
-# daemon accumulation is what exhausted RAM and crashed Docker previously.
-JVM_ARGS="-Xmx224m -XX:MaxMetaspaceSize=160m -XX:+UseSerialGC -Xss256k"
+# IMPORTANT: services are run as plain `java -jar`, never `./gradlew bootRun`.
+# bootRun forks the app as a child of a Gradle build execution that blocks
+# until the app stops — so even with --no-daemon, each bootRun'd service
+# keeps a *second*, uncapped JVM (the Gradle build supervisor) alive for its
+# entire runtime. Six services that way means 12 resident JVMs, not 6, which
+# is what caused a second Docker-crashing memory exhaustion after the first
+# fix (which only stopped daemons from *accumulating*, not this). Building
+# the jars once with a single short-lived gradle invocation and then running
+# them directly avoids a build JVM being resident at all while they run.
+MODULES="api-gateway error-ingestor orchestrator test-runner github-bot git-forensics"
+BOOTJAR_TASKS=""
+for m in $MODULES; do BOOTJAR_TASKS="$BOOTJAR_TASKS :$m:bootJar"; done
+./gradlew --no-daemon $BOOTJAR_TASKS -x test
 
-nohup ./gradlew --no-daemon :api-gateway:bootRun -Dspring-boot.run.jvmArguments="$JVM_ARGS" </dev/null > api-gateway.log 2>&1 &
+jar_for() {
+  # Some modules (e.g. api-gateway) override `version` in their own build.gradle,
+  # so stale jars from an older version string can sit alongside the current one —
+  # pick by most recent mtime, not alphabetical/find order, to always get the one
+  # gradle just built.
+  ls -t "$1"/build/libs/*.jar 2>/dev/null | grep -v -- '-plain\.jar$' | head -1
+}
+
+echo "☕ Starting Java Microservices..."
+# Use an array, not a plain string, for the JVM flags — passing an unquoted
+# string variable containing multiple flags to `java` is not reliably
+# word-split in every invocation context and can collapse into one bad
+# -Xmx argument ("Invalid maximum heap size"); an array avoids the ambiguity.
+JVM_ARGS=(-Xmx224m -XX:MaxMetaspaceSize=160m -XX:+UseSerialGC -Xss256k)
+ORCHESTRATOR_JVM_ARGS=(-Xmx320m -XX:MaxMetaspaceSize=192m -XX:+UseSerialGC -Xss256k)
+
+nohup java "${JVM_ARGS[@]}" -jar "$(jar_for api-gateway)" </dev/null > api-gateway.log 2>&1 &
 echo $! > api-gateway.pid
-nohup ./gradlew --no-daemon :error-ingestor:bootRun -Dspring-boot.run.jvmArguments="$JVM_ARGS" </dev/null > error-ingestor.log 2>&1 &
+nohup java "${JVM_ARGS[@]}" -jar "$(jar_for error-ingestor)" </dev/null > error-ingestor.log 2>&1 &
 echo $! > error-ingestor.pid
-nohup ./gradlew --no-daemon :orchestrator:bootRun -Dspring-boot.run.jvmArguments="-Xmx320m -XX:MaxMetaspaceSize=192m -XX:+UseSerialGC -Xss256k" </dev/null > orchestrator.log 2>&1 &
+nohup java "${ORCHESTRATOR_JVM_ARGS[@]}" -jar "$(jar_for orchestrator)" </dev/null > orchestrator.log 2>&1 &
 echo $! > orchestrator.pid
-nohup ./gradlew --no-daemon :test-runner:bootRun -Dspring-boot.run.jvmArguments="$JVM_ARGS" </dev/null > test-runner.log 2>&1 &
+nohup java "${JVM_ARGS[@]}" -jar "$(jar_for test-runner)" </dev/null > test-runner.log 2>&1 &
 echo $! > test-runner.pid
-nohup ./gradlew --no-daemon :github-bot:bootRun -Dspring-boot.run.jvmArguments="$JVM_ARGS" </dev/null > github-bot.log 2>&1 &
-echo $! > github-bot.pid
-nohup ./gradlew --no-daemon :git-forensics:bootRun -Dspring-boot.run.jvmArguments="$JVM_ARGS" </dev/null > git-forensics.log 2>&1 &
+# github-bot's GitHubClient.java loads its own .env via a bare Dotenv.configure().load()
+# with no explicit directory, i.e. it depends on the process CWD being java-backend/github-bot/
+# (which ./gradlew :github-bot:bootRun set implicitly) — preserve that by launching from there.
+# jar_for's path is relative to java-backend/, so once we cd into github-bot/ the jar is
+# at build/libs/<name>.jar, not <name>.jar directly — keep the full relative suffix.
+GITHUB_BOT_JAR_REL="build/libs/$(basename "$(jar_for github-bot)")"
+(cd github-bot && nohup java "${JVM_ARGS[@]}" -jar "$GITHUB_BOT_JAR_REL" </dev/null > ../github-bot.log 2>&1 &
+echo $! > ../github-bot.pid)
+nohup java "${JVM_ARGS[@]}" -jar "$(jar_for git-forensics)" </dev/null > git-forensics.log 2>&1 &
 echo $! > git-forensics.pid
 cd ..
 
