@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -221,23 +222,25 @@ public class OrchestratorService {
     public void handleTestsPassed(Map<String, String> event) {
         String jobIdStr = event.get("jobId");
         logger.info("Orchestrator received TESTS_PASSED event for job: {}", jobIdStr);
-        
+
         final String[] repoFullName = new String[1];
         final String[] errorId = new String[1];
-        
-        // Update state
+
         jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
-            job.setState("PR_OPENED");
             repoFullName[0] = job.getRepo().replace("https://github.com/", "").replace(".git", "");
             errorId[0] = job.getErrorId();
-            jobRepository.save(job);
         });
 
         // Allow the event to override the target repo (for dashboard-triggered jobs)
         String targetRepo = event.getOrDefault("targetRepo", "");
         String prRepo = (targetRepo != null && !targetRepo.isBlank()) ? targetRepo : repoFullName[0];
 
-        // 4. Call the GitHub Bot (:8085)
+        // 4. Call the GitHub Bot (:8085) — do NOT mark the job PR_OPENED until this
+        // actually succeeds. Confirmed live: this previously set state=PR_OPENED
+        // unconditionally *before* calling github-bot, and github-bot itself
+        // returned HTTP 200 even on failure (an "Error: ..." string body that
+        // nothing here checked) — so a job whose PR creation threw an exception
+        // (e.g. a clone DNS blip) still showed as PR_OPENED with prUrl=null forever.
         try {
             logger.info("Calling GitHub Bot API at :8085 to open PR on {}...", prRepo);
             Map<String, Object> prRequest = new HashMap<>();
@@ -255,11 +258,33 @@ public class OrchestratorService {
             prRequest.put("coverageDelta", parseDoubleOrDefault(event.get("coverageDelta"), 0.0));
             prRequest.put("qualityScore", parseDoubleOrDefault(event.get("qualityScore"), 1.0));
             prRequest.put("tokenBudgetUsed", 500);
-            
-            restTemplate.postForObject("http://localhost:8085/pull-request", prRequest, String.class);
-            logger.info("Orchestrator pipeline complete for job: {}", jobIdStr);
+
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                "http://localhost:8085/pull-request", prRequest, Map.class);
+            Map<String, Object> body = response.getBody();
+            boolean success = body != null && Boolean.TRUE.equals(body.get("success"));
+
+            final boolean finalSuccess = success;
+            final String prUrl = success && body != null ? (String) body.get("prUrl") : null;
+            final String prError = !success && body != null ? (String) body.get("error") : "No response body from GitHub Bot";
+
+            jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
+                if (finalSuccess) {
+                    job.setState("PR_OPENED");
+                    job.setPrUrl(prUrl);
+                    logger.info("Orchestrator pipeline complete for job: {} — PR: {}", jobIdStr, prUrl);
+                } else {
+                    job.setState("ESCALATED");
+                    logger.error("GitHub Bot failed to open PR for job {}: {}", jobIdStr, prError);
+                }
+                jobRepository.save(job);
+            });
         } catch (Exception e) {
             logger.error("Failed to contact GitHub Bot. Is it running on port 8085?", e);
+            jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
+                job.setState("ESCALATED");
+                jobRepository.save(job);
+            });
         }
     }
 

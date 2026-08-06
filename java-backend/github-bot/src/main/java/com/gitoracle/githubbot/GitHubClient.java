@@ -1,6 +1,5 @@
 package com.gitoracle.githubbot;
 
-import io.github.cdimascio.dotenv.Dotenv;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
 import org.kohsuke.github.extras.authorization.JWTTokenProvider;
@@ -26,11 +25,39 @@ public class GitHubClient {
     private final String privateKeyPath;
 
     public GitHubClient() {
-        Dotenv dotenv = Dotenv.configure().ignoreIfMissing().load();
-        this.appId = dotenv.get("GITHUB_APP_ID");
-        this.installationId = dotenv.get("GITHUB_INSTALLATION_ID");
-        this.privateKeyPath = dotenv.get("GITHUB_PRIVATE_KEY_PATH");
+        // Read github-bot/.env directly rather than via Dotenv.configure().load():
+        // dotenv-java prefers an already-set OS environment variable of the same
+        // name over the file it just loaded. Any process launched after `set -a;
+        // source .env` on the workspace-root .env (e.g. start_local.sh, or a
+        // manual restart during dev) inherits the root .env's placeholder
+        // GITHUB_APP_ID/etc as real env vars, which then silently shadow this
+        // file's real values regardless of CWD. Confirmed live: "Initialized
+        // GitHubClient for App ID: your_github_app_id" after exactly that restart
+        // pattern — the same bug already fixed once for the orchestrator's
+        // GitHubClientService.
+        java.util.Map<String, String> botEnv = readEnvFile(
+            System.getProperty("user.dir") + "/.env");
+        this.appId = botEnv.get("GITHUB_APP_ID");
+        this.installationId = botEnv.get("GITHUB_INSTALLATION_ID");
+        this.privateKeyPath = botEnv.get("GITHUB_PRIVATE_KEY_PATH");
         logger.info("Initialized GitHubClient for App ID: {}", this.appId);
+    }
+
+    private static java.util.Map<String, String> readEnvFile(String path) {
+        java.util.Map<String, String> values = new java.util.HashMap<>();
+        try {
+            for (String line : Files.readAllLines(Paths.get(path), StandardCharsets.UTF_8)) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#") || !trimmed.contains("=")) {
+                    continue;
+                }
+                int idx = trimmed.indexOf('=');
+                values.put(trimmed.substring(0, idx).trim(), trimmed.substring(idx + 1).trim());
+            }
+        } catch (java.io.IOException e) {
+            logger.warn("Could not read {}: {}", path, e.getMessage());
+        }
+        return values;
     }
 
     public String getLatestInstallationToken() throws Exception {

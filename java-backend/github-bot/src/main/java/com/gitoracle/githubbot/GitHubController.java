@@ -2,9 +2,12 @@ package com.gitoracle.githubbot;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import org.kohsuke.github.GHPullRequest;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GHRepository;
 
@@ -24,29 +27,39 @@ public class GitHubController {
     }
 
     @PostMapping("/pull-request")
-    public String createPullRequest(@RequestBody PullRequestRequest request) {
+    public ResponseEntity<PullRequestResult> createPullRequest(@RequestBody PullRequestRequest request) {
         logger.info("Received request to open PR for job: {}", request.getJobId());
-        
+
         try {
             String markdown = generateMarkdown(request);
-            
+
             // Connect to GitHub
             GitHub github = githubClient.getAuthenticatedGitHub();
             String token = githubClient.getLatestInstallationToken();
             GHRepository repo = github.getRepository(request.getRepoFullName());
             String defaultBranch = repo.getDefaultBranch();
-            
+
             String newBranchName = "gitoracle-fix-" + request.getJobId().substring(0, 8);
-            
+
             // Stateful Git Operations
             String workDir = "/tmp/gitoracle-bot/" + UUID.randomUUID().toString();
             new File(workDir).mkdirs();
-            
+
             String cloneUrl = "https://x-access-token:" + token + "@github.com/" + request.getRepoFullName() + ".git";
-            
+
             logger.info("Cloning repository into {}", workDir);
-            runCommand(workDir, "git", "clone", "-c", "credential.helper=", cloneUrl, ".");
-            
+            // One retry on a transient network failure — confirmed live: a git-bot
+            // clone failed with "Could not resolve host: github.com" on a machine
+            // that resolved DNS fine a moment before and after (the same blip hit
+            // the fixer's clone and test-runner's clone earlier in the pipeline).
+            try {
+                runCommand(workDir, "git", "clone", "-c", "credential.helper=", cloneUrl, ".");
+            } catch (Exception e) {
+                logger.warn("Clone failed for job {}, retrying once: {}", request.getJobId(), e.getMessage());
+                Thread.sleep(2000);
+                runCommand(workDir, "git", "clone", "-c", "credential.helper=", cloneUrl, ".");
+            }
+
             logger.info("Creating branch {}", newBranchName);
             runCommand(workDir, "git", "checkout", "-b", newBranchName);
             
@@ -66,23 +79,29 @@ public class GitHubController {
             runCommand(workDir, "git", "-c", "credential.helper=", "push", "origin", newBranchName);
             
             // Open the Pull Request
-            repo.createPullRequest(
+            GHPullRequest pr = repo.createPullRequest(
                 "🤖 GitOracle Autonomous Fix: " + request.getCommitMessage(),
                 newBranchName,
                 defaultBranch,
                 markdown
             );
-            logger.info("Successfully opened Pull Request on {}", request.getRepoFullName());
-            
+            logger.info("Successfully opened Pull Request on {}: {}", request.getRepoFullName(), pr.getHtmlUrl());
+
             // Cleanup
             runCommand("/tmp", "rm", "-rf", workDir);
-            
-            return "Successfully authenticated, created branch, pushed code, and opened PR!";
+
+            return ResponseEntity.ok(new PullRequestResult(true, pr.getHtmlUrl().toString(), null));
         } catch (Exception e) {
             logger.error("Failed to process PR request", e);
-            return "Error: " + e.getMessage();
+            // Distinguishable from success at the HTTP layer (was previously a 200
+            // with an "Error: " string body — the orchestrator never checked the
+            // body, so it recorded the job as PR_OPENED regardless of outcome).
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(new PullRequestResult(false, null, e.getMessage()));
         }
     }
+
+    public record PullRequestResult(boolean success, String prUrl, String error) {}
     
     private void runCommand(String dir, String... command) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(command);
