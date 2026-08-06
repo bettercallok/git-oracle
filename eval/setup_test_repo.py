@@ -67,6 +67,71 @@ public class PaymentGateway {
 }
 """)
 
+    # A pom.xml + real JUnit test so Test Runner has something to actually run.
+    # Without this the repo has no framework markers at all, defaults to pytest,
+    # and every self-test call reports "no tests ran" (pytest exit code 5) —
+    # meaning a fix could never be verified as passing regardless of quality.
+    # This test intentionally fails on the original buggy code (a raw
+    # NullPointerException escaping processPayment for a null user) and passes
+    # once any reasonable guard is added, so it discriminates real fix quality
+    # instead of asserting one specific exception type/message.
+    pom_path = os.path.join(REPO_PATH, "pom.xml")
+    with open(pom_path, "w") as f:
+        f.write("""<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>gitoracle-eval-repo</artifactId>
+  <version>1.0.0</version>
+  <properties>
+    <maven.compiler.source>17</maven.compiler.source>
+    <maven.compiler.target>17</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.2</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+""")
+    test_path = os.path.join(REPO_PATH, "src/test/java/com/example/UserServiceTest.java")
+    os.makedirs(os.path.dirname(test_path), exist_ok=True)
+    with open(test_path, "w") as f:
+        f.write("""package com.example;
+
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.fail;
+
+public class UserServiceTest {
+    @Test
+    void processPayment_withNullUser_doesNotThrowRawNPE() {
+        UserService service = new UserService(new PaymentGateway());
+        PaymentInfo payment = new PaymentInfo();
+        try {
+            service.processPayment(null, payment);
+            // Completing without throwing is also an acceptable, intentional guard.
+        } catch (NullPointerException e) {
+            fail("processPayment must not let a raw NullPointerException escape for a null user "
+                + "— validate explicitly instead");
+        } catch (Exception e) {
+            // Any other exception (e.g. IllegalArgumentException) is an acceptable, intentional guard.
+        }
+    }
+}
+""")
+
     run_git("add", ".")
     run_git("commit", "-m", "Initial commit: Add UserService and models")
 
