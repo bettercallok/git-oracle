@@ -26,6 +26,7 @@ public class DashboardController {
     private static final Logger logger = LoggerFactory.getLogger(DashboardController.class);
     private final EntityManager entityManager;
     private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     public DashboardController(EntityManager entityManager, KafkaTemplate<String, Object> kafkaTemplate) {
         this.entityManager = entityManager;
@@ -187,14 +188,28 @@ public class DashboardController {
                     plannerPayload.put("repo_url", job.getRepo());
                     plannerPayload.put("repo_path", "/tmp/gitoracle-workspaces/" + job.getId());
                     plannerPayload.put("error_id", job.getErrorId());
-                    
-                    // We mock investigation result here for resume, in reality we'd pull from DB
-                    Map<String, Object> invResult = new HashMap<>();
-                    invResult.put("narrative", "Human approved escalation: " + escalation.getReason());
-                    invResult.put("confidence_score", 1.0);
-                    invResult.put("recommended_strategy", "human_approved_force");
+
+                    // Resume with the real investigation result stored during the original run.
+                    // Fall back to a minimal synthetic one only if nothing was persisted.
+                    Map<String, Object> invResult = null;
+                    if (job.getInvestigationResult() != null) {
+                        try {
+                            invResult = objectMapper.readValue(
+                                job.getInvestigationResult(),
+                                new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                        } catch (Exception e) {
+                            logger.warn("Could not parse stored investigation result for job {}: {}",
+                                job.getId(), e.getMessage());
+                        }
+                    }
+                    if (invResult == null) {
+                        invResult = new HashMap<>();
+                        invResult.put("narrative", "No stored investigation found; human approved escalation: " + escalation.getReason());
+                        invResult.put("confidence_score", 1.0);
+                        invResult.put("recommended_strategy", "human_approved_force");
+                    }
                     plannerPayload.put("investigation_result", invResult);
-                    
+
                     kafkaTemplate.send("job.events.plan", plannerPayload);
                 } else {
                     job.setState("FAILED");

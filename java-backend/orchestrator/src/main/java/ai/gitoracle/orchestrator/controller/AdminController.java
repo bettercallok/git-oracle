@@ -18,10 +18,16 @@ public class AdminController {
     private static final Logger logger = LoggerFactory.getLogger(AdminController.class);
 
     @PostMapping("/tenants")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<Map<String, String>> registerTenant(@RequestBody Map<String, String> request) {
         String tenantName = request.get("name");
-        String tenantId = UUID.randomUUID().toString();
-        logger.info("Registering new tenant: {} with ID: {}", tenantName, tenantId);
+
+        ai.gitoracle.core.model.postgres.Tenant tenant = new ai.gitoracle.core.model.postgres.Tenant();
+        tenant.setOrgName(tenantName);
+        entityManager.persist(tenant);
+
+        String tenantId = tenant.getId().toString();
+        logger.info("Registered new tenant: {} with ID: {}", tenantName, tenantId);
         return ResponseEntity.ok(Map.of("tenantId", tenantId, "status", "REGISTERED"));
     }
 

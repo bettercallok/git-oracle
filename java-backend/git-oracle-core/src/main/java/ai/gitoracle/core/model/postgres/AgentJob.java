@@ -57,6 +57,10 @@ public class AgentJob {
     private String rawPayload;
 
     @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "investigation_result", columnDefinition = "jsonb")
+    private String investigationResult;
+
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "escalation_report", columnDefinition = "jsonb")
     private String escalationReport;
 
