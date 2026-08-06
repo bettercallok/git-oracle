@@ -94,7 +94,8 @@ export default function JobDetail() {
   // Support both 'status' and 'state' field names
   const status = (job as any).status || job.state;
   const isSuccess = status === 'SUCCESS' || status === 'PR_OPENED';
-  const isReady   = ['PR_OPENED', 'SUCCESS', 'FAILED', 'INVESTIGATING', 'TESTING', 'REGENERATING', 'QUEUED'].includes(status);
+  const isReady   = ['PR_OPENED', 'SUCCESS', 'FAILED', 'ESCALATED', 'INVESTIGATING', 'PLANNING', 'TESTING', 'REGENERATING', 'QUEUED'].includes(status);
+  const isEscalated = status === 'ESCALATED';
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
@@ -159,7 +160,7 @@ export default function JobDetail() {
               <div className="timeline-body">GitOracle orchestrator began processing the event.</div>
             </motion.div>
 
-            {['INVESTIGATING','TESTING','PR_OPENED','SUCCESS','REGENERATING'].includes(status) && (
+            {['INVESTIGATING','PLANNING','TESTING','PR_OPENED','SUCCESS','ESCALATED','REGENERATING'].includes(status) && (
               <motion.div className="timeline-item" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }}>
                 <div className="timeline-dot" style={{ borderColor: 'var(--accent)' }} />
                 <div className="timeline-time">AI Phase</div>
@@ -174,6 +175,15 @@ export default function JobDetail() {
                 <div className="timeline-time">Completed</div>
                 <div className="timeline-title">Pull Request Opened</div>
                 <div className="timeline-body">GitOracle autonomously fixed the issue and opened a PR.</div>
+              </motion.div>
+            )}
+
+            {isEscalated && (
+              <motion.div className="timeline-item" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }}>
+                <div className="timeline-dot" style={{ borderColor: 'var(--danger, #ef4444)' }} />
+                <div className="timeline-time">Escalated</div>
+                <div className="timeline-title">Fixer Could Not Produce a Valid Patch</div>
+                <div className="timeline-body">The agent exhausted its attempts without a fix that passed guardrails or tests. Review the escalation queue, or submit new instructions below to retry.</div>
               </motion.div>
             )}
 

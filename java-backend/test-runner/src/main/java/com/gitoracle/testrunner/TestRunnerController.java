@@ -208,6 +208,22 @@ public class TestRunnerController {
             boolean passed = result.success();
             double score   = computeQualityScore(result.output(), config.framework());
 
+            // pytest exits 5 ("no tests ran") when the repo/target dir has no test
+            // suite at all — not a failure of the patch under test, just nothing to
+            // verify against. Confirmed live on bettercallok/chillcall (no tests in
+            // backend/): every patch was guaranteed to fail here regardless of
+            // correctness, since exit 5 != 0. Treat "no tests collected" as a
+            // safe-pass, same as the existing no-patch fallback above.
+            boolean noTestsCollected = result.exitCode() == 5
+                || result.output().contains("no tests ran")
+                || result.output().contains("collected 0 items");
+            if (!passed && noTestsCollected) {
+                logger.info("No tests found for job {} (exit={}) — safe-pass, nothing to verify.",
+                            jobId, result.exitCode());
+                passed = true;
+                score = 1.0;
+            }
+
             logger.info("Tests {} for job {} (exit={})", passed ? "PASSED" : "FAILED",
                         jobId, result.exitCode());
 
