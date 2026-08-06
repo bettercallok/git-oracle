@@ -6,7 +6,7 @@ spring:
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:127.0.0.1}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}
     username: ${POSTGRES_USER:gitOracle}
-    password: ${POSTGRES_PASSWORD:GitOracle_PG_2025}
+    password: ${POSTGRES_PASSWORD}
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
@@ -27,6 +27,11 @@ spring:
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
         spring.json.trusted.packages: "*"
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
   cloud:
     gateway:
       globalcors:
@@ -80,6 +85,11 @@ management:
     web:
       exposure:
         include: health,info,prometheus
+  health:
+    # This service does not use Neo4j; disable the actuator Neo4j probe
+    # so /actuator/health isn't falsely DOWN.
+    neo4j:
+      enabled: false
   metrics:
     tags:
       application: ${spring.application.name}
