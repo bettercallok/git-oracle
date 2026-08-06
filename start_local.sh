@@ -22,6 +22,13 @@ for PORT in $PORTS; do
     fi
   done < <(lsof -i :"$PORT" 2>/dev/null | tail -n +2)
 done
+
+# Gradle daemons are NOT tied to any service port, so the loop above won't
+# catch them — but each stale one is a lingering JVM that idles for hours and
+# accumulates across restarts, which is what actually exhausts RAM over time
+# (as opposed to the app JVMs themselves). Safe to kill: not Docker, and
+# gradle.properties now sets org.gradle.daemon=false so none should respawn.
+pkill -f "GradleDaemon" 2>/dev/null || true
 sleep 1
 
 echo "🚀 Starting GitOracle Infrastructure (Docker)..."
@@ -39,17 +46,23 @@ source .env
 set +a
 
 cd java-backend
-nohup ./gradlew :api-gateway:bootRun </dev/null > api-gateway.log 2>&1 &
+# Each service's JVM heap is capped (~250-300MB RSS) and --no-daemon means
+# the gradle process running bootRun exits its own bookkeeping once the app
+# JVM is up rather than leaving a second persistent daemon behind — that
+# daemon accumulation is what exhausted RAM and crashed Docker previously.
+JVM_ARGS="-Xmx224m -XX:MaxMetaspaceSize=160m -XX:+UseSerialGC -Xss256k"
+
+nohup ./gradlew --no-daemon :api-gateway:bootRun -Dspring-boot.run.jvmArguments="$JVM_ARGS" </dev/null > api-gateway.log 2>&1 &
 echo $! > api-gateway.pid
-nohup ./gradlew :error-ingestor:bootRun </dev/null > error-ingestor.log 2>&1 &
+nohup ./gradlew --no-daemon :error-ingestor:bootRun -Dspring-boot.run.jvmArguments="$JVM_ARGS" </dev/null > error-ingestor.log 2>&1 &
 echo $! > error-ingestor.pid
-nohup ./gradlew :orchestrator:bootRun </dev/null > orchestrator.log 2>&1 &
+nohup ./gradlew --no-daemon :orchestrator:bootRun -Dspring-boot.run.jvmArguments="-Xmx320m -XX:MaxMetaspaceSize=192m -XX:+UseSerialGC -Xss256k" </dev/null > orchestrator.log 2>&1 &
 echo $! > orchestrator.pid
-nohup ./gradlew :test-runner:bootRun </dev/null > test-runner.log 2>&1 &
+nohup ./gradlew --no-daemon :test-runner:bootRun -Dspring-boot.run.jvmArguments="$JVM_ARGS" </dev/null > test-runner.log 2>&1 &
 echo $! > test-runner.pid
-nohup ./gradlew :github-bot:bootRun </dev/null > github-bot.log 2>&1 &
+nohup ./gradlew --no-daemon :github-bot:bootRun -Dspring-boot.run.jvmArguments="$JVM_ARGS" </dev/null > github-bot.log 2>&1 &
 echo $! > github-bot.pid
-nohup ./gradlew :git-forensics:bootRun </dev/null > git-forensics.log 2>&1 &
+nohup ./gradlew --no-daemon :git-forensics:bootRun -Dspring-boot.run.jvmArguments="$JVM_ARGS" </dev/null > git-forensics.log 2>&1 &
 echo $! > git-forensics.pid
 cd ..
 

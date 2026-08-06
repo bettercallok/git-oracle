@@ -15,6 +15,8 @@ by utilizing a configurable OpenAI-compatible LLM API (e.g. OpenAI, Anthropic, o
 - **advanced context management (RAG):** offloads massive datasets—such as multi-year git histories, large error stacks, and full repository structures—to qdrant (vector DB) and pgvector. it retrieves only the top-k most relevant snippets to strictly adhere to the model's 8192 token context limit.
 - **dynamic prompt registry:** avoids brittle hardcoded python strings. all agent instructions, personas, and task prompts are dynamically fetched from a postgreSQL prompt registry, allowing for easy updates and A/B testing of AI behaviors.
 - **strict security guardrails:** features a dedicated java guardrails service that mandates validation of all LLM-generated outputs before any code is executed in the user's environment or pushed to remote repositories.
+- **commit explorer:** browse a repository's commit history, inspect file-level diffs, and chat with a dedicated `commit_analyst` agent about any commit — with one-click "Apply Fix as PR" when the AI spots a regression.
+- **escalation queue:** any job the pipeline can't confidently resolve on its own is routed to a human-review queue in the dashboard, where an engineer can approve, reject, or re-trigger the pipeline with additional instructions.
 - **multi-modal interaction:** interfaces with the user through a robust typescript dashboard and a versatile python CLI.
 
 ## tech stack
@@ -76,10 +78,11 @@ graph TD
 ## project structure
 
 - `java-backend/`: contains all java microservices (API gateway, error ingestor, guardrails service) and the critical `git-oracle-core` shared module.
-- `python-ai/` & `ai_core/`: houses the python-based AI orchestrators, specific agent implementations, and RAG pipelines.
+- `ai_core/`: houses the python-based AI orchestrators, specific agent implementations, and RAG pipelines.
 - `dashboard/`: the modern web-based UI for interacting with the AI assistant.
 - `cli/`: the command-line interface `gitOracle/main.py` for terminal-based workflows.
 - `infrastructure/`: docker compose manifests (`docker-compose.yml`, `docker-compose.infra.yml`) for spinning up kafka, databases, and caches.
+- `docker-compose.services.yml`: containerizes the java microservices themselves (build against `java-backend/Dockerfile`); run after the infra stack is up.
 - `llm-server/`: *(deprecated)* previously contained configuration and scripts for local `llama.cpp`.
 
 ## deployment & setup
@@ -90,7 +93,11 @@ ensure your host machine meets the following requirements:
 - python 3.11+
 - node.js 18+
 - docker & docker compose
-- at least 16GB RAM (32GB recommended for optimal local LLM performance)
+- 8GB RAM (the full stack — 9 infra containers + 6 java services + 6 python agents + dashboard — is
+  memory-capped to fit this: `java-backend/gradle.properties` caps build/daemon memory and disables the
+  gradle daemon, `start_local.sh` caps each service's JVM heap, and `docker-compose.infra.yml` sets a
+  `mem_limit` on every container. There's little headroom left for other heavy apps running at the same
+  time, so close what you can while running the full stack. 16GB+ gives you comfortable margin instead of a tight fit.)
 
 ### getting started
 
@@ -110,13 +117,17 @@ ensure your host machine meets the following requirements:
    ```
 
 4. **initialize backend & AI core**
-   execute the setup script to boot up the java microservices, the python AI core, and the local LLM server.
+   execute the setup script to boot up the java microservices and the python AI core (inference is routed to the external, OpenAI-compatible endpoint configured via `LLM_BASE_URL` — no local LLM server is started).
    ```bash
    ./start_local.sh
    ```
+   alternatively, run the java services as containers instead of local processes:
+   ```bash
+   docker compose -f docker-compose.services.yml up -d --build
+   ```
 
 5. **interact with gitoracle**
-   open the dashboard in your browser or utilize the `gitOracle` CLI tool to begin analyzing and modifying your codebase securely.
+   open the dashboard in your browser — use the **Commit Explorer** to browse and chat about commits, the **Escalation Queue** to review jobs the pipeline couldn't resolve autonomously, or utilize the `gitOracle` CLI tool to begin analyzing and modifying your codebase securely.
 
 ## system interaction flow & github bot
 
@@ -138,17 +149,22 @@ the java API gateway and orchestrator expose several crucial REST endpoints for 
 - `POST /test`: internal Test Runner endpoint for executing containerized verification suites.
 - `POST /pull-request`: internal GitHub Bot endpoint for opening autonomous PRs.
 - `GET /api/v1/jobs/{id}`: poll the status of a specific background job.
-- `GET /api/v1/prompts/{agent}`: fetch the active system prompt for a specific agent from the postgreSQL registry.
-- `POST /api/v1/prompts/{agent}/activate`: switch the active prompt version for A/B testing or rollbacks.
+- `GET /api/v1/commits/{sha}/diff`: fetch file-level diffs for a commit, used by the Commit Explorer.
+- `GET /api/v1/escalations` / `POST /api/v1/escalations/{id}/resolve`: list and resolve jobs waiting on human review in the Escalation Queue.
+- `GET /prompts/{agent}/{key}`: fetch the active system prompt for a specific agent (served by the dedicated `prompt_registry` python service, port 9005).
+- `PUT /prompts/{agent}/{key}/activate/{version}`: switch the active prompt version for A/B testing or rollbacks.
 
 ## frontend dashboard
 
 the frontend dashboard (built with typescript, react, and vite) serves as the visual command center for the gitoracle platform. its primary roles include:
 
 - **real-time job tracking:** monitor the progress of AI agents as they work on tasks, providing visual traces of their thoughts, context retrievals, and LLM inferences.
+- **commit explorer:** browse a repo's commit history, expand file-level diffs, and ask the `commit_analyst` agent questions about a commit directly in-context, with a shortcut to trigger a fix as a PR.
+- **escalation queue:** review, approve, reject, or redirect (with human instructions) any job the autonomous pipeline couldn't confidently resolve.
 - **prompt management:** a visual interface for the prompt registry to edit, version, and activate system prompts for various agents without touching python code or SQL.
-- **system health monitoring:** view live latency, kafka topic backlogs, and the status of the local LLM server.
+- **system health monitoring:** view live latency and kafka topic backlogs across services.
 - **human-in-the-loop review:** when the guardrails service flags a potentially unsafe code change, the dashboard provides a diff view for developers to manually approve or reject the AI's proposal.
+- **dark / light mode:** toggle the dashboard's theme from the sidebar; the choice persists across sessions.
 
 ## CLI reference
 
