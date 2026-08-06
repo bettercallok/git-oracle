@@ -33,19 +33,13 @@ public class SemanticDedupService {
         String errorId = (String) payload.getOrDefault("error_id", "err-" + UUID.randomUUID().toString().substring(0, 8));
         String stackTrace = (String) payload.getOrDefault("stacktrace", "");
 
-        // 1. Get embedding for the stack trace (mocked via dummy vector for now)
-        String embeddingStr = generateEmbedding(stackTrace);
-
-        // 2. Perform semantic deduplication using pgvector
-        // Check if there's a recent job with cosine similarity > 0.92
+        // Deduplicate by errorId. NOTE: this is exact-match dedup, not semantic —
+        // vector-similarity dedup requires an embedding service (not currently deployed)
+        // plus a pgvector column on agent_job; see generateEmbedding() below for the
+        // intended embedding call to re-enable once that infra exists.
         try {
-            // Note: In a production pgvector setup, we would cast the string to a vector type:
-            // "SELECT j FROM AgentJob j WHERE j.tenantId = :tenantId AND j.errorEmbedding <=> CAST(:embedding AS vector) < 0.08"
-            // Since errorEmbedding is not fully typed as a vector object in JPA, we will simulate the dedup logic here.
-            
-            logger.info("Performing semantic deduplication for error in repo: {}", repo);
-            
-            // For now, simple strict string check to avoid complex custom JPA dialects
+            logger.info("Deduplicating error in repo: {}", repo);
+
             List<AgentJob> existing = entityManager.createQuery("SELECT j FROM AgentJob j WHERE j.errorId = :errorId", AgentJob.class)
                 .setParameter("errorId", errorId)
                 .getResultList();
