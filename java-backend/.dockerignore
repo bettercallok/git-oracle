@@ -1,0 +1,10 @@
+# Without this, `docker build` (context: ./java-backend) was sending every
+# module's build/ output and any local .gradle cache into the build context —
+# confirmed live: 5GB+ transferred for a single service build, most of it
+# already-compiled classes/jars that get rebuilt inside the container anyway.
+build/
+.gradle/
+**/build/
+**/.gradle/
+*.log
+*.pid
