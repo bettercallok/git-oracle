@@ -44,17 +44,19 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
         }
 
         // ── API Key validation ─────────────────────────────────────────────────
-        if (configuredApiKey != null && !configuredApiKey.isBlank()) {
-            String incomingKey = exchange.getRequest().getHeaders().getFirst("X-API-Key");
-            if (incomingKey == null || !incomingKey.equals(configuredApiKey)) {
-                logger.warn("Request rejected: Invalid or missing X-API-Key for path={}", path);
-                exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
-                exchange.getResponse().getHeaders().add("Content-Type", "application/json");
-                var body = "{\"error\":\"Unauthorized\",\"message\":\"Invalid or missing X-API-Key header.\"}";
-                var buffer = exchange.getResponse().bufferFactory()
-                    .wrap(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                return exchange.getResponse().writeWith(Mono.just(buffer));
-            }
+        // Fails CLOSED: an unconfigured key used to mean "skip the check entirely"
+        // (auth silently disabled for every request, confirmed live — GITORACLE_API_KEY
+        // was blank in .env), which is backwards for a gate whose whole job is to
+        // reject unauthenticated traffic. A missing server-side key is now itself a
+        // rejection, not a bypass.
+        if (configuredApiKey == null || configuredApiKey.isBlank()) {
+            logger.error("Request rejected: GITORACLE_API_KEY is not configured on the server — refusing all traffic rather than allowing it unauthenticated.");
+            return unauthorized(exchange, "Server misconfiguration: GITORACLE_API_KEY is not set.");
+        }
+        String incomingKey = exchange.getRequest().getHeaders().getFirst("X-API-Key");
+        if (incomingKey == null || !incomingKey.equals(configuredApiKey)) {
+            logger.warn("Request rejected: Invalid or missing X-API-Key for path={}", path);
+            return unauthorized(exchange, "Invalid or missing X-API-Key header.");
         }
 
         // ── Tenant ID ──────────────────────────────────────────────────────────
@@ -70,6 +72,15 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
             .build();
 
         return chain.filter(exchange.mutate().request(mutated).build());
+    }
+
+    private Mono<Void> unauthorized(ServerWebExchange exchange, String message) {
+        exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
+        exchange.getResponse().getHeaders().add("Content-Type", "application/json");
+        var body = "{\"error\":\"Unauthorized\",\"message\":\"" + message + "\"}";
+        var buffer = exchange.getResponse().bufferFactory()
+            .wrap(body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return exchange.getResponse().writeWith(Mono.just(buffer));
     }
 
     @Override
