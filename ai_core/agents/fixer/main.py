@@ -6,6 +6,9 @@ import os
 import logging
 import sys
 import hashlib
+import difflib
+import shutil
+import git
 
 # Ensure ai_core modules can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -59,19 +62,93 @@ class PatchResult(BaseModel):
     success: bool
     escalation_report: Optional[str] = None
 
+class SearchReplaceEdit(BaseModel):
+    """
+    What the LLM actually produces: an exact block to find and its replacement,
+    for a single file. Asking an LLM to hand-write a unified diff (precise
+    @@ -a,b +c,d @@ line counts, correct line numbers) is unreliable — confirmed
+    live, patches consistently failed `git apply` with "corrupt patch" even
+    after giving the model line-numbered source and explicit format rules.
+    Reproducing a verbatim snippet plus its replacement is a task LLMs handle
+    far more reliably; the unified diff is then computed with difflib, which
+    can never produce invalid diff syntax.
+    """
+    file_path: str              # one of plan.affected_files, relative to repo root
+    search: str                 # exact existing text to locate (verbatim from source context)
+    replace: str                # replacement text
+    summary: str
+    confidence: float
+
+
+def build_unified_diff(repo_path: str, file_path: str, search: str, replace: str) -> Optional[str]:
+    """Locate `search` verbatim in the file and return a valid unified diff replacing
+    it with `replace`, computed via difflib so the diff syntax is always correct.
+    Returns None if `search` isn't found (the LLM didn't reproduce the text exactly)
+    or if the edit would leave brace-based source unbalanced — the diff itself is
+    always syntactically valid, but a `replace` block that opens more braces than
+    it closes (or vice versa) produces code that fails to compile (confirmed live:
+    "reached end of file while parsing"). A cheap global brace-count check catches
+    this before spending a full test-runner round-trip on code that can't compile."""
+    full_path = os.path.join(repo_path, file_path)
+    try:
+        with open(full_path, "r") as f:
+            original = f.read()
+    except Exception as e:
+        logger.warning(f"Could not read {full_path} to build diff: {e}")
+        return None
+
+    if search not in original:
+        return None
+
+    updated = original.replace(search, replace, 1)
+    if updated == original:
+        return None
+
+    if file_path.endswith((".java", ".c", ".cpp", ".h", ".cs", ".go", ".js", ".ts", ".jsx", ".tsx")):
+        if updated.count("{") != updated.count("}"):
+            logger.warning(f"Rejecting edit to {file_path}: unbalanced braces after replace")
+            return None
+
+    diff_lines = difflib.unified_diff(
+        original.splitlines(keepends=True),
+        updated.splitlines(keepends=True),
+        fromfile=f"a/{file_path}",
+        tofile=f"b/{file_path}",
+    )
+    diff_text = "".join(diff_lines)
+    return diff_text if diff_text else None
+
 
 @app.post("/fix", response_model=PatchResult)
 async def execute_fix(request: FixerRequest):
     logger.info(f"Starting ReAct loop for job {request.job_id} in {request.repo_path}")
-    
+
     memory = AgentMemory()
     seen_patches = set()
     hint = ""
-    
+
+    # The fixer needs its own private, stable checkout to read source from across
+    # every retry attempt. request.repo_path is shared with Test Runner (via
+    # run_real_test below), which deletes and re-clones that exact path on every
+    # self-test call — so by attempt 2, request.repo_path could already be gone,
+    # breaking source reads with "No such file or directory" (confirmed live: the
+    # investigation and plan were correct, but every retry failed here before an
+    # LLM call was even made). Clone into a separate, fixer-owned directory instead.
+    local_src_path = request.repo_path
+    if request.repo_url:
+        fixer_src_path = request.repo_path.rstrip("/") + "-fixer-src"
+        try:
+            if not os.path.isdir(os.path.join(fixer_src_path, ".git")):
+                shutil.rmtree(fixer_src_path, ignore_errors=True)
+                git.Repo.clone_from(request.repo_url, fixer_src_path)
+            local_src_path = fixer_src_path
+        except Exception as e:
+            logger.warning(f"Could not set up private source checkout, falling back to {request.repo_path}: {e}")
+
     # 1. Fetch source code for context
     source_context = ""
     for file_path in request.plan.affected_files:
-        full_path = os.path.join(request.repo_path, file_path)
+        full_path = os.path.join(local_src_path, file_path)
         try:
             with open(full_path, "r") as f:
                 source_context += f"\n--- {file_path} ---\n{f.read()}\n"
@@ -122,19 +199,23 @@ Source Code Context:
 
 {hint}
 
-Generate a PatchOutput containing the diff and a short summary.
+Generate a search/replace edit for exactly one file:
+- file_path: the file you're editing (must be one of the affected files shown above).
+- search: an EXACT, VERBATIM copy of the block of existing lines you're replacing, copied character-for-character from the source context above (same indentation, same whitespace). Include enough surrounding lines to uniquely identify the location — a single line is fine if it's already unique in the file.
+- replace: the full replacement text for that exact block (can be longer or shorter than search).
+Do not write a diff yourself — the unified diff is computed automatically from search/replace.
 """
         messages = [
-            {"role": "system", "content": "You are a master programmer AI. You write precise unified diffs to fix bugs."},
+            {"role": "system", "content": "You are a master programmer AI. You make precise, minimal code edits."},
             {"role": "user", "content": prompt_text}
         ]
 
         # 4. Call LLM (Layer 3b)
         try:
-            patch = await llm_structured(
+            edit = await llm_structured(
                 messages=messages,
-                output_schema=PatchOutput,
-                max_tokens=1024,
+                output_schema=SearchReplaceEdit,
+                max_tokens=4096,
                 temperature=0.2 + (attempt * 0.2), # Increase temp on retries for creativity
                 job_id=request.job_id,
                 agent_name="fixer_agent"
@@ -142,6 +223,23 @@ Generate a PatchOutput containing the diff and a short summary.
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
             continue
+
+        diff_text = build_unified_diff(local_src_path, edit.file_path, edit.search, edit.replace)
+        if diff_text is None:
+            logger.warning(f"Rejected edit to {edit.file_path} — asking the model to retry")
+            hint = (
+                f"WARNING: Your previous edit to {edit.file_path} was rejected — either the 'search' text didn't "
+                "match exactly (copy it verbatim, including whitespace/indentation, from the source context above), "
+                "or 'replace' left mismatched braces. Ensure every '{' in your replace text has a matching '}'."
+            )
+            continue
+
+        patch = PatchOutput(
+            diff=diff_text,
+            summary=edit.summary,
+            files_modified=[edit.file_path],
+            confidence=edit.confidence,
+        )
 
         # 5. Self-Healing Loop Detection
         patch_hash = hashlib.sha256(patch.diff.encode('utf-8')).hexdigest()
@@ -164,7 +262,7 @@ Generate a PatchOutput containing the diff and a short summary.
                             "repoUrl": repo_url,
                             "repoPath": repo_path,
                             "patchDiff": patch_diff,
-                            "framework": "PYTEST"
+                            "framework": "UNKNOWN"  # let Test Runner auto-detect (pom.xml/package.json/etc.)
                         },
                         timeout=130.0
                     )
@@ -244,7 +342,8 @@ async def handle_fix_job(payload: dict):
                 "patch": result.patch.diff,
                 "targetRepo": target_repo or "",
                 "humanInstructions": human_instructions or "",
-                "isRegeneration": bool(human_instructions)
+                "isRegeneration": bool(human_instructions),
+                "filesModified": ",".join(result.patch.files_modified),
             }
             await producer.publish("fix-generated", fix_payload)
             logger.info(f"Published fix-generated for job {job_id} (human_directed={bool(human_instructions)})")
