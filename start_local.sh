@@ -11,7 +11,7 @@ fi
 # Docker's com.docker.backend connects to our ports for health checks.
 # Killing it crashes Docker Desktop and brings down all containers.
 echo "🧹 Clearing any zombie app processes on service ports..."
-PORTS="8080 8081 8082 8083 8084 8085 9001 9002 9003 9004 9005 9006"
+PORTS="8080 8081 8082 8083 8084 8085 9001 9002 9003 9004 9005 9006 9007"
 for PORT in $PORTS; do
   while IFS= read -r PROC_LINE; do
     PID=$(echo "$PROC_LINE" | awk '{print $2}')
