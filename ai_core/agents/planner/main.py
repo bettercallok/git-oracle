@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
@@ -11,6 +11,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
 from shared.memory import SemanticMemory
+from shared.prompt_registry import fetch_prompt
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -75,10 +76,14 @@ async def create_plan(request: PlannerRequest):
         logger.warning(f"Could not retrieve semantic memory: {e}")
         architectural_rules = "No specific architectural rules found."
 
-    # 2. Formulate Prompt
+    # 2. Fetch base prompt from the dynamic prompt registry, then formulate the full prompt
+    base_prompt = await fetch_prompt(
+        "planner",
+        "You are the GitOracle Planner Agent. An Investigator Agent has found the likely root cause of a bug. "
+        "Your job is to generate a strict, constrained action plan for the Fixer Agent to execute."
+    )
     prompt_text = f"""
-You are the GitOracle Planner Agent. An Investigator Agent has found the likely root cause of a bug.
-Your job is to generate a strict, constrained action plan for the Fixer Agent to execute.
+{base_prompt}
 
 Bug Description: {request.bug_description}
 
@@ -162,6 +167,7 @@ async def handle_planner_job(payload: dict):
         producer = KafkaEventProducer()
         fix_payload = {
             "job_id": job_id,
+            "repo_url": payload.get("repo_url", ""),
             "repo_path": repo_path,
             "plan": plan.dict()
         }

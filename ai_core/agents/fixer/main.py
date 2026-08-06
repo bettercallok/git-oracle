@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -11,6 +11,7 @@ import hashlib
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
 from shared.memory import AgentMemory
+from shared.prompt_registry import fetch_prompt
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ class FixerRequest(BaseModel):
     job_id: str = "debug-job"
     human_instructions: Optional[str] = None  # Set when triggered via dashboard or GitHub comment
     target_repo: Optional[str] = None          # GitHub repo to open PR against (owner/repo)
+    repo_url: Optional[str] = None             # Git remote to clone for self-testing (GitHub or file://)
 
 class PatchOutput(BaseModel):
     diff: str                   # unified diff format
@@ -64,7 +66,6 @@ async def execute_fix(request: FixerRequest):
     
     memory = AgentMemory()
     seen_patches = set()
-    history = []
     hint = ""
     
     # 1. Fetch source code for context
@@ -98,9 +99,13 @@ async def execute_fix(request: FixerRequest):
 {request.human_instructions}
 Your patch MUST implement this instruction. All other guidelines are secondary.
 """
+        base_prompt = await fetch_prompt(
+            "fixer",
+            "You are the GitOracle Fixer Agent. A Planner Agent has given you a strict blueprint to fix a bug. "
+            "You MUST write a patch (unified diff) that fixes the bug according to the plan."
+        )
         prompt_text = f"""
-You are the GitOracle Fixer Agent. A Planner Agent has given you a strict blueprint to fix a bug.
-You MUST write a patch (unified diff) that fixes the bug according to the plan.
+{base_prompt}
 
 Bug Description: {request.bug_description}
 {human_block}
@@ -149,14 +154,16 @@ Generate a PatchOutput containing the diff and a short summary.
         
         import httpx
         
-        async def run_real_test(job_id: str, repo_path: str) -> bool:
+        async def run_real_test(job_id: str, repo_path: str, repo_url: str, patch_diff: str) -> bool:
             try:
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
                         "http://localhost:8084/test",
                         json={
                             "jobId": job_id,
+                            "repoUrl": repo_url,
                             "repoPath": repo_path,
+                            "patchDiff": patch_diff,
                             "framework": "PYTEST"
                         },
                         timeout=130.0
@@ -177,7 +184,9 @@ Generate a PatchOutput containing the diff and a short summary.
             logger.info("Bypassing tests for mock-test- job.")
             tests_passed = True
         else:
-            tests_passed = await run_real_test(request.job_id, request.repo_path)
+            tests_passed = await run_real_test(
+                request.job_id, request.repo_path, request.repo_url or "", patch.diff
+            )
         
         if tests_passed:
             # 7. Store successful fix in episodic memory
@@ -204,16 +213,17 @@ async def handle_fix_job(payload: dict):
     
     job_id = payload.get("job_id", "unknown")
     repo_path = payload.get("repo_path", "")
+    repo_url = payload.get("repo_url", "")
     plan_dict = payload.get("plan", {})
     human_instructions = payload.get("human_instructions")
     target_repo = payload.get("target_repo", "")
-    
+
     plan = PlannerOutput(**plan_dict)
-    
-    bug_desc = payload.get("bug_description", f"Fixing error based on plan")
+
+    bug_desc = payload.get("bug_description", "Fixing error based on plan")
     if human_instructions:
         bug_desc = human_instructions  # user's instructions become the primary description
-    
+
     request = FixerRequest(
         tenant_id="00000000-0000-0000-0000-000000000000",
         repo_path=repo_path,
@@ -221,13 +231,14 @@ async def handle_fix_job(payload: dict):
         plan=plan,
         job_id=job_id,
         human_instructions=human_instructions,
-        target_repo=target_repo if target_repo else None
+        target_repo=target_repo if target_repo else None,
+        repo_url=repo_url if repo_url else None
     )
     
     try:
         result = await execute_fix(request)
+        producer = KafkaEventProducer()
         if result.success and result.patch:
-            producer = KafkaEventProducer()
             fix_payload = {
                 "jobId": job_id,
                 "patch": result.patch.diff,
@@ -239,6 +250,12 @@ async def handle_fix_job(payload: dict):
             logger.info(f"Published fix-generated for job {job_id} (human_directed={bool(human_instructions)})")
         else:
             logger.warning(f"Fixer failed to produce a valid patch for job {job_id}")
+            await producer.publish("job-escalated", {
+                "jobId": job_id,
+                "reason": result.escalation_report or "Fixer Agent exhausted all attempts and could not fix the bug.",
+                "confidenceScore": 0.0
+            })
+            logger.info(f"Published job-escalated for job {job_id}")
     except Exception as e:
         logger.error(f"Fix execution failed for job {job_id}: {e}")
 
