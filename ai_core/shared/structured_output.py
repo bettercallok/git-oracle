@@ -1,5 +1,4 @@
 import os
-import time
 import json
 import httpx
 import logging
@@ -170,7 +169,6 @@ async def llm_structured(
         try:
             # 1. Primary Attempt
             response = await _execute_llm_request(client, base_url, payload, headers=headers)
-            used_model = LLM_MODEL_NAME
         except Exception as primary_e:
             logger.warning(f"Primary LLM ({base_url}) failed: {primary_e}")
             if LLM_FALLBACK_BASE_URL and LLM_FALLBACK_MODEL_NAME:
@@ -179,7 +177,6 @@ async def llm_structured(
                 try:
                     # 2. Fallback Attempt
                     response = await _execute_llm_request(client, LLM_FALLBACK_BASE_URL, payload, headers=headers)
-                    used_model = LLM_FALLBACK_MODEL_NAME
                 except Exception as fallback_e:
                     logger.error(f"Fallback LLM also failed: {fallback_e}")
                     raise LLMUnavailableError("Both primary and fallback LLM servers are unavailable.") from fallback_e

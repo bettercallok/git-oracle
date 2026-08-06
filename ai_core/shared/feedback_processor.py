@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 from shared.memory import AgentMemory, get_db_connection
 
 logger = logging.getLogger(__name__)

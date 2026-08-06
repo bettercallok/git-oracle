@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from fastapi.testclient import TestClient
 import sys

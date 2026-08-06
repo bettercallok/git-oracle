@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from fastapi.testclient import TestClient
 import sys
@@ -47,7 +46,7 @@ def run_fixer_test():
             print(f"Summary: {patch['summary']}")
             print(f"Confidence: {patch['confidence']}")
             print(f"Files touched: {', '.join(patch['files_modified'])}")
-            print(f"\n📝 Unified Diff Generated:\n")
+            print("\n📝 Unified Diff Generated:\n")
             print(patch['diff'])
         else:
             print(f"\n❌ Fix Failed after {result['attempts']} attempts.")

@@ -1,6 +1,6 @@
 import os
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.http.models import PointStruct, VectorParams, Distance
+from qdrant_client.http.models import VectorParams, Distance
 
 class QdrantStore:
     def __init__(self, collection_name="codebase_memory"):

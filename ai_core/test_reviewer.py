@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from fastapi.testclient import TestClient
 import sys
@@ -29,7 +28,7 @@ def run_reviewer_test():
     
     if response.status_code == 200:
         result = response.json()
-        print(f"\n✅ Review Processed Successfully!")
+        print("\n✅ Review Processed Successfully!")
         print(f"Agent's Stance: {result['stance']}")
         print(f"Concern Severity: {result['concern_severity']}")
         print(f"Action Needed (Trigger Re-Fix?): {result['action_needed']}")
