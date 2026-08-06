@@ -1,6 +1,9 @@
 package ai.gitoracle.orchestrator.service;
 
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -50,6 +53,22 @@ public class WorkspaceService {
             logger.error("Failed to clone repository {} for job {}: {}", repoUrl, jobId, e.getMessage());
             // Return the path anyway so the pipeline continues; agents can handle missing workspace
             return clonePath;
+        }
+    }
+
+    /**
+     * Resolves the HEAD commit SHA of an already-cloned workspace.
+     * Returns null if the workspace doesn't exist or isn't a git repo (e.g. clone failed).
+     */
+    public String getHeadCommitSha(String clonePath) {
+        try (Repository repo = new FileRepositoryBuilder()
+                .setGitDir(new File(clonePath, ".git"))
+                .build()) {
+            ObjectId head = repo.resolve("HEAD");
+            return head != null ? head.getName() : null;
+        } catch (Exception e) {
+            logger.warn("Could not resolve HEAD commit for workspace {}: {}", clonePath, e.getMessage());
+            return null;
         }
     }
 }

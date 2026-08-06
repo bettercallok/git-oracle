@@ -29,6 +29,7 @@ public class OrchestratorService {
     private final WorkspaceService workspaceService;
     private final EntityManager entityManager;
     private final RestTemplate restTemplate = new RestTemplate();
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     public OrchestratorService(AgentJobRepository jobRepository, KafkaTemplate<String, Object> kafkaTemplate, WorkspaceService workspaceService, EntityManager entityManager) {
         this.jobRepository = jobRepository;
@@ -63,7 +64,14 @@ public class OrchestratorService {
         
         // 2. Clone the repository into a dynamic workspace
         String repoPath = workspaceService.cloneRepository(event.getRepoUrl(), job.getId());
-        
+
+        // Capture the real HEAD commit so downstream PRs report an accurate root commit
+        String headSha = workspaceService.getHeadCommitSha(repoPath);
+        if (headSha != null) {
+            job.setRootCommit(headSha);
+            jobRepository.save(job);
+        }
+
         // 3. Publish event to Python Investigator Agent
         Map<String, Object> investigatorPayload = new HashMap<>();
         investigatorPayload.put("job_id", job.getId().toString());
@@ -72,6 +80,31 @@ public class OrchestratorService {
         investigatorPayload.put("error_id", event.getErrorId());
         
         kafkaTemplate.send("job.events.investigate", investigatorPayload);
+    }
+
+    /**
+     * Snoops the investigate→plan handoff (Python investigator → Python planner) to
+     * persist the investigation result on the job, so a human-approved escalation can
+     * later resume planning with the real findings instead of fabricated context.
+     * Uses a distinct consumer group so the planner still receives the same message.
+     */
+    @KafkaListener(topics = "job.events.plan", groupId = "orchestrator-plan-snoop-group")
+    @Transactional
+    public void persistInvestigationResult(Map<String, Object> event) {
+        String jobIdStr = (String) event.get("job_id");
+        Object investigation = event.get("investigation_result");
+        if (jobIdStr == null || investigation == null) return;
+
+        try {
+            String json = objectMapper.writeValueAsString(investigation);
+            jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
+                job.setInvestigationResult(json);
+                jobRepository.save(job);
+                logger.info("Persisted investigation result for job {}", jobIdStr);
+            });
+        } catch (Exception e) {
+            logger.warn("Could not persist investigation result for job {}: {}", jobIdStr, e.getMessage());
+        }
     }
 
     @KafkaListener(topics = KafkaTopics.FIX_GENERATED, groupId = "orchestrator-group")
@@ -117,11 +150,13 @@ public class OrchestratorService {
         try {
             logger.info("Calling Test Runner API at :8084...");
 
-            // Look up the repo URL from the job record so the test runner can clone it
+            // Look up the repo URL and root commit from the job record
             final String[] repoUrl = {""};
-            jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job ->
-                repoUrl[0] = job.getRepo()
-            );
+            final String[] rootCommit = {null};
+            jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
+                repoUrl[0] = job.getRepo();
+                rootCommit[0] = job.getRootCommit();
+            });
 
             var testRequest = new java.util.HashMap<String, Object>();
             testRequest.put("jobId",     jobIdStr);
@@ -136,11 +171,13 @@ public class OrchestratorService {
                 logger.info("Tests passed! Publishing to {}...", KafkaTopics.TESTS_PASSED);
                 Map<String, String> testsPassedPayload = new HashMap<>();
                 testsPassedPayload.put("jobId",          jobIdStr);
-                testsPassedPayload.put("rootCommit",     "abcdef");
+                testsPassedPayload.put("rootCommit",     rootCommit[0] != null ? rootCommit[0] : "unknown");
                 testsPassedPayload.put("patch",          event.get("patch"));
                 String targetRepo = event.getOrDefault("targetRepo", "");
                 testsPassedPayload.put("targetRepo",     targetRepo);
                 testsPassedPayload.put("isRegeneration", event.getOrDefault("isRegeneration", "false"));
+                testsPassedPayload.put("qualityScore",   String.valueOf(response.get("qualityScore")));
+                testsPassedPayload.put("coverageDelta",  String.valueOf(response.get("coverageDelta")));
                 kafkaTemplate.send(KafkaTopics.TESTS_PASSED, testsPassedPayload);
             } else {
                 String testLogs = response != null ? String.valueOf(response.get("logs")) : "no response";
@@ -191,8 +228,8 @@ public class OrchestratorService {
             prRequest.put("fixAttempts", 1);
             prRequest.put("testsPassed", 1);
             prRequest.put("testsTotal", 1);
-            prRequest.put("coverageDelta", 0.05);
-            prRequest.put("qualityScore", 0.99);
+            prRequest.put("coverageDelta", parseDoubleOrDefault(event.get("coverageDelta"), 0.0));
+            prRequest.put("qualityScore", parseDoubleOrDefault(event.get("qualityScore"), 1.0));
             prRequest.put("tokenBudgetUsed", 500);
             
             restTemplate.postForObject("http://localhost:8085/pull-request", prRequest, String.class);
@@ -311,5 +348,13 @@ public class OrchestratorService {
             escalation.setStatus("PENDING");
             entityManager.persist(escalation);
         });
+    }
+
+    private double parseDoubleOrDefault(String value, double fallback) {
+        try {
+            return value != null ? Double.parseDouble(value) : fallback;
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 }
