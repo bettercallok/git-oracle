@@ -46,10 +46,22 @@ class InvestigationResult(BaseModel):
     recommended_strategy: str
 
 def get_recent_commits(repo_path: str, files: List[str], max_commits: int = 10) -> str:
-    """Fallback Heuristic: Fetch recent git history for the affected files."""
+    """Fallback Heuristic: Fetch recent git history for the affected files.
+
+    affected_files is currently always empty at the call site (file-level
+    inference isn't implemented yet), which made this silently return "" —
+    the investigator had zero real git history and fully fabricated
+    ranked_causes/commit SHAs on every run (confirmed live). Fall back to
+    the whole repo's recent history so there's at least real signal to
+    reason from until per-file inference exists.
+    """
     try:
         repo = git.Repo(repo_path)
         log_output = []
+        if not files:
+            log_output.append("--- Recent repo-wide history (no specific affected files known yet) ---")
+            log_output.append(repo.git.log('-p', '-n', str(max_commits)))
+            return "\n".join(log_output)
         for file in files:
             # git log -p -n 10 <file>
             log_output.append(f"--- History for {file} ---")
@@ -116,13 +128,21 @@ async def handle_investigate_job(payload: dict):
     job_id = payload.get("job_id", "unknown-job")
     repo_path = payload.get("repo_path", "")
     error_id = payload.get("error_id", "unknown")
-    
-    # In a full system, we'd fetch actual bug description and affected files from DB.
-    # We use some generic values here assuming the system will populate them in future iterations.
+    raw_payload = payload.get("raw_payload")
+
+    # raw_payload carries the real stack trace / webhook body captured by
+    # error-ingestor. Falling back to the generic error_id-only description
+    # when it's absent (e.g. not every ingestion path populates it) rather
+    # than requiring it, but using the real signal whenever it's there —
+    # without it the investigator has nothing but an opaque error_id string
+    # to reason from and reliably hallucinates a plausible-sounding but
+    # wrong root cause (confirmed live, repeatedly).
+    bug_description = raw_payload if raw_payload else f"Error {error_id} reported from ingestor."
+
     request = InvestigationRequest(
         tenant_id="00000000-0000-0000-0000-000000000000",
         repo_path=repo_path,
-        bug_description=f"Error {error_id} reported from ingestor.",
+        bug_description=bug_description,
         affected_files=[], # To be implemented via git diff inference
         job_id=job_id
     )
