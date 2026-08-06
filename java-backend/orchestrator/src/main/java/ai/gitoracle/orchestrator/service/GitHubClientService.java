@@ -34,15 +34,36 @@ public class GitHubClientService {
     private final String privateKeyPath;
 
     public GitHubClientService() {
-        // Look for .env in the github-bot module directory first, then the workspace root
-        Dotenv dotenv = Dotenv.configure()
-                .directory("/Users/omkhatri/Git Oracle/java-backend/github-bot")
-                .ignoreIfMissing()
-                .load();
-        this.appId           = dotenv.get("GITHUB_APP_ID");
-        this.installationId  = dotenv.get("GITHUB_INSTALLATION_ID");
-        this.privateKeyPath  = dotenv.get("GITHUB_PRIVATE_KEY_PATH");
+        // Read github-bot/.env directly rather than via Dotenv.configure(), because
+        // dotenv-java's get() prefers an already-set OS environment variable of the
+        // same name over the file it just loaded. start_local.sh does `set -a; source
+        // .env` on the workspace-root .env before launching this process, so the root
+        // .env's placeholder values (e.g. GITHUB_PRIVATE_KEY_PATH=./secrets/github-app.pem)
+        // were always winning over github-bot/.env's real ones, regardless of which
+        // .directory() this pointed at — confirmed live via the Commit Explorer failing
+        // with "GitHub API error: ./secrets/github-app.pem".
+        java.util.Map<String, String> botEnv = readEnvFile("/Users/omkhatri/Git Oracle/java-backend/github-bot/.env");
+        this.appId           = botEnv.get("GITHUB_APP_ID");
+        this.installationId  = botEnv.get("GITHUB_INSTALLATION_ID");
+        this.privateKeyPath  = botEnv.get("GITHUB_PRIVATE_KEY_PATH");
         logger.info("GitHubClientService initialised for App ID: {}", appId);
+    }
+
+    private static java.util.Map<String, String> readEnvFile(String path) {
+        java.util.Map<String, String> values = new java.util.HashMap<>();
+        try {
+            for (String line : Files.readAllLines(Paths.get(path), StandardCharsets.UTF_8)) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#") || !trimmed.contains("=")) {
+                    continue;
+                }
+                int idx = trimmed.indexOf('=');
+                values.put(trimmed.substring(0, idx).trim(), trimmed.substring(idx + 1).trim());
+            }
+        } catch (java.io.IOException e) {
+            logger.warn("Could not read {}: {}", path, e.getMessage());
+        }
+        return values;
     }
 
     /**
