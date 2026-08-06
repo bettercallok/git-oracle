@@ -54,6 +54,9 @@ public class TestRunnerController {
 
         try {
             // ── Step 2: Clone ──────────────────────────────────────────────────
+            // Defensively clear any stale workspace left behind by a prior run that
+            // was killed before reaching the finally block's cleanup.
+            deleteDirectory(workDir);
             Files.createDirectories(workDir);
             logger.info("Cloning {} into {}", repoUrl, workDir);
 
