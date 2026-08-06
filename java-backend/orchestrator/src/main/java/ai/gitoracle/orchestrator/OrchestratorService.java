@@ -87,7 +87,12 @@ public class OrchestratorService {
         investigatorPayload.put("repo_url", event.getRepoUrl());
         investigatorPayload.put("repo_path", repoPath);
         investigatorPayload.put("error_id", event.getErrorId());
-        
+        // The actual error detail (stack trace / webhook payload) captured by error-ingestor
+        // was previously dropped here — the investigator only ever saw a generic templated
+        // string mentioning the error_id, never the real error. Confirmed live: with no real
+        // signal, it hallucinated plausible-sounding but wrong root causes on every test run.
+        investigatorPayload.put("raw_payload", event.getRawPayload());
+
         kafkaTemplate.send("job.events.investigate", investigatorPayload);
     }
 
@@ -134,9 +139,17 @@ public class OrchestratorService {
             logger.info("Calling Guardrails Agent at :9006...");
             var guardrailsRequest = new java.util.HashMap<String, Object>();
             guardrailsRequest.put("diff", event.get("patch"));
-            // In a full implementation, we'd pass the specific allowed_files from the plan.
-            // Empty list means we rely on the guardrails global blocklist (e.g., .env, pom.xml).
-            guardrailsRequest.put("allowed_files", java.util.Collections.emptyList());
+            // patch_scanner.scan_patch computes unauthorized = touched_files - allowed_files,
+            // so an empty allowed_files list means EVERY touched file is rejected — this
+            // silently rejected every fix ever generated, confirmed live: "Patch touches
+            // unauthorized files: ['...UserService.java']" for a patch that only touched
+            // the file it was specifically asked to fix. filesModified now carries the
+            // fixer's actual edited file(s), comma-joined (Map<String,String> event).
+            String filesModified = event.getOrDefault("filesModified", "");
+            java.util.List<String> allowedFiles = filesModified.isBlank()
+                ? java.util.Collections.emptyList()
+                : java.util.Arrays.asList(filesModified.split(","));
+            guardrailsRequest.put("allowed_files", allowedFiles);
 
             restTemplate.postForObject("http://localhost:9006/validate/patch", guardrailsRequest, Map.class);
             logger.info("Guardrails validation passed.");
