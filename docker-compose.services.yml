@@ -1,0 +1,133 @@
+# ============================================================
+# GitOracle — Java application services docker-compose
+# Builds and runs the Spring Boot microservices against the
+# infra stack started by docker-compose.infra.yml.
+#
+# Usage:
+#   docker compose -f docker-compose.infra.yml up -d      # start infra first
+#   docker compose -f docker-compose.services.yml up -d --build
+# ============================================================
+
+name: git-oracle-services
+
+networks:
+  git-oracle-net:
+    external: true
+    name: git-oracle-net
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-java-env: &java-env
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: ${POSTGRES_DB:-gitOracle}
+  POSTGRES_USER: ${POSTGRES_USER:-gitOracle}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+  KAFKA_HOST: kafka
+  KAFKA_PORT: 9094
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9094
+  NEO4J_HOST: neo4j
+  NEO4J_PORT: 7687
+  NEO4J_USER: neo4j
+  NEO4J_PASSWORD: ${POSTGRES_PASSWORD}
+
+services:
+
+  orchestrator:
+    build:
+      context: ./java-backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: orchestrator
+    container_name: git-oracle-orchestrator
+    restart: unless-stopped
+    networks: [ git-oracle-net ]
+    ports:
+      - "8083:8083"
+    environment:
+      <<: *java-env
+    logging: *default-logging
+
+  api-gateway:
+    build:
+      context: ./java-backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: api-gateway
+    container_name: git-oracle-api-gateway
+    restart: unless-stopped
+    networks: [ git-oracle-net ]
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *java-env
+      GITORACLE_API_KEY: ${GITORACLE_API_KEY:-}
+    logging: *default-logging
+
+  error-ingestor:
+    build:
+      context: ./java-backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: error-ingestor
+    container_name: git-oracle-error-ingestor
+    restart: unless-stopped
+    networks: [ git-oracle-net ]
+    ports:
+      - "8081:8081"
+    environment:
+      <<: *java-env
+    logging: *default-logging
+
+  git-forensics:
+    build:
+      context: ./java-backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: git-forensics
+    container_name: git-oracle-git-forensics
+    restart: unless-stopped
+    networks: [ git-oracle-net ]
+    ports:
+      - "8082:8082"
+    environment:
+      <<: *java-env
+    logging: *default-logging
+
+  github-bot:
+    build:
+      context: ./java-backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: github-bot
+    container_name: git-oracle-github-bot
+    restart: unless-stopped
+    networks: [ git-oracle-net ]
+    ports:
+      - "8085:8085"
+    environment:
+      <<: *java-env
+    logging: *default-logging
+
+  test-runner:
+    build:
+      context: ./java-backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: test-runner
+    container_name: git-oracle-test-runner
+    restart: unless-stopped
+    networks: [ git-oracle-net ]
+    ports:
+      - "8084:8084"
+    environment:
+      <<: *java-env
+    # Test-runner shells out to `docker run` to sandbox test execution,
+    # so it needs access to the host's Docker daemon.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    logging: *default-logging
