@@ -35,7 +35,14 @@ public class AgentJob {
     @Column(name = "root_commit")
     private String rootCommit;
 
-    @Column(name = "fix_patch")
+    // TEXT, not the default varchar(255): this holds a full unified diff, which
+    // exceeds 255 chars for all but the most trivial patch. Persisting it against
+    // the default column type failed with "value too long for type character
+    // varying(255)", which rolled back the whole handleFixGenerated transaction —
+    // so the job never left QUEUED — and threw out of the Kafka listener, which
+    // then burned its 10 retries and discarded the event, stranding the job
+    // permanently. Confirmed live on eval case1_npe (job 6e08cd53).
+    @Column(name = "fix_patch", columnDefinition = "TEXT")
     private String fixPatch;
 
     @Column(name = "pr_url")

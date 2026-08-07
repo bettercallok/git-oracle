@@ -247,7 +247,14 @@ public class DashboardController {
         } else {
             eval.setAvgLatencyMs(0);
         }
-        
+
+        Object casesObj = request.get("casesTotal");
+        if (casesObj instanceof Number) {
+            eval.setCasesTotal(((Number) casesObj).intValue());
+        } else {
+            eval.setCasesTotal(0);
+        }
+
         entityManager.persist(eval);
         return ResponseEntity.ok(eval);
     }

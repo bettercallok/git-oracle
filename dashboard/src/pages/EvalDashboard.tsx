@@ -34,7 +34,18 @@ interface EvalRun {
   goldenDatasetVersion: string;
   accuracy: number;
   avgLatencyMs: number;
+  casesTotal: number;
   createdAt: string;
+}
+
+/** Counts runs that scored worse than the run immediately before them.
+ *  `runs` arrives newest-first, so compare each entry against its successor. */
+function countRegressions(runs: EvalRun[]): number {
+  let regressions = 0;
+  for (let i = 0; i < runs.length - 1; i++) {
+    if (runs[i].accuracy < runs[i + 1].accuracy) regressions++;
+  }
+  return regressions;
 }
 
 const fetchEvals = async (): Promise<EvalRun[]> => {
@@ -54,12 +65,27 @@ const fetchPrompts = async (): Promise<PromptVersion[]> => {
   ];
 };
 
+// PLACEHOLDER — not measured. Nothing in the system persists PR outcomes yet:
+// github-bot's PrOutcomeListener consumes a "github-pr-events" topic that no
+// producer ever publishes to, and FeedbackService only logs. Until a pr_outcome
+// table and the GitHub pull_request webhook exist, these are illustrative shape
+// only and are labelled as such in the UI rather than passed off as real.
 const FEEDBACK = [
   { label: 'Merged', pct: 72, color: 'var(--success)' },
   { label: 'Approved', pct: 18, color: 'var(--info)' },
   { label: 'Rejected', pct: 7, color: 'var(--warning)' },
   { label: 'Reverted', pct: 3, color: 'var(--danger)' },
 ];
+
+const PLACEHOLDER_BADGE = (
+  <span
+    className="badge"
+    style={{ background: 'var(--border-strong)', color: 'var(--text-muted)', fontSize: '0.65rem', marginLeft: 8 }}
+    title="Illustrative only — no PR outcome tracking exists yet"
+  >
+    SAMPLE DATA
+  </span>
+);
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -84,8 +110,15 @@ export default function EvalDashboard() {
 
   const latestAccuracy = evals.length > 0 ? evals[0].accuracy * 100 : 0;
   const accuracy = useNumberTicker(latestAccuracy, 1000);
-  const cases = useNumberTicker(50, 1000);
-  const mergeRate = useNumberTicker(92, 1000);
+
+  // Both of these were hardcoded (50 cases, 92% merge rate) and bore no relation
+  // to anything the system had actually measured. Eval Cases now reports the case
+  // count the most recent run genuinely covered; regressions are derived from the
+  // accuracy history rather than asserted.
+  const RECENT_WINDOW = 6;
+  const recentRuns = evals.slice(0, RECENT_WINDOW);
+  const cases = useNumberTicker(evals.length > 0 ? (evals[0].casesTotal ?? 0) : 0, 1000);
+  const regressions = countRegressions(recentRuns);
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
@@ -108,15 +141,23 @@ export default function EvalDashboard() {
             <div className="card">
               <div className="stat-label">Eval Cases</div>
               <div className="stat-value">{cases}</div>
+              <div className="stat-subtitle">in latest run</div>
             </div>
             <div className="card">
-              <div className="stat-label">PR Merge Rate</div>
-              <div className="stat-value" style={{ color: 'var(--success)' }}>{mergeRate}%</div>
+              <div className="stat-label">Avg Latency</div>
+              <div className="stat-value">
+                {evals.length > 0 ? `${(evals[0].avgLatencyMs / 1000).toFixed(1)}s` : '—'}
+              </div>
+              <div className="stat-subtitle">per case</div>
             </div>
             <div className="card">
               <div className="stat-label">Regressions</div>
-              <div className="stat-value" style={{ color: 'var(--danger)' }}>1</div>
-              <div className="stat-subtitle">in last 6 runs</div>
+              <div className="stat-value" style={{ color: regressions > 0 ? 'var(--danger)' : 'var(--text-primary)' }}>
+                {regressions}
+              </div>
+              <div className="stat-subtitle">
+                {recentRuns.length > 1 ? `in last ${recentRuns.length} runs` : 'need 2+ runs'}
+              </div>
             </div>
           </motion.div>
 
@@ -144,7 +185,9 @@ export default function EvalDashboard() {
             </div>
 
             <div className="card">
-              <h2 style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)', marginBottom: 20 }}>PR Feedback</h2>
+              <h2 style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)', marginBottom: 20 }}>
+                PR Feedback{PLACEHOLDER_BADGE}
+              </h2>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 6 }}>
                 {FEEDBACK.map((item, i) => (
                   <div key={item.label}>
@@ -168,7 +211,9 @@ export default function EvalDashboard() {
 
           <motion.div variants={itemVariants} className="table-container">
             <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-subtle)' }}>
-              <h2 style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-primary)' }}>Prompt Versions</h2>
+              <h2 style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-primary)' }}>
+                Prompt Versions{PLACEHOLDER_BADGE}
+              </h2>
             </div>
             <table className="table">
               <thead>

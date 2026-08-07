@@ -129,9 +129,17 @@ public class OrchestratorService {
         String jobIdStr = event.get("jobId");
         logger.info("Orchestrator received FIX_GENERATED event for job: {}", jobIdStr);
         
-        // Update state
+        // Update state, and persist the patch itself. AgentJob.fixPatch existed but
+        // setFixPatch() was never called anywhere, so every job reported fixPatch=null
+        // — which silently broke the eval harness, whose LLM judge grades the agent's
+        // patch against the golden fix and therefore always scored 0 against an empty
+        // string. It also left the dashboard unable to ever show what was changed.
         jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
             job.setState("TESTING");
+            String patch = event.get("patch");
+            if (patch != null && !patch.isBlank()) {
+                job.setFixPatch(patch);
+            }
             jobRepository.save(job);
         });
 
