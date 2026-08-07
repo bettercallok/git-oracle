@@ -412,7 +412,13 @@ async def handle_fix_job(payload: dict):
             await producer.publish("job-escalated", {
                 "jobId": job_id,
                 "reason": result.escalation_report or "Fixer Agent exhausted all attempts and could not fix the bug.",
-                "confidenceScore": 0.0
+                # Was hardcoded 0.0 regardless of the actual plan/investigation
+                # confidence — confirmed live: every row in the Escalation Queue
+                # showed 0.0 even when the underlying investigation had a real
+                # confidence_score of 0.7-1.0, making the "Avg Confidence" stat
+                # on that page permanently meaningless. Use the planner's own
+                # confidence in what it asked the fixer to do.
+                "confidenceScore": request.plan.confidence
             })
             logger.info(f"Published job-escalated for job {job_id}")
     except Exception as e:
