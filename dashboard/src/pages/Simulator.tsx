@@ -1,6 +1,12 @@
 import { useState } from 'react';
 import { TerminalSquare, Play, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { apiClient } from '../api/client';
+
+/** The webhook endpoints live at the gateway root (/webhook/**), not under the
+ *  /api/v1 prefix apiClient is based at — so derive the gateway origin from the
+ *  same configured base URL instead of hardcoding one. */
+const WEBHOOK_URL = `${(apiClient.defaults.baseURL || '').replace(/\/api\/v1\/?$/, '')}/webhook/github`;
 
 const defaultPayload = `{
   "action": "completed",
@@ -27,28 +33,20 @@ export default function Simulator() {
     try {
       // Validate JSON first
       const parsed = JSON.parse(payload);
-      
-      const res = await fetch('http://localhost:8080/webhook/github', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Tenant-ID': '00000000-0000-0000-0000-000000000000'
-        },
-        body: JSON.stringify(parsed)
-      });
-      
-      const text = await res.text();
-      let data = null;
-      try {
-        data = JSON.parse(text);
-      } catch (e) {
-        data = text;
-      }
-      
-      setResponse({ status: res.status, data });
+
+      // Go through apiClient rather than a bare fetch: the gateway's
+      // TenantContextFilter requires X-API-Key on every non-exempt path, and
+      // /webhook/** is not exempt. The raw fetch sent no key, so every click
+      // silently 401'd and the button appeared to do nothing at all.
+      const res = await apiClient.post(WEBHOOK_URL, parsed);
+      setResponse({ status: res.status, data: res.data });
     } catch (err: any) {
       if (err instanceof SyntaxError) {
         setError('Invalid JSON payload');
+      } else if (err.response) {
+        // Surface the server's actual status/body instead of swallowing it —
+        // an auth or routing failure should be visible in the Response panel.
+        setResponse({ status: err.response.status, data: err.response.data });
       } else {
         setError(err.message || 'Failed to connect to API Gateway');
       }
