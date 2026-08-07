@@ -56,22 +56,45 @@ class PromptVersion(BaseModel):
 
 @app.get("/prompts/{agent}/{key}")
 async def get_prompt(agent: str, key: str) -> str:
+    """Returns just the prompt text (unchanged contract for existing callers)."""
+    content, _version = await _resolve_active_prompt(agent, key)
+    return content
+
+
+@app.get("/prompts/{agent}/{key}/active")
+async def get_active_prompt(agent: str, key: str) -> dict:
+    """Returns the prompt text *and* the version number that produced it.
+
+    Callers need the version to attribute a job's outcome and token spend back to
+    the specific prompt revision that generated it — without this, per-version
+    performance can't be measured at all.
+    """
+    content, version = await _resolve_active_prompt(agent, key)
+    return {"content": content, "version": version}
+
+
+async def _resolve_active_prompt(agent: str, key: str) -> tuple[str, int | None]:
     cache_key = f"prompt:{agent}:{key}"
     cached = await redis_client.get(cache_key)
     if cached:
-        return cached.decode("utf-8")
-    
+        # Cache the version alongside the content so a cache hit can still
+        # attribute usage; older cache entries without it simply miss on version.
+        cached_version = await redis_client.get(f"{cache_key}:version")
+        return cached.decode("utf-8"), int(cached_version) if cached_version else None
+
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT content FROM prompt_version WHERE agent_name=$1 AND prompt_key=$2 AND is_active=true",
+            "SELECT content, version FROM prompt_version "
+            "WHERE agent_name=$1 AND prompt_key=$2 AND is_active=true",
             agent, key
         )
         if not row:
             raise HTTPException(status_code=404, detail="Active prompt not found")
-            
-        content = row["content"]
+
+        content, version = row["content"], row["version"]
         await redis_client.set(cache_key, content, ex=300)  # 5 min cache
-        return content
+        await redis_client.set(f"{cache_key}:version", str(version), ex=300)
+        return content, version
 
 @app.post("/prompts/{agent}/{key}/version")
 async def create_version(agent: str, key: str, prompt: PromptVersion):
@@ -105,9 +128,10 @@ async def activate_version(agent: str, key: str, version: int):
         if result == "UPDATE 0":
             raise HTTPException(status_code=404, detail="Version not found")
             
-        # Hot-reload: invalidate cache
+        # Hot-reload: invalidate cache. Must drop the version key too, or callers
+        # keep attributing their work to the previously active version.
         cache_key = f"prompt:{agent}:{key}"
-        await redis_client.delete(cache_key)
+        await redis_client.delete(cache_key, f"{cache_key}:version")
         
     return {"status": "activated", "version": version}
 

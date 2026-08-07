@@ -11,7 +11,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
 from shared.memory import SemanticMemory
-from shared.prompt_registry import fetch_prompt
+from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -77,11 +77,12 @@ async def create_plan(request: PlannerRequest):
         architectural_rules = "No specific architectural rules found."
 
     # 2. Fetch base prompt from the dynamic prompt registry, then formulate the full prompt
-    base_prompt = await fetch_prompt(
+    base_prompt, prompt_version = await fetch_prompt_versioned(
         "planner",
         "You are the GitOracle Planner Agent. An Investigator Agent has found the likely root cause of a bug. "
         "Your job is to generate a strict, constrained action plan for the Fixer Agent to execute."
     )
+    await report_prompt_version(request.job_id, "planner", prompt_version)
     prompt_text = f"""
 {base_prompt}
 

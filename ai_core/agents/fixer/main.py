@@ -15,7 +15,7 @@ import git
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
 from shared.memory import AgentMemory
-from shared.prompt_registry import fetch_prompt
+from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -236,11 +236,15 @@ async def execute_fix(request: FixerRequest):
 {request.human_instructions}
 Your patch MUST implement this instruction. All other guidelines are secondary.
 """
-        base_prompt = await fetch_prompt(
+        base_prompt, prompt_version = await fetch_prompt_versioned(
             "fixer",
             "You are the GitOracle Fixer Agent. A Planner Agent has given you a strict blueprint to fix a bug. "
             "You MUST write a patch (unified diff) that fixes the bug according to the plan."
         )
+        # Attribute this job to the prompt revision that produced its patch, so
+        # per-version accuracy can be measured rather than asserted. Idempotent
+        # server-side, so repeating it across ReAct attempts is harmless.
+        await report_prompt_version(request.job_id, "fixer", prompt_version)
         prompt_text = f"""
 {base_prompt}
 

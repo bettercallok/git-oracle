@@ -23,9 +23,13 @@ function useNumberTicker(target: number, duration: number = 800) {
 
 interface PromptVersion {
   agent: string;
-  version: string;
-  accuracy: number;
-  avgTokens: number;
+  version: number;
+  jobs: number;
+  successes: number;
+  /** null when the version has no finished jobs yet — rendered as "—". */
+  accuracy: number | null;
+  /** null when no finished job on this version recorded token usage. */
+  avgTokens: number | null;
   active: boolean;
 }
 
@@ -53,16 +57,11 @@ const fetchEvals = async (): Promise<EvalRun[]> => {
   return data;
 };
 
-// Simulated fetch for prompts since we don't have a prompt registry DB yet
+/** Measured per-version performance, joined server-side from the jobs that
+ *  actually ran on each prompt revision. */
 const fetchPrompts = async (): Promise<PromptVersion[]> => {
-  return [
-    { agent: 'Planner', version: 'v3.2', accuracy: 0.94, avgTokens: 1850, active: true },
-    { agent: 'Planner', version: 'v3.1', accuracy: 0.91, avgTokens: 2100, active: false },
-    { agent: 'Planner', version: 'v3.0', accuracy: 0.87, avgTokens: 2400, active: false },
-    { agent: 'Fixer', version: 'v2.5', accuracy: 0.89, avgTokens: 1200, active: true },
-    { agent: 'Fixer', version: 'v2.4', accuracy: 0.85, avgTokens: 1450, active: false },
-    { agent: 'Fixer', version: 'v2.3', accuracy: 0.82, avgTokens: 1600, active: false },
-  ];
+  const { data } = await apiClient.get('/prompts/stats');
+  return data;
 };
 
 interface PrOutcomeStats {
@@ -85,15 +84,6 @@ const FEEDBACK_ROWS: { key: string; label: string; color: string }[] = [
   { key: 'REVERTED', label: 'Reverted', color: 'var(--danger)' },
 ];
 
-const PLACEHOLDER_BADGE = (
-  <span
-    className="badge"
-    style={{ background: 'var(--border-strong)', color: 'var(--text-muted)', fontSize: '0.65rem', marginLeft: 8 }}
-    title="Illustrative only — prompt performance is not measured per version yet"
-  >
-    SAMPLE DATA
-  </span>
-);
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -244,15 +234,22 @@ export default function EvalDashboard() {
           <motion.div variants={itemVariants} className="table-container">
             <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-subtle)' }}>
               <h2 style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-primary)' }}>
-                Prompt Versions{PLACEHOLDER_BADGE}
+                Prompt Versions
               </h2>
             </div>
+            {prompts.length === 0 && (
+              <p style={{ padding: '18px 24px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                No finished jobs attributed to a prompt version yet. Run a job and this
+                fills in from real outcomes.
+              </p>
+            )}
             <table className="table">
               <thead>
                 <tr>
                   <th>Agent</th>
                   <th>Version</th>
                   <th>Accuracy</th>
+                  <th>Jobs</th>
                   <th>Avg Tokens</th>
                   <th>Status</th>
                 </tr>
@@ -260,12 +257,24 @@ export default function EvalDashboard() {
               <tbody>
                 {prompts.map((p) => (
                   <tr key={`${p.agent}-${p.version}`}>
-                    <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{p.agent}</td>
-                    <td className="mono">{p.version}</td>
-                    <td className="mono" style={{ color: p.accuracy >= 0.9 ? 'var(--success)' : 'var(--warning)' }}>
-                      {(p.accuracy * 100).toFixed(0)}%
+                    <td style={{ fontWeight: 500, color: 'var(--text-primary)', textTransform: 'capitalize' }}>{p.agent}</td>
+                    <td className="mono">v{p.version}</td>
+                    <td
+                      className="mono"
+                      style={{
+                        color: p.accuracy === null
+                          ? 'var(--text-muted)'
+                          : p.accuracy >= 0.9 ? 'var(--success)' : 'var(--warning)'
+                      }}
+                    >
+                      {p.accuracy === null ? '—' : `${(p.accuracy * 100).toFixed(0)}%`}
                     </td>
-                    <td className="mono">{p.avgTokens.toLocaleString()}</td>
+                    <td className="mono" style={{ color: 'var(--text-muted)' }}>
+                      {p.successes}/{p.jobs}
+                    </td>
+                    <td className="mono">
+                      {p.avgTokens === null ? '—' : p.avgTokens.toLocaleString()}
+                    </td>
                     <td>
                       {p.active
                         ? <span className="badge badge-success">ACTIVE</span>

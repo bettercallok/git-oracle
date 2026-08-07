@@ -56,8 +56,13 @@ async def _report_tokens(job_id: str, tokens_used: int, agent_name: str) -> None
     """Report token consumption to the Orchestrator budget endpoint (non-blocking)."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
+            # BudgetController is mapped at /api/v1/budget, not /budget. This
+            # posted to the wrong path and 404'd on every single LLM call —
+            # silently, because the failure is only a warning. Confirmed live:
+            # token_budget_used was 0 across all 29 jobs in the database, so every
+            # token-based figure in the system was structurally always zero.
             await client.post(
-                f"{ORCHESTRATOR_URL}/budget/{job_id}/record",
+                f"{ORCHESTRATOR_URL}/api/v1/budget/{job_id}/record",
                 json={"tokensUsed": tokens_used, "agentName": agent_name}
             )
     except Exception as e:

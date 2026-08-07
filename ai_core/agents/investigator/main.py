@@ -10,7 +10,7 @@ import sys
 # Ensure ai_core modules can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
-from shared.prompt_registry import fetch_prompt
+from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -80,10 +80,11 @@ async def investigate(request: InvestigationRequest):
     git_history = get_recent_commits(request.repo_path, request.affected_files)
     
     # 2. Fetch base prompt from the dynamic prompt registry, then formulate the full prompt
-    base_prompt = await fetch_prompt(
+    base_prompt, prompt_version = await fetch_prompt_versioned(
         "investigator",
         "You are the GitOracle Investigator Agent. A bug has been reported."
     )
+    await report_prompt_version(request.job_id, "investigator", prompt_version)
     prompt_text = f"""
 {base_prompt}
 Bug Description: {request.bug_description}

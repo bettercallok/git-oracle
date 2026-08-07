@@ -35,13 +35,16 @@ public class DashboardController {
     private final EntityManager entityManager;
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository;
+    private final ai.gitoracle.orchestrator.repository.JobPromptVersionRepository jobPromptVersionRepository;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     public DashboardController(EntityManager entityManager, KafkaTemplate<String, Object> kafkaTemplate,
-                               ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository) {
+                               ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository,
+                               ai.gitoracle.orchestrator.repository.JobPromptVersionRepository jobPromptVersionRepository) {
         this.entityManager = entityManager;
         this.kafkaTemplate = kafkaTemplate;
         this.prOutcomeRepository = prOutcomeRepository;
+        this.jobPromptVersionRepository = jobPromptVersionRepository;
     }
 
     @GetMapping("/jobs")
@@ -287,6 +290,62 @@ public class DashboardController {
         body.put("total", total);
         body.put("mergeRate", total == 0 ? null : (double) counts.get("MERGED") / total);
         return ResponseEntity.ok(body);
+    }
+
+    /**
+     * Agents call this after resolving their system prompt, so the version they ran
+     * on can be attributed to the job's eventual outcome. Idempotent per
+     * (job, agent) — an agent that retries within a job still used one version.
+     */
+    @PostMapping("/jobs/{jobId}/prompt-version")
+    public ResponseEntity<Void> recordPromptVersion(
+            @PathVariable UUID jobId,
+            @RequestBody Map<String, Object> request) {
+
+        String agentName = (String) request.get("agentName");
+        Object versionObj = request.get("version");
+        if (agentName == null || !(versionObj instanceof Number)) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        if (jobPromptVersionRepository.findByJobIdAndAgentName(jobId, agentName).isPresent()) {
+            return ResponseEntity.ok().build();
+        }
+
+        ai.gitoracle.core.entity.JobPromptVersion row = new ai.gitoracle.core.entity.JobPromptVersion();
+        row.setId(UUID.randomUUID());
+        row.setJobId(jobId);
+        row.setAgentName(agentName);
+        row.setPromptVersion(((Number) versionObj).intValue());
+        jobPromptVersionRepository.save(row);
+        return ResponseEntity.ok().build();
+    }
+
+    /**
+     * Measured per-prompt-version performance, replacing the dashboard's previously
+     * hardcoded Prompt Versions table.
+     *
+     * accuracy is null (not 0) when a version has no finished jobs yet, and
+     * avgTokens is null when nothing recorded token usage — the UI renders those as
+     * "—" so an unmeasured version is visibly distinct from one that measured zero.
+     */
+    @GetMapping("/prompts/stats")
+    public ResponseEntity<List<Map<String, Object>>> getPromptStats() {
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (Object[] r : jobPromptVersionRepository.aggregatePerformance()) {
+            long jobs = ((Number) r[2]).longValue();
+            long successes = ((Number) r[3]).longValue();
+            Map<String, Object> row = new HashMap<>();
+            row.put("agent", r[0]);
+            row.put("version", ((Number) r[1]).intValue());
+            row.put("jobs", jobs);
+            row.put("successes", successes);
+            row.put("accuracy", jobs == 0 ? null : (double) successes / jobs);
+            row.put("avgTokens", r[4] == null ? null : ((Number) r[4]).longValue());
+            row.put("active", Boolean.TRUE.equals(r[5]));
+            out.add(row);
+        }
+        return ResponseEntity.ok(out);
     }
 
     @GetMapping("/evals")
