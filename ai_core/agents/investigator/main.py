@@ -130,6 +130,8 @@ async def handle_investigate_job(payload: dict):
     repo_path = payload.get("repo_path", "")
     error_id = payload.get("error_id", "unknown")
     raw_payload = payload.get("raw_payload")
+    human_instructions = payload.get("human_instructions") or ""
+    target_repo = payload.get("target_repo") or ""
 
     # raw_payload carries the real stack trace / webhook body captured by
     # error-ingestor. Falling back to the generic error_id-only description
@@ -138,7 +140,17 @@ async def handle_investigate_job(payload: dict):
     # without it the investigator has nothing but an opaque error_id string
     # to reason from and reliably hallucinates a plausible-sounding but
     # wrong root cause (confirmed live, repeatedly).
-    bug_description = raw_payload if raw_payload else f"Error {error_id} reported from ingestor."
+    #
+    # human_instructions is a different kind of signal: observed evidence vs.
+    # stated intent. Both are useful to an investigation, so use whichever are
+    # present rather than picking one — deduped, because a dashboard-triggered
+    # job sets both fields to the same text.
+    _parts = []
+    if raw_payload:
+        _parts.append(str(raw_payload))
+    if human_instructions and human_instructions != raw_payload:
+        _parts.append(f"User instruction: {human_instructions}")
+    bug_description = "\n\n".join(_parts) if _parts else f"Error {error_id} reported from ingestor."
 
     request = InvestigationRequest(
         tenant_id="00000000-0000-0000-0000-000000000000",
@@ -160,7 +172,10 @@ async def handle_investigate_job(payload: dict):
             "repo_url": payload.get("repo_url", ""),
             "repo_path": repo_path,
             "error_id": error_id,
-            "investigation_result": investigation_result.dict()
+            "investigation_result": investigation_result.dict(),
+            # Pass-through so the Fixer, two hops downstream, still receives them.
+            "human_instructions": human_instructions,
+            "target_repo": target_repo,
         }
         await producer.publish("job.events.plan", plan_payload)
         logger.info(f"Published job.events.plan for job {job_id}")

@@ -135,6 +135,8 @@ async def handle_planner_job(payload: dict):
     job_id = payload.get("job_id", "unknown-job")
     repo_path = payload.get("repo_path", "")
     error_id = payload.get("error_id", "unknown")
+    human_instructions = payload.get("human_instructions") or ""
+    target_repo = payload.get("target_repo") or ""
     
     # 2. Extract Investigation Result from payload
     investigation_dict = payload.get("investigation_result", {})
@@ -151,10 +153,22 @@ async def handle_planner_job(payload: dict):
             recommended_strategy="surgical_patch"
         )
     
+    # The bug description was hardcoded to a generic "Error <id> occurred in the
+    # system." string, which told the planner nothing it couldn't already infer from
+    # the investigation narrative — and actively discarded the user's own words on
+    # dashboard-triggered jobs. Prefer the explicit instruction, then the
+    # investigation's narrative, and only then the generic fallback.
+    if human_instructions:
+        bug_description = human_instructions
+    elif investigation.narrative:
+        bug_description = investigation.narrative
+    else:
+        bug_description = f"Error {error_id} occurred in the system."
+
     request = PlannerRequest(
         tenant_id="00000000-0000-0000-0000-000000000000",
         repo_path=repo_path,
-        bug_description=f"Error {error_id} occurred in the system.",
+        bug_description=bug_description,
         investigation_result=investigation,
         job_id=job_id
     )
@@ -170,7 +184,12 @@ async def handle_planner_job(payload: dict):
             "job_id": job_id,
             "repo_url": payload.get("repo_url", ""),
             "repo_path": repo_path,
-            "plan": plan.dict()
+            "plan": plan.dict(),
+            # Final hop: the Fixer reads human_instructions and injects it as a
+            # highest-priority constraint, and target_repo determines which GitHub
+            # repo the PR is opened against.
+            "human_instructions": human_instructions,
+            "target_repo": target_repo,
         }
         await producer.publish("job.events.fix", fix_payload)
         logger.info(f"Published job.events.fix for job {job_id}")

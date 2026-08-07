@@ -155,6 +155,14 @@ public class OrchestratorService {
         // string mentioning the error_id, never the real error. Confirmed live: with no real
         // signal, it hallucinated plausible-sounding but wrong root causes on every test run.
         investigatorPayload.put("raw_payload", event.getRawPayload());
+        // Carried the length of the chain (investigate → plan → fix) so a job that
+        // originated from an explicit human request still reaches the Fixer with that
+        // request intact. Without this the instruction is silently dropped the moment
+        // a job is routed through the agents rather than straight to the Fixer.
+        investigatorPayload.put("human_instructions",
+            event.getHumanInstructions() != null ? event.getHumanInstructions() : "");
+        investigatorPayload.put("target_repo",
+            event.getTargetRepo() != null ? event.getTargetRepo() : "");
 
         kafkaTemplate.send("job.events.investigate", investigatorPayload);
     }
