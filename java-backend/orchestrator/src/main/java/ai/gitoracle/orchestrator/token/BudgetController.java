@@ -14,9 +14,11 @@ import java.util.UUID;
  * Python agents call these endpoints after every LLM call
  * to keep the Orchestrator informed of their token consumption.
  */
+// No @CrossOrigin: reached only through the API Gateway, which already sets
+// Access-Control-Allow-Origin globally — a duplicate here breaks CORS entirely
+// (see DashboardController for the full explanation).
 @RestController
 @RequestMapping("/api/v1/budget")
-@CrossOrigin(origins = "${gitoracle.allowed-origins}", allowedHeaders = "*", methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.OPTIONS})
 @RequiredArgsConstructor
 @Slf4j
 public class BudgetController {

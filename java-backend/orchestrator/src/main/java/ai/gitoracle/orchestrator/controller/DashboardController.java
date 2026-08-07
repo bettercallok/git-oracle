@@ -17,10 +17,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+// No @CrossOrigin here: the dashboard reaches this exclusively through the API
+// Gateway (:8080), whose globalcors config already sets Access-Control-Allow-Origin
+// for every /api/v1/** route. Confirmed live: with both layers setting it, the
+// header arrived duplicated ("http://localhost:5173, http://localhost:5173"),
+// which is spec-invalid and browsers reject outright — every dashboard page that
+// hit this controller through the gateway failed with a CORS error even though
+// curl (which doesn't enforce CORS) saw a normal 200. Direct callers that bypass
+// the gateway (eval harness, agents) are server-to-server and don't need CORS
+// headers at all.
 @RestController
 @RequestMapping("/api/v1")
 @Transactional
-@CrossOrigin(origins = "${gitoracle.allowed-origins}", allowedHeaders = "*", methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.OPTIONS})
 public class DashboardController {
 
     private static final Logger logger = LoggerFactory.getLogger(DashboardController.class);

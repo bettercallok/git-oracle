@@ -31,10 +31,11 @@ import java.util.stream.StreamSupport;
  *        Fetches the commit diff, then proxies everything to the commit_analyst
  *        Python agent (port 9004) and streams back its answer.
  */
+// No @CrossOrigin: reached only through the API Gateway, which already sets
+// Access-Control-Allow-Origin globally — a duplicate here breaks CORS entirely
+// (see DashboardController for the full explanation).
 @RestController
 @RequestMapping("/api/v1/commits")
-@CrossOrigin(origins = "${gitoracle.allowed-origins}", allowedHeaders = "*",
-        methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.OPTIONS})
 public class CommitController {
 
     private static final Logger logger = LoggerFactory.getLogger(CommitController.class);

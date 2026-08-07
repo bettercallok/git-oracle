@@ -10,9 +10,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+// No @CrossOrigin: reached only through the API Gateway, which already sets
+// Access-Control-Allow-Origin globally — a duplicate here breaks CORS entirely
+// (see DashboardController for the full explanation).
 @RestController
 @RequestMapping("/api/v1/admin")
-@CrossOrigin(origins = "${gitoracle.allowed-origins}", allowedHeaders = "*", methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.OPTIONS})
 public class AdminController {
 
     private static final Logger logger = LoggerFactory.getLogger(AdminController.class);
