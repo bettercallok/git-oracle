@@ -3,6 +3,8 @@ package ai.gitoracle.orchestrator.controller;
 import ai.gitoracle.core.model.postgres.AgentJob;
 import ai.gitoracle.core.entity.Escalation;
 import ai.gitoracle.core.entity.EvalRun;
+import ai.gitoracle.core.kafka.KafkaTopics;
+import ai.gitoracle.core.kafka.event.ErrorIngestedEvent;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.web.bind.annotation.*;
@@ -122,14 +124,34 @@ public class DashboardController {
     }
 
     /**
-     * POST /api/v1/trigger — "Ask GitOracle to fix" from the new FixCommand page.
-     * Accepts a repo URL + issue description, creates a new job and fires the pipeline.
+     * POST /api/v1/trigger — "Ask GitOracle to fix" from the FixCommand page.
+     *
+     * Two routes, selected by the `investigateFirst` flag (default true):
+     *
+     *   investigateFirst=true  → publishes ERROR_INGESTED, so handleErrorIngested
+     *     clones the repo, records HEAD, and runs the real chain:
+     *     investigate → plan → fix. Costs ~4.5k tokens and ~25s.
+     *
+     *   investigateFirst=false → the original shortcut: straight to job.events.fix
+     *     with a synthesised plan. ~900 tokens and ~8s.
+     *
+     * The shortcut is kept deliberately rather than removed. It is genuinely the
+     * right choice when a human has already identified the fix, and it stays usable
+     * when the token budget is tight — the free-tier ceiling is per-minute, and the
+     * full chain costs roughly five times as much per job.
+     *
+     * The shortcut's cost, though, is that it fabricates its plan: strategy
+     * "dashboard_triggered" with an empty affected_files, so the Fixer receives no
+     * file context and no investigation ever runs. That is why root-cause data is
+     * absent on every job that took this path.
      */
     @PostMapping("/trigger")
-    public ResponseEntity<Map<String, String>> triggerFix(@RequestBody Map<String, String> request) {
-        String repoUrl = request.get("repoUrl");
-        String issue   = request.get("issueDescription");
-        String targetRepo = request.getOrDefault("targetRepo", "");
+    public ResponseEntity<Map<String, String>> triggerFix(@RequestBody Map<String, Object> request) {
+        String repoUrl = (String) request.get("repoUrl");
+        String issue   = (String) request.get("issueDescription");
+        String targetRepo = request.get("targetRepo") instanceof String s ? s : "";
+        boolean investigateFirst = !Boolean.FALSE.equals(request.get("investigateFirst"));
+
         if (repoUrl == null || issue == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "repoUrl and issueDescription are required"));
         }
@@ -139,15 +161,45 @@ public class DashboardController {
         job.setState("QUEUED");
         job.setErrorId("dashboard-trigger-" + System.currentTimeMillis());
         job.setCreatedAt(OffsetDateTime.now());
+        job.setRawPayload(null);
         ai.gitoracle.core.model.postgres.Tenant tenant = new ai.gitoracle.core.model.postgres.Tenant();
         tenant.setId(UUID.fromString("00000000-0000-0000-0000-000000000000"));
         job.setTenant(tenant);
         entityManager.persist(job);
         entityManager.flush(); // ensure ID is assigned
 
-        logger.info("Dashboard trigger: new job {} for repo {}", job.getId(), repoUrl);
+        logger.info("Dashboard trigger: new job {} for repo {} (investigateFirst={})",
+                    job.getId(), repoUrl, investigateFirst);
 
-        // Publish directly to fix topic with human instructions
+        if (investigateFirst) {
+            // Re-enter through the same door the Error Ingestor uses, so the clone,
+            // HEAD capture and agent chain all come from one already-tested path
+            // instead of being duplicated here. handleErrorIngested reuses this job
+            // via jobId rather than creating a second row for the same request.
+            ErrorIngestedEvent event = ErrorIngestedEvent.builder()
+                .tenantId(UUID.fromString("00000000-0000-0000-0000-000000000000"))
+                .jobId(job.getId())
+                .errorId(job.getErrorId())
+                .errorType("dashboard_request")
+                .repoUrl(repoUrl)
+                // The user's text is the only evidence available for a job with no
+                // stack trace, so it serves as both the thing to investigate and the
+                // instruction the Fixer must honour.
+                .rawPayload(issue)
+                .humanInstructions(issue)
+                .targetRepo(targetRepo)
+                .build();
+
+            kafkaTemplate.send(KafkaTopics.ERROR_INGESTED, event);
+
+            return ResponseEntity.ok(Map.of(
+                "status", "INVESTIGATING",
+                "mode", "full-pipeline",
+                "jobId", job.getId().toString()
+            ));
+        }
+
+        // Fast path: synthesise a plan and go straight to the Fixer.
         String repoPath = "/tmp/gitoracle-workspaces/" + job.getId();
         Map<String, Object> fixPayload = new HashMap<>();
         fixPayload.put("job_id", job.getId().toString());
@@ -169,6 +221,7 @@ public class DashboardController {
 
         return ResponseEntity.ok(Map.of(
             "status", "QUEUED",
+            "mode", "direct-fix",
             "jobId", job.getId().toString()
         ));
     }

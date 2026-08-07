@@ -180,7 +180,22 @@ async def handle_investigate_job(payload: dict):
         await producer.publish("job.events.plan", plan_payload)
         logger.info(f"Published job.events.plan for job {job_id}")
     except Exception as e:
+        # Escalate rather than just logging. The orchestrator moves a job to
+        # INVESTIGATING before dispatching here and nothing else ever moves it on, so
+        # an investigation that throws leaves the job stranded in a non-terminal state
+        # indefinitely — invisible in the Escalation Queue and never retried.
+        # Confirmed live: three jobs sat in INVESTIGATING after the Groq daily token
+        # quota was exhausted, with no indication anywhere in the UI that they were dead.
         logger.error(f"Investigation event failed for job {job_id}: {e}")
+        try:
+            await KafkaEventProducer().publish("job-escalated", {
+                "jobId": job_id,
+                "reason": f"Investigator Agent failed: {e}",
+                "confidenceScore": 0.0,
+            })
+            logger.info(f"Published job-escalated for job {job_id}")
+        except Exception as publish_error:
+            logger.error(f"Could not escalate job {job_id}: {publish_error}")
 
 @app.on_event("startup")
 async def startup_event():

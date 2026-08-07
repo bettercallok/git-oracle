@@ -31,6 +31,10 @@ export default function FixCommand() {
   const [status, setStatus]         = useState<Status>('idle');
   const [errorMsg, setErrorMsg]     = useState('');
   const [jobId, setJobId]           = useState('');
+  // Default on: run the real Investigator → Planner → Fixer chain. Turning it off
+  // sends the request straight to the Fixer with a synthesised plan — much cheaper
+  // and faster, but no root-cause analysis and no file context for the Fixer.
+  const [investigateFirst, setInvestigateFirst] = useState(true);
 
   // Keep source/target pre-filled with active repo
 
@@ -45,7 +49,8 @@ export default function FixCommand() {
       const { data } = await apiClient.post('/trigger', {
         repoUrl: repoUrl.trim(),
         issueDescription: issueDesc.trim(),
-        targetRepo: targetRepo.trim()
+        targetRepo: targetRepo.trim(),
+        investigateFirst
       });
       setJobId(data.jobId);
       setStatus('success');
@@ -245,6 +250,34 @@ export default function FixCommand() {
                 {errorMsg}
               </motion.div>
             )}
+
+            <motion.div
+              variants={itemVariants}
+              style={{
+                display: 'flex', alignItems: 'flex-start', gap: 10,
+                padding: '14px 16px', marginBottom: 16,
+                border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)',
+                background: 'var(--bg-surface)'
+              }}
+            >
+              <input
+                id="investigate-first"
+                type="checkbox"
+                checked={investigateFirst}
+                onChange={(e) => setInvestigateFirst(e.target.checked)}
+                style={{ marginTop: 3, cursor: 'pointer' }}
+              />
+              <label htmlFor="investigate-first" style={{ cursor: 'pointer', flex: 1 }}>
+                <div style={{ fontSize: '0.88rem', color: 'var(--text-primary)', fontWeight: 500 }}>
+                  Investigate root cause first
+                </div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.5 }}>
+                  {investigateFirst
+                    ? 'Runs the full agent chain — Investigator ranks the commits that caused the bug, Planner scopes the change, then Fixer patches it. Slower (~25s) and uses more tokens.'
+                    : 'Sends your instruction straight to the Fixer with no investigation and no file context. Faster (~8s) and much cheaper — best when you already know what needs changing.'}
+                </div>
+              </label>
+            </motion.div>
 
             <motion.div variants={itemVariants} style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button

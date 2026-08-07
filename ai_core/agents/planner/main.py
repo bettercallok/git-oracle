@@ -194,7 +194,18 @@ async def handle_planner_job(payload: dict):
         await producer.publish("job.events.fix", fix_payload)
         logger.info(f"Published job.events.fix for job {job_id}")
     except Exception as e:
+        # Same gap as the investigator: a job sits in TESTING/INVESTIGATING forever
+        # if planning throws, because nothing downstream ever runs to move it on.
         logger.error(f"Planning failed for job {job_id}: {e}")
+        try:
+            await KafkaEventProducer().publish("job-escalated", {
+                "jobId": job_id,
+                "reason": f"Planner Agent failed: {e}",
+                "confidenceScore": float(getattr(investigation, "confidence_score", 0.0) or 0.0),
+            })
+            logger.info(f"Published job-escalated for job {job_id}")
+        except Exception as publish_error:
+            logger.error(f"Could not escalate job {job_id}: {publish_error}")
 
 @app.on_event("startup")
 async def startup_event():
