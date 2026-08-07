@@ -226,7 +226,24 @@ public class OrchestratorService {
         final String[] repoFullName = new String[1];
         final String[] errorId = new String[1];
 
-        jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
+        // Idempotency guard. Kafka delivers at-least-once, so this listener WILL be
+        // invoked more than once for the same job (a consumer-group rebalance after
+        // an orchestrator restart is enough to redeliver). Confirmed live on job
+        // 7f7f8bd9: PR creation ran three times, the first opened chillcall#6, the
+        // retries failed with "! [rejected] ... (non-fast-forward)" because the
+        // branch already existed, and the failure branch below then overwrote a
+        // genuinely successful job's state with ESCALATED — losing the PR in the UI
+        // and opening duplicate PRs on the target repo. If the PR is already open,
+        // this event is a redelivery: acknowledge and stop.
+        var existing = jobRepository.findById(UUID.fromString(jobIdStr));
+        if (existing.isPresent() && existing.get().getPrUrl() != null
+                && !existing.get().getPrUrl().isBlank()) {
+            logger.info("Job {} already has PR {} — ignoring duplicate TESTS_PASSED delivery.",
+                        jobIdStr, existing.get().getPrUrl());
+            return;
+        }
+
+        existing.ifPresent(job -> {
             repoFullName[0] = job.getRepo().replace("https://github.com/", "").replace(".git", "");
             errorId[0] = job.getErrorId();
         });
@@ -272,20 +289,37 @@ public class OrchestratorService {
                 if (finalSuccess) {
                     job.setState("PR_OPENED");
                     job.setPrUrl(prUrl);
+                    jobRepository.save(job);
                     logger.info("Orchestrator pipeline complete for job: {} — PR: {}", jobIdStr, prUrl);
                 } else {
-                    job.setState("ESCALATED");
-                    logger.error("GitHub Bot failed to open PR for job {}: {}", jobIdStr, prError);
+                    escalateUnlessAlreadySucceeded(job, prError);
                 }
-                jobRepository.save(job);
             });
         } catch (Exception e) {
             logger.error("Failed to contact GitHub Bot. Is it running on port 8085?", e);
-            jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
-                job.setState("ESCALATED");
-                jobRepository.save(job);
-            });
+            jobRepository.findById(UUID.fromString(jobIdStr))
+                .ifPresent(job -> escalateUnlessAlreadySucceeded(job, e.getMessage()));
         }
+    }
+
+    /**
+     * Marks a job ESCALATED because PR creation failed — but never downgrades a job
+     * that already reached PR_OPENED with a real PR URL.
+     *
+     * Without this guard, a duplicate TESTS_PASSED delivery whose PR attempt fails
+     * (branch already pushed by the first delivery → "non-fast-forward") wipes out
+     * the success recorded by the first delivery. Confirmed live on job 7f7f8bd9,
+     * which held a valid PR URL while displaying ESCALATED in the dashboard.
+     */
+    private void escalateUnlessAlreadySucceeded(AgentJob job, String reason) {
+        if (job.getPrUrl() != null && !job.getPrUrl().isBlank()) {
+            logger.warn("PR creation failed for job {} ({}), but it already has PR {} — keeping PR_OPENED.",
+                        job.getId(), reason, job.getPrUrl());
+            return;
+        }
+        job.setState("ESCALATED");
+        jobRepository.save(job);
+        logger.error("GitHub Bot failed to open PR for job {}: {}", job.getId(), reason);
     }
 
     /**
