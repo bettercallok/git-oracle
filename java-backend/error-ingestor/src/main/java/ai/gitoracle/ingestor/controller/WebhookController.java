@@ -1,5 +1,6 @@
 package ai.gitoracle.ingestor.controller;
 
+import ai.gitoracle.core.kafka.KafkaTopics;
 import ai.gitoracle.ingestor.service.SemanticDedupService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -60,6 +61,16 @@ public class WebhookController {
                 return handleReviewComment(tenantId, payload, "issue_comment");
             }
             return ResponseEntity.accepted().build();
+        }
+
+        // --- Pull request closed/merged: the outcome of a fix GitOracle proposed ---
+        if ("pull_request".equals(githubEvent)) {
+            return handlePullRequestOutcome(payload);
+        }
+
+        // --- Pull request review (approval counts as positive feedback) ---
+        if ("pull_request_review".equals(githubEvent)) {
+            return handlePullRequestReview(payload);
         }
 
         // --- GitHub Actions workflow_run failure ---
@@ -159,5 +170,82 @@ public class WebhookController {
         }
 
         return ResponseEntity.accepted().build();
+    }
+
+    /**
+     * Records what happened to a PR GitOracle opened.
+     *
+     * This is the producer that "github-pr-events" was always missing — the topic
+     * had a consumer in github-bot from the start, but nothing ever wrote to it,
+     * so no PR outcome was ever captured and the dashboard's merge-rate figures
+     * were invented constants.
+     */
+    @SuppressWarnings("unchecked")
+    private ResponseEntity<Void> handlePullRequestOutcome(Map<String, Object> payload) {
+        if (!"closed".equals(payload.get("action"))) {
+            // opened/synchronize/labeled etc. carry no outcome information.
+            return ResponseEntity.accepted().build();
+        }
+
+        Map<String, Object> pr = (Map<String, Object>) payload.get("pull_request");
+        if (pr == null) return ResponseEntity.accepted().build();
+
+        String jobId = extractJobId((String) pr.get("body"));
+        if (jobId == null) {
+            logger.info("PR closed but no GitOracle job ID in its body — not one of ours, ignoring.");
+            return ResponseEntity.accepted().build();
+        }
+
+        // GitHub distinguishes "merged" from merely "closed" via this boolean;
+        // action is "closed" in both cases.
+        boolean merged = Boolean.TRUE.equals(pr.get("merged"));
+        String outcome = merged ? "PR_MERGED" : "PR_CLOSED";
+
+        publishPrEvent(jobId, outcome, senderLogin(payload), (String) pr.get("html_url"));
+        logger.info("PR {} for job {} — recorded {}", pr.get("html_url"), jobId, outcome);
+        return ResponseEntity.accepted().build();
+    }
+
+    @SuppressWarnings("unchecked")
+    private ResponseEntity<Void> handlePullRequestReview(Map<String, Object> payload) {
+        Map<String, Object> review = (Map<String, Object>) payload.get("review");
+        Map<String, Object> pr = (Map<String, Object>) payload.get("pull_request");
+        if (review == null || pr == null) return ResponseEntity.accepted().build();
+
+        // GitHub sends review state lowercased ("approved"); be tolerant anyway.
+        String state = (String) review.get("state");
+        if (state == null || !"approved".equalsIgnoreCase(state)) {
+            return ResponseEntity.accepted().build();
+        }
+
+        String jobId = extractJobId((String) pr.get("body"));
+        if (jobId == null) return ResponseEntity.accepted().build();
+
+        publishPrEvent(jobId, "REVIEW_APPROVED", senderLogin(payload), (String) pr.get("html_url"));
+        logger.info("PR {} for job {} — recorded REVIEW_APPROVED", pr.get("html_url"), jobId);
+        return ResponseEntity.accepted().build();
+    }
+
+    private String extractJobId(String body) {
+        if (body == null) return null;
+        Matcher m = JOB_ID_PATTERN.matcher(body);
+        return m.find() ? m.group(1) : null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private String senderLogin(Map<String, Object> payload) {
+        Map<String, Object> sender = (Map<String, Object>) payload.get("sender");
+        return sender != null ? (String) sender.getOrDefault("login", "unknown") : "unknown";
+    }
+
+    /** All-String values: the orchestrator's listener binds this as a
+     *  Map<String, String>, matching the other event payloads on that factory. */
+    private void publishPrEvent(String jobId, String type, String reviewer, String prUrl) {
+        Map<String, Object> event = new HashMap<>();
+        event.put("jobId", jobId);
+        event.put("type", type);
+        event.put("reviewer", reviewer != null ? reviewer : "unknown");
+        event.put("prUrl", prUrl != null ? prUrl : "");
+        kafkaTemplate.send(KafkaTopics.GITHUB_PR_EVENTS, event);
     }
 }

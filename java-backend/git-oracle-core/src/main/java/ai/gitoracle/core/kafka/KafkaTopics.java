@@ -18,6 +18,10 @@ public final class KafkaTopics {
     public static final String REVIEW_COMMENT_RECEIVED = "review-comment-received";
     public static final String REVIEW_REPLY_POSTED = "review-reply-posted";
 
+    /** Outcomes of PRs GitOracle opened (merged / closed / approved / reverted),
+     *  produced by the Error Ingestor's GitHub webhook handler. */
+    public static final String GITHUB_PR_EVENTS = "github-pr-events";
+
     public static final String JOB_ESCALATED = "job-escalated";
     public static final String FEEDBACK_RECEIVED = "feedback-received";
     public static final String AUDIT_EVENT = "audit-event";

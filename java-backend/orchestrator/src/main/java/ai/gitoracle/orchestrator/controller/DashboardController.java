@@ -34,11 +34,14 @@ public class DashboardController {
     private static final Logger logger = LoggerFactory.getLogger(DashboardController.class);
     private final EntityManager entityManager;
     private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
-    public DashboardController(EntityManager entityManager, KafkaTemplate<String, Object> kafkaTemplate) {
+    public DashboardController(EntityManager entityManager, KafkaTemplate<String, Object> kafkaTemplate,
+                               ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository) {
         this.entityManager = entityManager;
         this.kafkaTemplate = kafkaTemplate;
+        this.prOutcomeRepository = prOutcomeRepository;
     }
 
     @GetMapping("/jobs")
@@ -257,6 +260,33 @@ public class DashboardController {
 
         entityManager.persist(eval);
         return ResponseEntity.ok(eval);
+    }
+
+    /**
+     * Real PR outcome breakdown, replacing the dashboard's previously hardcoded
+     * "PR Merge Rate: 92%" and 72/18/7/3 feedback split.
+     *
+     * `total` counts distinct jobs that reached a PR and got some outcome — so a
+     * merge rate is only meaningful once PRs are actually being merged/closed. When
+     * nothing has been recorded yet the response is all zeros with total=0, which
+     * the UI renders as "no data" rather than inventing a number.
+     */
+    @GetMapping("/pr-outcomes/stats")
+    public ResponseEntity<Map<String, Object>> getPrOutcomeStats() {
+        Map<String, Long> counts = new HashMap<>();
+        for (String k : List.of("MERGED", "CLOSED", "APPROVED", "REVERTED")) {
+            counts.put(k, 0L);
+        }
+        for (Object[] row : prOutcomeRepository.countByDistinctJobOutcome()) {
+            counts.put((String) row[0], ((Number) row[1]).longValue());
+        }
+
+        long total = counts.values().stream().mapToLong(Long::longValue).sum();
+        Map<String, Object> body = new HashMap<>();
+        body.put("counts", counts);
+        body.put("total", total);
+        body.put("mergeRate", total == 0 ? null : (double) counts.get("MERGED") / total);
+        return ResponseEntity.ok(body);
     }
 
     @GetMapping("/evals")

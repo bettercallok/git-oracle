@@ -29,14 +29,75 @@ public class OrchestratorService {
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final WorkspaceService workspaceService;
     private final EntityManager entityManager;
+    private final ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository;
     private final RestTemplate restTemplate = new RestTemplate();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
-    public OrchestratorService(AgentJobRepository jobRepository, KafkaTemplate<String, Object> kafkaTemplate, WorkspaceService workspaceService, EntityManager entityManager) {
+    public OrchestratorService(AgentJobRepository jobRepository, KafkaTemplate<String, Object> kafkaTemplate,
+                               WorkspaceService workspaceService, EntityManager entityManager,
+                               ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository) {
         this.jobRepository = jobRepository;
         this.kafkaTemplate = kafkaTemplate;
         this.workspaceService = workspaceService;
         this.entityManager = entityManager;
+        this.prOutcomeRepository = prOutcomeRepository;
+    }
+
+    /**
+     * Persists the real-world outcome of a PR GitOracle opened.
+     *
+     * The "github-pr-events" topic had a consumer in github-bot from the start, but
+     * no producer until the Error Ingestor's pull_request handler was added — so no
+     * outcome was ever recorded and the dashboard's merge-rate figures were
+     * hardcoded. github-bot has no JPA dependency, so persistence lives here, in the
+     * service that already owns the database and serves the dashboard API.
+     */
+    @KafkaListener(topics = KafkaTopics.GITHUB_PR_EVENTS, groupId = "orchestrator-group")
+    public void handlePrOutcome(Map<String, String> event) {
+        String jobIdStr = event.get("jobId");
+        String type = event.get("type");
+        if (jobIdStr == null || type == null) {
+            logger.warn("PR outcome event missing jobId or type — ignoring: {}", event);
+            return;
+        }
+
+        // Strip the PR_/REVIEW_ prefixes the GitHub-facing event names carry.
+        String outcome = switch (type) {
+            case "PR_MERGED"       -> "MERGED";
+            case "PR_CLOSED"       -> "CLOSED";
+            case "REVIEW_APPROVED" -> "APPROVED";
+            case "COMMIT_REVERTED" -> "REVERTED";
+            default -> null;
+        };
+        if (outcome == null) {
+            logger.warn("Unknown PR outcome type '{}' — ignoring.", type);
+            return;
+        }
+
+        final UUID jobId;
+        try {
+            jobId = UUID.fromString(jobIdStr);
+        } catch (IllegalArgumentException e) {
+            logger.warn("PR outcome event carried a non-UUID jobId '{}' — ignoring.", jobIdStr);
+            return;
+        }
+
+        // Kafka redelivers; GitHub also retries webhooks. Recording the same
+        // outcome twice would inflate the merge rate, so make this idempotent.
+        if (prOutcomeRepository.existsByJobIdAndOutcome(jobId, outcome)) {
+            logger.info("PR outcome {} for job {} already recorded — ignoring duplicate.", outcome, jobId);
+            return;
+        }
+
+        ai.gitoracle.core.entity.PrOutcome row = new ai.gitoracle.core.entity.PrOutcome();
+        row.setId(UUID.randomUUID());
+        row.setJobId(jobId);
+        row.setOutcome(outcome);
+        row.setReviewer(event.getOrDefault("reviewer", "unknown"));
+        row.setPrUrl(event.getOrDefault("prUrl", ""));
+        prOutcomeRepository.save(row);
+
+        logger.info("Recorded PR outcome {} for job {} (by {})", outcome, jobId, row.getReviewer());
     }
 
     @KafkaListener(topics = KafkaTopics.ERROR_INGESTED, groupId = "orchestrator-group")

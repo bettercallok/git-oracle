@@ -65,23 +65,31 @@ const fetchPrompts = async (): Promise<PromptVersion[]> => {
   ];
 };
 
-// PLACEHOLDER — not measured. Nothing in the system persists PR outcomes yet:
-// github-bot's PrOutcomeListener consumes a "github-pr-events" topic that no
-// producer ever publishes to, and FeedbackService only logs. Until a pr_outcome
-// table and the GitHub pull_request webhook exist, these are illustrative shape
-// only and are labelled as such in the UI rather than passed off as real.
-const FEEDBACK = [
-  { label: 'Merged', pct: 72, color: 'var(--success)' },
-  { label: 'Approved', pct: 18, color: 'var(--info)' },
-  { label: 'Rejected', pct: 7, color: 'var(--warning)' },
-  { label: 'Reverted', pct: 3, color: 'var(--danger)' },
+interface PrOutcomeStats {
+  counts: Record<string, number>;
+  total: number;
+  mergeRate: number | null;
+}
+
+const fetchPrOutcomes = async (): Promise<PrOutcomeStats> => {
+  const { data } = await apiClient.get('/pr-outcomes/stats');
+  return data;
+};
+
+// Backed by the pr_outcomes table, populated from real GitHub pull_request /
+// pull_request_review webhooks. Order matches the outcome ranking used server-side.
+const FEEDBACK_ROWS: { key: string; label: string; color: string }[] = [
+  { key: 'MERGED',   label: 'Merged',   color: 'var(--success)' },
+  { key: 'APPROVED', label: 'Approved', color: 'var(--info)' },
+  { key: 'CLOSED',   label: 'Closed',   color: 'var(--warning)' },
+  { key: 'REVERTED', label: 'Reverted', color: 'var(--danger)' },
 ];
 
 const PLACEHOLDER_BADGE = (
   <span
     className="badge"
     style={{ background: 'var(--border-strong)', color: 'var(--text-muted)', fontSize: '0.65rem', marginLeft: 8 }}
-    title="Illustrative only — no PR outcome tracking exists yet"
+    title="Illustrative only — prompt performance is not measured per version yet"
   >
     SAMPLE DATA
   </span>
@@ -106,6 +114,12 @@ export default function EvalDashboard() {
   const { data: prompts = [] } = useQuery({
     queryKey: ['prompts'],
     queryFn: fetchPrompts,
+  });
+
+  const { data: prStats } = useQuery({
+    queryKey: ['pr-outcomes'],
+    queryFn: fetchPrOutcomes,
+    refetchInterval: 10000,
   });
 
   const latestAccuracy = evals.length > 0 ? evals[0].accuracy * 100 : 0;
@@ -144,11 +158,17 @@ export default function EvalDashboard() {
               <div className="stat-subtitle">in latest run</div>
             </div>
             <div className="card">
-              <div className="stat-label">Avg Latency</div>
-              <div className="stat-value">
-                {evals.length > 0 ? `${(evals[0].avgLatencyMs / 1000).toFixed(1)}s` : '—'}
+              <div className="stat-label">PR Merge Rate</div>
+              <div className="stat-value" style={{ color: 'var(--success)' }}>
+                {prStats && prStats.mergeRate !== null
+                  ? `${Math.round(prStats.mergeRate * 100)}%`
+                  : '—'}
               </div>
-              <div className="stat-subtitle">per case</div>
+              <div className="stat-subtitle">
+                {prStats && prStats.total > 0
+                  ? `across ${prStats.total} PR${prStats.total === 1 ? '' : 's'}`
+                  : 'no PR outcomes yet'}
+              </div>
             </div>
             <div className="card">
               <div className="stat-label">Regressions</div>
@@ -186,25 +206,37 @@ export default function EvalDashboard() {
 
             <div className="card">
               <h2 style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)', marginBottom: 20 }}>
-                PR Feedback{PLACEHOLDER_BADGE}
+                PR Feedback
               </h2>
+              {(!prStats || prStats.total === 0) && (
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', paddingTop: 6 }}>
+                  No PR outcomes recorded yet. Merge or close a GitOracle PR — the
+                  GitHub <span className="mono">pull_request</span> webhook populates this.
+                </p>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 6 }}>
-                {FEEDBACK.map((item, i) => (
+                {prStats && prStats.total > 0 && FEEDBACK_ROWS.map((item, i) => {
+                  const count = prStats.counts[item.key] ?? 0;
+                  const pct = Math.round((count / prStats.total) * 100);
+                  return (
                   <div key={item.label}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                       <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{item.label}</span>
-                      <span className="mono" style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>{item.pct}%</span>
+                      <span className="mono" style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                        {count} ({pct}%)
+                      </span>
                     </div>
                     <div style={{ height: 6, background: 'var(--border-strong)', borderRadius: 3, overflow: 'hidden' }}>
-                      <motion.div 
+                      <motion.div
                         initial={{ width: 0 }}
-                        animate={{ width: `${item.pct}%` }}
+                        animate={{ width: `${pct}%` }}
                         transition={{ delay: 0.3 + (i * 0.1), duration: 0.8, ease: 'easeOut' }}
-                        style={{ height: '100%', background: item.color, borderRadius: 3 }} 
+                        style={{ height: '100%', background: item.color, borderRadius: 3 }}
                       />
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </motion.div>
