@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import jakarta.persistence.EntityManager;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -177,12 +178,65 @@ public class OrchestratorService {
             String json = objectMapper.writeValueAsString(investigation);
             jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
                 job.setInvestigationResult(json);
+
+                // Promote the Investigator's actual conclusion to the job's root cause.
+                //
+                // rootCommit was previously set once, in handleErrorIngested, to
+                // workspaceService.getHeadCommitSha() — i.e. plain `git rev-parse HEAD`,
+                // which has nothing to do with the investigation. The Investigator's real
+                // finding was computed, persisted into investigation_result, and then never
+                // read by anything. Confirmed live on job fe6a69a8: the Investigator ranked
+                // 7f8e49eb at 0.8 confidence (correct — the only commit touching the
+                // offending file), while the job recorded bbda67f8, which that same
+                // investigation had scored 0.0. The eval harness compares rootCommit against
+                // the commit that introduced the bug, so it was measuring HEAD and would only
+                // ever be "right" when the bug commit happened to be HEAD.
+                //
+                // HEAD stays as the fallback, so a job whose investigation yields no ranked
+                // cause is no worse off than before.
+                rankedCause(investigation).ifPresent(cause -> {
+                    job.setRootCommit(cause.sha());
+                    job.setCausalScore(cause.score());
+                    logger.info("Job {} root cause set from investigation: {} (score {})",
+                                jobIdStr, cause.sha(), cause.score());
+                });
+
                 jobRepository.save(job);
                 logger.info("Persisted investigation result for job {}", jobIdStr);
             });
         } catch (Exception e) {
             logger.warn("Could not persist investigation result: {}", e.getMessage());
         }
+    }
+
+    private record RankedCause(String sha, double score) {}
+
+    /**
+     * Highest-scoring entry of the investigation's ranked_causes, if any.
+     *
+     * Returns empty rather than guessing when the list is missing, empty, or carries
+     * no usable commit_sha — callers keep whatever root commit they already had, so a
+     * weak investigation never overwrites a known value with a fabricated one.
+     */
+    @SuppressWarnings("unchecked")
+    private java.util.Optional<RankedCause> rankedCause(Object investigation) {
+        if (!(investigation instanceof Map)) return java.util.Optional.empty();
+        Object raw = ((Map<String, Object>) investigation).get("ranked_causes");
+        if (!(raw instanceof List)) return java.util.Optional.empty();
+
+        RankedCause best = null;
+        for (Object entry : (List<Object>) raw) {
+            if (!(entry instanceof Map)) continue;
+            Map<String, Object> cause = (Map<String, Object>) entry;
+            Object sha = cause.get("commit_sha");
+            if (!(sha instanceof String s) || s.isBlank()) continue;
+            double score = cause.get("causal_effect_score") instanceof Number n
+                ? n.doubleValue() : 0.0;
+            if (best == null || score > best.score()) {
+                best = new RankedCause(s, score);
+            }
+        }
+        return java.util.Optional.ofNullable(best);
     }
 
     @KafkaListener(topics = KafkaTopics.FIX_GENERATED, groupId = "orchestrator-group")
