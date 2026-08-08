@@ -106,7 +106,14 @@ Rank them and provide a causal_effect_score (0.0 to 1.0) and reasoning for each.
         result = await llm_structured(
             messages=messages,
             output_schema=InvestigationResult,
-            max_tokens=2048,
+            # 4096, not 2048: InvestigationResult requires a reasoning string per
+            # ranked cause, so output length scales with how many commits the repo
+            # history offers. On a real repo the model ran out of completion budget
+            # mid-JSON and Groq rejected the whole request with 400
+            # json_validate_failed ("max completion tokens reached before generating
+            # a valid document") — a hard failure, not a truncated result. The
+            # 3-commit eval repo never hit it, which is why it went unnoticed.
+            max_tokens=4096,
             temperature=0.2,
             job_id=request.job_id,
             agent_name="investigator_agent"
