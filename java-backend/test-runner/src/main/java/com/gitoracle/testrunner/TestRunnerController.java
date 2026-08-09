@@ -58,14 +58,29 @@ public class TestRunnerController {
             // was killed before reaching the finally block's cleanup.
             deleteDirectory(workDir);
             Files.createDirectories(workDir);
-            logger.info("Cloning {} into {}", repoUrl, workDir);
+            // Empty/null means "whatever git clone picks with no branch specified" —
+            // the repo's actual default branch. Without this, Test Runner always
+            // cloned the default branch regardless of which branch the Fixer actually
+            // read from and patched, so a patch generated against a non-default
+            // branch's file content could apply against the wrong base or fail outright.
+            String branch = request.getBranch();
+            java.util.List<String> cloneCmd = new java.util.ArrayList<>(
+                java.util.List.of("git", "clone", "--depth=1"));
+            if (branch != null && !branch.isBlank()) {
+                cloneCmd.add("--branch");
+                cloneCmd.add(branch);
+            }
+            cloneCmd.add(repoUrl);
+            cloneCmd.add(workDir.toString());
+
+            logger.info("Cloning {} (branch: {}) into {}", repoUrl,
+                        branch != null && !branch.isBlank() ? branch : "<default>", workDir);
 
             // One retry on a transient network failure (e.g. DNS blip) — confirmed
             // live: "Could not resolve host: github.com" resolved fine a second
             // later on the same machine, but a single failed attempt here escalates
             // the whole job with zero recourse.
-            RunResult cloneResult = run(workDir.getParent(),
-                TIMEOUT_SECONDS, "git", "clone", "--depth=1", repoUrl, workDir.toString());
+            RunResult cloneResult = run(workDir.getParent(), TIMEOUT_SECONDS, cloneCmd.toArray(String[]::new));
 
             if (!cloneResult.success()) {
                 logger.warn("Clone failed for job {}, retrying once: {}", jobId, cloneResult.output());
@@ -76,8 +91,7 @@ public class TestRunnerController {
                 }
                 deleteDirectory(workDir);
                 Files.createDirectories(workDir);
-                cloneResult = run(workDir.getParent(),
-                    TIMEOUT_SECONDS, "git", "clone", "--depth=1", repoUrl, workDir.toString());
+                cloneResult = run(workDir.getParent(), TIMEOUT_SECONDS, cloneCmd.toArray(String[]::new));
             }
 
             if (!cloneResult.success()) {

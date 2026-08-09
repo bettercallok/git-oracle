@@ -28,6 +28,10 @@ export default function FixCommand() {
   const [repoUrl, setRepoUrl]       = useState(paramRepo ? `https://github.com/${paramRepo}` : (activeRepo?.url || ''));
   const [issueDesc, setIssueDesc]   = useState(paramIssue);
   const [targetRepo, setTargetRepo] = useState(paramRepo || activeRepo?.fullName || '');
+  // Empty = clone/PR against the repo's actual default branch. GitOracle previously
+  // had no way to target anything else — the source it reads, tests, and opens a PR
+  // against was always whatever `git clone` picks with no branch specified.
+  const [branch, setBranch]         = useState('');
   const [status, setStatus]         = useState<Status>('idle');
   const [errorMsg, setErrorMsg]     = useState('');
   const [jobId, setJobId]           = useState('');
@@ -50,6 +54,7 @@ export default function FixCommand() {
         repoUrl: repoUrl.trim(),
         issueDescription: issueDesc.trim(),
         targetRepo: targetRepo.trim(),
+        branch: branch.trim(),
         investigateFirst
       });
       setJobId(data.jobId);
@@ -233,6 +238,32 @@ export default function FixCommand() {
                     onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
                   />
                 )}
+              </div>
+
+              <div style={{ marginTop: 20 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  <GitBranch size={12} />
+                  Branch (optional — defaults to the repo's default branch)
+                </label>
+                <input
+                  id="branch-input"
+                  type="text"
+                  value={branch}
+                  onChange={e => setBranch(e.target.value)}
+                  placeholder="e.g. develop, release-2.0"
+                  style={{
+                    width: '100%', padding: '10px 14px',
+                    background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
+                    borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
+                    boxSizing: 'border-box', outline: 'none', transition: 'border-color 0.2s'
+                  }}
+                  onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
+                  onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
+                />
+                <div style={{ marginTop: 6, fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                  GitOracle reads, tests, and opens its PR against this branch instead of
+                  the repo's default.
+                </div>
               </div>
             </div>
 

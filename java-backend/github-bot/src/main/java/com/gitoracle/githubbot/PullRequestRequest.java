@@ -16,8 +16,24 @@ public class PullRequestRequest {
     private int tokenBudgetUsed;
     private String causalChainNarrative;
     private String patchSummary;
+    // Branch the fix was actually read from, tested against, and should be based
+    // on. Empty/null = the repo's actual default branch. Without this, the fix
+    // branch was always cut from whatever GitHub reports as the default branch,
+    // and the PR was always opened against it — regardless of which branch the
+    // rest of the pipeline used, which could mean applying a patch generated
+    // against different file content, or landing the PR on the wrong branch
+    // entirely.
+    private String sourceBranch;
 
     public PullRequestRequest() {
+    }
+
+    public String getSourceBranch() {
+        return sourceBranch;
+    }
+
+    public void setSourceBranch(String sourceBranch) {
+        this.sourceBranch = sourceBranch;
     }
 
     public String getJobId() {

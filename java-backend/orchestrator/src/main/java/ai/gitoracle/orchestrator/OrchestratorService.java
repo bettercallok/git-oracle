@@ -134,8 +134,10 @@ public class OrchestratorService {
 
         logger.info("Job {} ready. Triggering AI Planner...", job.getId());
         
-        // 2. Clone the repository into a dynamic workspace
-        String repoPath = workspaceService.cloneRepository(event.getRepoUrl(), job.getId());
+        // 2. Clone the repository (a specific branch, if the job requested one) into
+        // a dynamic workspace
+        String branch = event.getBranch();
+        String repoPath = workspaceService.cloneRepository(event.getRepoUrl(), branch, job.getId());
 
         // Capture the real HEAD commit so downstream PRs report an accurate root commit
         String headSha = workspaceService.getHeadCommitSha(repoPath);
@@ -163,6 +165,7 @@ public class OrchestratorService {
             event.getHumanInstructions() != null ? event.getHumanInstructions() : "");
         investigatorPayload.put("target_repo",
             event.getTargetRepo() != null ? event.getTargetRepo() : "");
+        investigatorPayload.put("branch", branch != null ? branch : "");
 
         kafkaTemplate.send("job.events.investigate", investigatorPayload);
     }
@@ -316,11 +319,18 @@ public class OrchestratorService {
                 rootCommit[0] = job.getRootCommit();
             });
 
+            // branch flows through the event chain the same way targetRepo does — an
+            // override the job carried since it was created, not a DB lookup — so
+            // Test Runner clones and tests the branch GitOracle was actually asked to
+            // fix rather than always falling back to the repo's default branch.
+            String branch = event.getOrDefault("branch", "");
+
             var testRequest = new java.util.HashMap<String, Object>();
             testRequest.put("jobId",     jobIdStr);
             testRequest.put("repoUrl",   repoUrl[0]);            // for cloning
             testRequest.put("repoPath",  repoUrl[0]);            // fallback slug infer
             testRequest.put("patchDiff", event.get("patch"));
+            testRequest.put("branch",    branch);
             testRequest.put("framework", "UNKNOWN");             // let runner auto-detect
 
             var response = restTemplate.postForObject("http://localhost:8084/test", testRequest, Map.class);
@@ -333,6 +343,7 @@ public class OrchestratorService {
                 testsPassedPayload.put("patch",          event.get("patch"));
                 String targetRepo = event.getOrDefault("targetRepo", "");
                 testsPassedPayload.put("targetRepo",     targetRepo);
+                testsPassedPayload.put("branch",         branch);
                 testsPassedPayload.put("isRegeneration", event.getOrDefault("isRegeneration", "false"));
                 testsPassedPayload.put("qualityScore",   String.valueOf(response.get("qualityScore")));
                 testsPassedPayload.put("coverageDelta",  String.valueOf(response.get("coverageDelta")));
@@ -397,6 +408,11 @@ public class OrchestratorService {
             prRequest.put("jobId", jobIdStr);
             prRequest.put("repoFullName", prRepo);
             prRequest.put("patchDiff", event.get("patch"));
+            // Empty means "the repo's actual default branch" downstream in github-bot —
+            // without this, github-bot always checked out and PR'd against
+            // repo.getDefaultBranch(), regardless of which branch the fix was actually
+            // read from and tested against.
+            prRequest.put("sourceBranch", event.getOrDefault("branch", ""));
             prRequest.put("commitMessage", "Fix " + errorId[0]);
             prRequest.put("agentVersion", "1.0");
             prRequest.put("rootCommit", event.get("rootCommit"));

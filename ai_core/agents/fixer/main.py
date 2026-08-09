@@ -49,6 +49,7 @@ class FixerRequest(BaseModel):
     human_instructions: Optional[str] = None  # Set when triggered via dashboard or GitHub comment
     target_repo: Optional[str] = None          # GitHub repo to open PR against (owner/repo)
     repo_url: Optional[str] = None             # Git remote to clone for self-testing (GitHub or file://)
+    branch: Optional[str] = None               # Branch to check out; None/empty = repo's default branch
 
 class PatchOutput(BaseModel):
     diff: str                   # unified diff format
@@ -152,12 +153,16 @@ async def execute_fix(request: FixerRequest):
     # investigation and plan were correct, but every retry failed here before an
     # LLM call was even made). Clone into a separate, fixer-owned directory instead.
     local_src_path = request.repo_path
+    # git.Repo.clone_from's branch kwarg must be omitted (not passed as None) to
+    # get the repo's default branch — passing branch=None explicitly is not the
+    # same as not passing it.
+    clone_kwargs = {"branch": request.branch} if request.branch else {}
     if request.repo_url:
         fixer_src_path = request.repo_path.rstrip("/") + "-fixer-src"
         try:
             if not os.path.isdir(os.path.join(fixer_src_path, ".git")):
                 shutil.rmtree(fixer_src_path, ignore_errors=True)
-                git.Repo.clone_from(request.repo_url, fixer_src_path)
+                git.Repo.clone_from(request.repo_url, fixer_src_path, **clone_kwargs)
             local_src_path = fixer_src_path
         except Exception as e:
             # request.repo_path is only populated when an earlier pipeline stage
@@ -171,7 +176,7 @@ async def execute_fix(request: FixerRequest):
             try:
                 if not os.path.isdir(os.path.join(request.repo_path, ".git")):
                     shutil.rmtree(request.repo_path, ignore_errors=True)
-                    git.Repo.clone_from(request.repo_url, request.repo_path)
+                    git.Repo.clone_from(request.repo_url, request.repo_path, **clone_kwargs)
                 local_src_path = request.repo_path
             except Exception as e2:
                 logger.warning(f"Fallback clone into {request.repo_path} also failed: {e2}")
@@ -316,7 +321,7 @@ Do not write a diff yourself — the unified diff is computed automatically from
         
         import httpx
         
-        async def run_real_test(job_id: str, repo_path: str, repo_url: str, patch_diff: str) -> bool:
+        async def run_real_test(job_id: str, repo_path: str, repo_url: str, patch_diff: str, branch: str = "") -> bool:
             try:
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
@@ -326,6 +331,7 @@ Do not write a diff yourself — the unified diff is computed automatically from
                             "repoUrl": repo_url,
                             "repoPath": repo_path,
                             "patchDiff": patch_diff,
+                            "branch": branch,
                             "framework": "UNKNOWN"  # let Test Runner auto-detect (pom.xml/package.json/etc.)
                         },
                         timeout=130.0
@@ -347,7 +353,8 @@ Do not write a diff yourself — the unified diff is computed automatically from
             tests_passed = True
         else:
             tests_passed = await run_real_test(
-                request.job_id, request.repo_path, request.repo_url or "", patch.diff
+                request.job_id, request.repo_path, request.repo_url or "", patch.diff,
+                request.branch or ""
             )
         
         if tests_passed:
@@ -379,6 +386,7 @@ async def handle_fix_job(payload: dict):
     plan_dict = payload.get("plan", {})
     human_instructions = payload.get("human_instructions")
     target_repo = payload.get("target_repo", "")
+    branch = payload.get("branch") or None
 
     plan = PlannerOutput(**plan_dict)
 
@@ -394,7 +402,8 @@ async def handle_fix_job(payload: dict):
         job_id=job_id,
         human_instructions=human_instructions,
         target_repo=target_repo if target_repo else None,
-        repo_url=repo_url if repo_url else None
+        repo_url=repo_url if repo_url else None,
+        branch=branch
     )
     
     try:
@@ -408,6 +417,7 @@ async def handle_fix_job(payload: dict):
                 "humanInstructions": human_instructions or "",
                 "isRegeneration": bool(human_instructions),
                 "filesModified": ",".join(result.patch.files_modified),
+                "branch": branch or "",
             }
             await producer.publish("fix-generated", fix_payload)
             logger.info(f"Published fix-generated for job {job_id} (human_directed={bool(human_instructions)})")

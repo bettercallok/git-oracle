@@ -150,6 +150,10 @@ public class DashboardController {
         String repoUrl = (String) request.get("repoUrl");
         String issue   = (String) request.get("issueDescription");
         String targetRepo = request.get("targetRepo") instanceof String s ? s : "";
+        // Empty = the repo's actual default branch. Threaded through both routes so
+        // GitOracle reads, tests, and opens its PR against this branch instead of
+        // whichever branch `git clone` picks with none specified.
+        String branch = request.get("branch") instanceof String b ? b : "";
         boolean investigateFirst = !Boolean.FALSE.equals(request.get("investigateFirst"));
 
         if (repoUrl == null || issue == null) {
@@ -188,6 +192,7 @@ public class DashboardController {
                 .rawPayload(issue)
                 .humanInstructions(issue)
                 .targetRepo(targetRepo)
+                .branch(branch)
                 .build();
 
             kafkaTemplate.send(KafkaTopics.ERROR_INGESTED, event);
@@ -208,6 +213,7 @@ public class DashboardController {
         fixPayload.put("error_id", job.getErrorId());
         fixPayload.put("human_instructions", issue);
         fixPayload.put("target_repo", targetRepo);
+        fixPayload.put("branch", branch);
         Map<String, Object> plan = new HashMap<>();
         plan.put("strategy", "dashboard_triggered");
         plan.put("affected_files", List.of());

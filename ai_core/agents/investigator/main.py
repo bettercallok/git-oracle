@@ -139,6 +139,7 @@ async def handle_investigate_job(payload: dict):
     raw_payload = payload.get("raw_payload")
     human_instructions = payload.get("human_instructions") or ""
     target_repo = payload.get("target_repo") or ""
+    branch = payload.get("branch") or ""
 
     # raw_payload carries the real stack trace / webhook body captured by
     # error-ingestor. Falling back to the generic error_id-only description
@@ -183,6 +184,7 @@ async def handle_investigate_job(payload: dict):
             # Pass-through so the Fixer, two hops downstream, still receives them.
             "human_instructions": human_instructions,
             "target_repo": target_repo,
+            "branch": branch,
         }
         await producer.publish("job.events.plan", plan_payload)
         logger.info(f"Published job.events.plan for job {job_id}")

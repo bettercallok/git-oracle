@@ -29,4 +29,16 @@ public class ErrorIngestedEvent {
 
     /** "owner/repo" override for PR creation, when it differs from repoUrl. */
     private String targetRepo;
+
+    /**
+     * Branch to clone, test, and open the PR against. Empty/null means "whatever
+     * `git clone` picks with no branch specified" — i.e. the repo's actual default
+     * branch. Previously there was no way to target anything else anywhere in the
+     * pipeline: WorkspaceService, the Fixer's private checkout, Test Runner's clone,
+     * and github-bot's PR base were all hardcoded to the default. Threaded the same
+     * way as humanInstructions/targetRepo — through every Kafka hop rather than a
+     * DB lookup, since (like targetRepo) it's an override, not part of the job's
+     * durable identity.
+     */
+    private String branch;
 }

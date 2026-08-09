@@ -137,6 +137,7 @@ async def handle_planner_job(payload: dict):
     error_id = payload.get("error_id", "unknown")
     human_instructions = payload.get("human_instructions") or ""
     target_repo = payload.get("target_repo") or ""
+    branch = payload.get("branch") or ""
     
     # 2. Extract Investigation Result from payload
     investigation_dict = payload.get("investigation_result", {})
@@ -190,6 +191,7 @@ async def handle_planner_job(payload: dict):
             # repo the PR is opened against.
             "human_instructions": human_instructions,
             "target_repo": target_repo,
+            "branch": branch,
         }
         await producer.publish("job.events.fix", fix_payload)
         logger.info(f"Published job.events.fix for job {job_id}")

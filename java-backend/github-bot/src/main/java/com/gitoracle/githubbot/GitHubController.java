@@ -38,6 +38,14 @@ public class GitHubController {
             String token = githubClient.getLatestInstallationToken();
             GHRepository repo = github.getRepository(request.getRepoFullName());
             String defaultBranch = repo.getDefaultBranch();
+            // The branch the fix was actually read from and tested against — falls
+            // back to the repo's default when the job didn't request one. Used both
+            // as the clone target below and as the PR's base, so the new fix branch
+            // is cut from, and merges back into, the same code the patch was built
+            // against. Previously this was always defaultBranch regardless of what
+            // the rest of the pipeline used.
+            String baseBranch = (request.getSourceBranch() != null && !request.getSourceBranch().isBlank())
+                ? request.getSourceBranch() : defaultBranch;
 
             String newBranchName = "gitoracle-fix-" + request.getJobId().substring(0, 8);
 
@@ -47,17 +55,17 @@ public class GitHubController {
 
             String cloneUrl = "https://x-access-token:" + token + "@github.com/" + request.getRepoFullName() + ".git";
 
-            logger.info("Cloning repository into {}", workDir);
+            logger.info("Cloning repository (branch: {}) into {}", baseBranch, workDir);
             // One retry on a transient network failure — confirmed live: a git-bot
             // clone failed with "Could not resolve host: github.com" on a machine
             // that resolved DNS fine a moment before and after (the same blip hit
             // the fixer's clone and test-runner's clone earlier in the pipeline).
             try {
-                runCommand(workDir, "git", "clone", "-c", "credential.helper=", cloneUrl, ".");
+                runCommand(workDir, "git", "clone", "-c", "credential.helper=", "--branch", baseBranch, cloneUrl, ".");
             } catch (Exception e) {
                 logger.warn("Clone failed for job {}, retrying once: {}", request.getJobId(), e.getMessage());
                 Thread.sleep(2000);
-                runCommand(workDir, "git", "clone", "-c", "credential.helper=", cloneUrl, ".");
+                runCommand(workDir, "git", "clone", "-c", "credential.helper=", "--branch", baseBranch, cloneUrl, ".");
             }
 
             logger.info("Creating branch {}", newBranchName);
@@ -82,7 +90,7 @@ public class GitHubController {
             GHPullRequest pr = repo.createPullRequest(
                 "🤖 GitOracle Autonomous Fix: " + request.getCommitMessage(),
                 newBranchName,
-                defaultBranch,
+                baseBranch,
                 markdown
             );
             logger.info("Successfully opened Pull Request on {}: {}", request.getRepoFullName(), pr.getHtmlUrl());

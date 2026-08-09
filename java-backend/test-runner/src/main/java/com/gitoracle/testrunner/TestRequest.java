@@ -6,6 +6,7 @@ public class TestRequest {
     private String repoPath;
     private String patchDiff;
     private String jobId;
+    private String branch;        // branch to clone/test; empty = repo's default branch
     private TestFramework framework;
 
     public TestRequest() {}
@@ -15,6 +16,9 @@ public class TestRequest {
 
     public String getRepoUrl() { return repoUrl; }
     public void setRepoUrl(String repoUrl) { this.repoUrl = repoUrl; }
+
+    public String getBranch() { return branch; }
+    public void setBranch(String branch) { this.branch = branch; }
 
     public String getRepoPath() { return repoPath; }
     public void setRepoPath(String repoPath) { this.repoPath = repoPath; }
