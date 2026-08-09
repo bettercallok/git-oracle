@@ -217,7 +217,9 @@ public class OrchestratorService {
         }
     }
 
-    private record RankedCause(String sha, double score) {}
+    // Package-private (not private) so OrchestratorServiceTest can exercise it
+    // directly instead of through reflection.
+    record RankedCause(String sha, double score) {}
 
     /**
      * Highest-scoring entry of the investigation's ranked_causes, if any.
@@ -227,7 +229,7 @@ public class OrchestratorService {
      * weak investigation never overwrites a known value with a fabricated one.
      */
     @SuppressWarnings("unchecked")
-    private java.util.Optional<RankedCause> rankedCause(Object investigation) {
+    java.util.Optional<RankedCause> rankedCause(Object investigation) {
         if (!(investigation instanceof Map)) return java.util.Optional.empty();
         Object raw = ((Map<String, Object>) investigation).get("ranked_causes");
         if (!(raw instanceof List)) return java.util.Optional.empty();
@@ -442,7 +444,8 @@ public class OrchestratorService {
      * the success recorded by the first delivery. Confirmed live on job 7f7f8bd9,
      * which held a valid PR URL while displaying ESCALATED in the dashboard.
      */
-    private void escalateUnlessAlreadySucceeded(AgentJob job, String reason) {
+    // Package-private for OrchestratorServiceTest.
+    void escalateUnlessAlreadySucceeded(AgentJob job, String reason) {
         if (job.getPrUrl() != null && !job.getPrUrl().isBlank()) {
             logger.warn("PR creation failed for job {} ({}), but it already has PR {} — keeping PR_OPENED.",
                         job.getId(), reason, job.getPrUrl());
