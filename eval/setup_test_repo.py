@@ -136,11 +136,18 @@ public class UserServiceTest {
     run_git("commit", "-m", "Initial commit: Add UserService and models")
 
     # CASE 1: Null Pointer Exception
-    # We introduce a bug where `user` can be null
-    run_git("checkout", "-b", "case1-npe")
-    # Actually, we don't need branches, we just create a commit on main, then get its SHA.
-    # Wait, the bug is already in the initial commit if `user` can be null.
-    # Let's create a specific commit that introduced a bug.
+    #
+    # Committed directly to main, sequentially before case 2 — NOT on a separate
+    # branch. This used to `checkout -b case1-npe`, commit here, then
+    # `checkout main` for case 2, leaving case1's bug commit reachable only from
+    # the abandoned case1-npe branch. run_evals.py always clones this repo at its
+    # default branch (main), so case1_npe's expected_root_commit was structurally
+    # unreachable from every clone the harness ever created — confirmed live: the
+    # Investigator correctly ranked the initial commit (the true root cause
+    # reachable from main) at 0.8-0.9 confidence, while the golden file expected a
+    # commit main's history never contained. Keeping both cases' bug commits on
+    # one linear history, the same way case 2 already worked correctly, is what
+    # makes expected_root_commit actually reachable by the code path that uses it.
     with open(java_file_path, "w") as f:
         f.write("""package com.example;
 
@@ -183,8 +190,8 @@ public class UserService {
          paymentGateway.charge(userId, payment.getAmount());
 """)
 
-    # CASE 2: Logic Error / Out of Bounds
-    run_git("checkout", "main")
+    # CASE 2: Logic Error / Out of Bounds — committed directly on top of case 1's
+    # commit (both now on main, no branch switch needed).
     processor_path = os.path.join(REPO_PATH, "src/main/java/com/example/BatchProcessor.java")
     with open(processor_path, "w") as f:
         f.write("""package com.example;
