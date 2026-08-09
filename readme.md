@@ -50,6 +50,31 @@ the system is deliberately decoupled: 6 java spring boot microservices and 7 pyt
 - **langfuse, prometheus, grafana, kafka UI** — observability stack.
 - **docker compose** — all of the above, one command, memory-capped to run comfortably on an 8GB machine.
 
+## architecture at a glance
+
+the same pipeline, stripped to the 6 stages that matter: an error comes in, gitoracle figures out which commit caused it, plans a fix, writes and tests a patch, then opens a PR. everything else in the detailed diagram below is what happens *inside* these boxes.
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#1e293b','primaryTextColor':'#e2e8f0','primaryBorderColor':'#475569','lineColor':'#64748b','secondaryColor':'#334155','tertiaryColor':'#0f172a','fontSize':'15px'}}}%%
+flowchart TB
+    a["1 · error comes in<br/>github webhook, sentry report,<br/>or a human says 'fix this'"]
+    b["2 · find the cause<br/>investigator ranks recent commits,<br/>picks the one that broke it"]
+    c["3 · plan the fix<br/>planner scopes a strategy<br/>and the files it should touch"]
+    d["4 · write & test the patch<br/>fixer drafts a diff, runs it against<br/>the real test suite, retries up to 3x"]
+    e["5 · gate it<br/>guardrails checks the diff stayed<br/>in scope · tests must pass"]
+    f["6 · open the PR<br/>github-bot commits, pushes,<br/>and opens a pull request"]
+
+    a --> b --> c --> d --> e --> f
+    e -.->|"checks fail<br/>or 3 attempts used up"| esc["escalate to a human<br/>with the real reason why"]
+
+    classDef stage fill:#1e3a5f,stroke:#3b82f6,color:#dbeafe
+    classDef stop fill:#5f1e1e,stroke:#ef4444,color:#fee2e2
+    class a,b,c,d,e,f stage
+    class esc stop
+```
+
+there's also a shortcut: a human who already knows the fix can skip straight to step 4 (see "two entry points" below) — cheaper and faster, but with no root-cause investigation behind it.
+
 ## detailed architecture
 
 a top-to-bottom walk of the full pipeline — every service, every kafka topic (named directly on the arrow that carries it), every synchronous HTTP call, and every storage/observability dependency.
