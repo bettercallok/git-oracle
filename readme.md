@@ -2,6 +2,8 @@
 
 gitoracle is an event-driven, multi-agent autonomous coding system. point it at a bug — a github webhook, a plain-english description, or a sentry-style error report — and it investigates the root cause across your git history, plans a scoped fix, writes a patch, runs it against your real test suite, and opens a pull request. every step is a durable kafka event, every unsafe or low-confidence outcome is escalated to a human review queue instead of silently failing, and every job's outcome (root cause, prompt version, token spend, PR result) is measured and shown on a live dashboard rather than asserted.
 
+**contents:** [overview](#project-overview) · [features](#key-features) · [tech stack](#tech-stack) · [architecture](#architecture-at-a-glance) · [project structure](#project-structure) · [setup](#deployment--setup) · [interaction flow](#system-interaction-flow) · [API](#core-api-endpoints) · [dashboard](#frontend-dashboard) · [CLI](#cli-reference) · [testing & CI](#testing--ci) · [dev guidelines](#development-guidelines) · [contributing](#contributing) · [license](#license)
+
 ## project overview
 
 most "AI fix my bug" tools are a single LLM call wrapped in a nice UI: it sees an error message, guesses a patch, and hopes. gitoracle is built around the belief that autonomous code changes need the same rigor as a human PR review pipeline — root-cause analysis grounded in real git history, a scoped plan before any code is touched, guardrails that block unauthorized file changes, real test execution (not a simulated pass), and a human-in-the-loop escalation path for anything the system isn't confident about.
@@ -291,15 +293,49 @@ react + typescript + vite. pages:
 
 ## CLI reference
 
-the `gitOracle` CLI (`cli/gitOracle/main.py`) provides terminal-based control:
+the `gitOracle` CLI (`cli/gitOracle/main.py`) provides terminal-based control. it talks to the api-gateway at `http://localhost:8080/api/v1` by default (not yet configurable via flag or env var).
 
-- `gitoracle analyze --repo <url> --commit <hash>` — triggers a deep architectural analysis job for a specific commit.
-- `gitoracle fix --repo <url> --commit <hash> --error <msg> --file <path> --line <num>` — manually triggers the fixer agent for a specific error.
-- `gitoracle watch --job <uuid>` — streams a running job's progress to the terminal.
-- `gitoracle status` — health check table of all microservices, databases, and the LLM endpoint.
-- `gitoracle eval --golden-dir <dir> [--report <file>]` — runs the evaluation harness against golden test cases.
-- `gitoracle prompts list --agent <name>` — lists all prompt versions (active and inactive) for an agent.
-- `gitoracle prompts activate --agent <name> --version <version>` — hot-swaps the active prompt for an agent.
+wired to real endpoints:
+- `gitoracle analyze --repo <url> --commit <hash>` — `POST /api/v1/jobs`, `jobType: "analyze"`.
+- `gitoracle fix --repo <url> --commit <hash> --error <msg> --file <path> --line <num>` — `POST /api/v1/trigger`, the direct-fix path.
+- `gitoracle watch --job <uuid>` — polls `GET /api/v1/jobs/{id}` until the job reaches `SUCCESS`/`FAILED`/`ESCALATED`.
+- `gitoracle jobs list` — `GET /api/v1/jobs`, most recent 15.
+- `gitoracle commits --repo <url>` — `GET /api/v1/commits`, most recent 10.
+- `gitoracle config set-key <key>` — saves an API key to `~/.gitoracle/config.json` (mode `0600`); not yet read back by the other commands, which don't send `X-API-Key` at all.
+
+**not yet wired — stub output, not a live call**, in violation of this project's own "never fabricate a success state" rule (see [development guidelines](#development-guidelines)); treat these as placeholders until fixed:
+- `gitoracle status` — only pings 4 of the 13 backend services (`API Gateway`, `Orchestrator`, `Planner Agent`, `Fixer Agent`), and against the wrong ports for both agents (`:8001`/`:8002` instead of the real `:9007`/`:9002`), so it always reports them unreachable.
+- `gitoracle eval --golden-dir <dir> [--report <file>]` — runs a local `time.sleep` progress bar and prints a hardcoded `94%` accuracy; makes no request to the eval harness at all. the real harness is `python eval/run_evals.py` (see [testing & CI](#testing--ci)).
+- `gitoracle prompts list --agent <name>` — prints three hardcoded rows (`v3.2` / `v3.1` / `v3.0`); never calls `prompt_registry`.
+- `gitoracle prompts activate --agent <name> --version <version>` — sleeps and prints success without calling `PUT :9005/prompts/{agent}/{key}/activate/{version}` or anything else.
+
+## testing & CI
+
+every push/PR to `main` runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+
+| job | what it does | blocking? |
+|---|---|---|
+| `python-lint` | `ruff check ai_core --select E9,F` (syntax errors/undefined names), then mypy over `ai_core/agents` | ruff blocks; mypy runs `\|\| true` — non-blocking |
+| `java-integration-tests` | `./gradlew test --no-daemon` across all 6 modules (spring boot + testcontainers) | blocking |
+| `python-agent-tests` | starts `ai_core/tests/mock_llm_server.py`, then `pytest ai_core/tests/` | blocking |
+| `eval-harness` | `main` only, after the two test jobs pass: runs `eval/run_evals.py` against the golden dataset, then `eval/check_regression.py --min-score 0.75` | soft-fail (`continue-on-error: true`) — CI doesn't stand up a live stack, so `run_evals.py` can't reach the orchestrator and no report is ever produced; this surfaces as a visible warning instead of failing every commit for a gap unrelated to that commit |
+
+locally:
+```bash
+# java — one module or one test
+cd java-backend
+./gradlew :orchestrator:test --no-daemon
+./gradlew :orchestrator:test --no-daemon --tests "ai.gitoracle.orchestrator.OrchestratorServiceTest"
+
+# python — full suite or one file
+cd ai_core && source .venv/bin/activate
+python ai_core/tests/mock_llm_server.py &   # several tests hit it
+pytest ai_core/tests/
+pytest ai_core/tests/test_build_unified_diff.py -v
+```
+note: `ai_core/test_*.py` at the package root (`test_fixer.py`, `test_investigator.py`, etc.) are standalone manual smoke scripts run directly with `python`, not part of the pytest suite — the real regression suite is `ai_core/tests/` only.
+
+there is currently no test-coverage reporting, SAST, or dependency-vulnerability scanning configured in CI — something to add before treating this as production-hardened.
 
 ## development guidelines
 
@@ -309,3 +345,11 @@ the `gitOracle` CLI (`cli/gitOracle/main.py`) provides terminal-based control:
 - **never fabricate a success state or a dashboard metric.** if something can't be measured yet, show "no data" — a plausible-looking number that isn't real is worse than an honest gap.
 - **regression tests for anything that failed silently once.** `ai_core/tests/` and `java-backend/orchestrator/src/test/` exist specifically to pin bugs that were confirmed live and could easily reintroduce themselves (e.g. an idempotency guard, a column width, a duplicated CORS header) — a test that can't be shown to actually fail without the fix isn't worth adding.
 - **commit history.** atomic commits with the actual root cause and how it was confirmed in the message — not just what changed.
+
+## contributing
+
+no `CONTRIBUTING.md` yet. in the meantime: follow the [development guidelines](#development-guidelines) above, keep PRs scoped to one root cause, and make sure `./gradlew test --no-daemon` (java) and `pytest ai_core/tests/` (python) both pass locally before opening one — see [testing & CI](#testing--ci).
+
+## license
+
+no `LICENSE` file is present in this repository yet. until one is added, treat the code as all-rights-reserved by default — don't assume permissive reuse.
