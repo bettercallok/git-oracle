@@ -79,10 +79,12 @@ there's also a shortcut: a human who already knows the fix can skip straight to 
 
 ## detailed architecture
 
-a top-to-bottom walk of the full pipeline — every service, every kafka topic (named directly on the arrow that carries it), every synchronous HTTP call, and every storage/observability dependency.
+a top-to-bottom walk of the full pipeline — every service, every kafka topic (named directly on the arrow that carries it), every synchronous HTTP call, and every storage/observability dependency. it's the same picture as before, split into three panels so the labels are actually legible: the happy path first, then what happens after a PR exists, then the shared dependencies every agent leans on.
+
+**1 · entry points → the fix pipeline**
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#1e293b','primaryTextColor':'#e2e8f0','primaryBorderColor':'#475569','lineColor':'#64748b','secondaryColor':'#334155','tertiaryColor':'#0f172a','fontSize':'13px'}}}%%
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#1e293b','primaryTextColor':'#e2e8f0','primaryBorderColor':'#475569','lineColor':'#64748b','secondaryColor':'#334155','tertiaryColor':'#0f172a','fontSize':'14px'}}}%%
 flowchart TB
     dash["dashboard<br/>react + vite · :5173"]
     cli["gitoracle CLI"]
@@ -94,7 +96,7 @@ flowchart TB
 
     gw["api-gateway · :8080<br/>fail-closed X-API-Key auth<br/>centralized CORS + redis rate limit"]
     gw -->|"/webhook/**"| ei
-    gw -->|"/api/v1/risk"| gf
+    gw -->|"/api/v1/risk"| gf["git-forensics · :8082"]
     gw -->|"/api/v1/** catch-all"| orch
 
     ei["error-ingestor · :8081<br/>semantic dedup → AgentJob"]
@@ -124,6 +126,25 @@ flowchart TB
     orch3 -->|"HTTP :8085/pull-request<br/>sourceBranch"| gb["github-bot · :8085<br/>github app auth (JWT)<br/>clone(sourceBranch) → new branch<br/>→ commit/push → open PR"]
     gb -->|"real prUrl confirmed<br/>state → PR_OPENED"| orch4["orchestrator"]
 
+    classDef javaSvc fill:#1e3a5f,stroke:#3b82f6,color:#dbeafe
+    classDef pySvc fill:#1e3a2f,stroke:#22c55e,color:#dcfce7
+    classDef gateway fill:#5f3a1e,stroke:#f59e0b,color:#fef3c7
+    classDef client fill:#1e293b,stroke:#94a3b8,color:#e2e8f0
+    class ei,gf,orch,orch2,orch3,orch4,tr,gb javaSvc
+    class inv,pln,fix,grd pySvc
+    class gw gateway
+    class dash,cli,gh client
+```
+
+**2 · feedback loops — what happens after the PR exists**
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#1e293b','primaryTextColor':'#e2e8f0','primaryBorderColor':'#475569','lineColor':'#64748b','secondaryColor':'#334155','tertiaryColor':'#0f172a','fontSize':'14px'}}}%%
+flowchart TB
+    gh["github"]
+    ei["error-ingestor · :8081"]
+    dash["dashboard"]
+
     gh -.->|"PR merged / closed /<br/>approved / reverted"| ei
     ei -.->|"github-pr-events"| orch5["orchestrator<br/>(idempotent per job+outcome)"]
     orch5 -.->|persist| prout[("pr_outcomes")]
@@ -133,22 +154,41 @@ flowchart TB
     orch6 -.->|"HTTP :9003/review"| rev["reviewer · :9003<br/>action_needed?"]
 
     dash -.->|"commit explorer chat"| ca["commit_analyst · :9004"]
+
+    classDef javaSvc fill:#1e3a5f,stroke:#3b82f6,color:#dbeafe
+    classDef pySvc fill:#1e3a2f,stroke:#22c55e,color:#dcfce7
+    classDef storage fill:#3a1e5f,stroke:#a78bfa,color:#ede9fe
+    classDef client fill:#1e293b,stroke:#94a3b8,color:#e2e8f0
+    class ei,orch5,orch6 javaSvc
+    class rev,ca pySvc
+    class prout storage
+    class dash,gh client
+```
+
+**3 · shared dependencies — prompts, inference, storage, observability**
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#1e293b','primaryTextColor':'#e2e8f0','primaryBorderColor':'#475569','lineColor':'#64748b','secondaryColor':'#334155','tertiaryColor':'#0f172a','fontSize':'14px'}}}%%
+flowchart LR
+    subgraph agents["python agents"]
+        direction TB
+        inv["investigator · :9001"]
+        pln["planner · :9007"]
+        fix["fixer · :9002"]
+        rev["reviewer · :9003"]
+        ca["commit_analyst · :9004"]
+    end
+
+    subgraph jsvc["java services"]
+        direction TB
+        orch["orchestrator · :8083"]
+        gw["api-gateway · :8080"]
+        gf["git-forensics · :8082"]
+    end
+
     fix <-.->|"HTTP GET/POST<br/>versioned prompt + attribution"| preg["prompt_registry · :9005<br/>redis-cached, hot-reload"]
     pln <-.-> preg
     inv <-.-> preg
-
-    pg[("postgreSQL + pgvector<br/>agent_job · escalations · pr_outcomes<br/>eval_runs · job_prompt_versions<br/>prompt_version · agent_memory")]
-    neo[("neo4j<br/>repo dependency + risk graph")]
-    qd[("qdrant<br/>RAG context vectors")]
-    rd[("redis<br/>rate limits + prompt cache")]
-
-    orch4 <-->|JPA| pg
-    gf["git-forensics · :8082"] <-->|cypher| neo
-    fix -.->|episodic/semantic memory| pg
-    fix -.->|context retrieval| qd
-    gw <-->|rate limit counters| rd
-    preg <-->|cache + persist| rd
-    preg <-->|persist| pg
 
     llm["openai-compatible LLM endpoint<br/>groq / openai / anthropic / self-hosted<br/>set via LLM_BASE_URL"]
     inv -->|structured JSON completion| llm
@@ -157,25 +197,38 @@ flowchart TB
     rev -->|structured JSON completion| llm
     ca -->|completion| llm
 
-    lf["langfuse<br/>prompt/response/tokens/latency"]
+    pg[("postgreSQL + pgvector<br/>agent_job · escalations · pr_outcomes<br/>eval_runs · job_prompt_versions<br/>prompt_version · agent_memory")]
+    neo[("neo4j<br/>repo dependency + risk graph")]
+    qd[("qdrant<br/>RAG context vectors")]
+    rd[("redis<br/>rate limits + prompt cache")]
+
+    orch <-->|JPA| pg
+    gf <-->|cypher| neo
+    fix -.->|episodic/semantic memory| pg
+    fix -.->|context retrieval| qd
+    gw <-->|rate limit counters| rd
+    preg <-->|cache + persist| rd
+    preg <-->|persist| pg
+
+    subgraph observability
+        lf["langfuse<br/>prompt/response/tokens/latency"]
+        prom["prometheus + grafana<br/>scrapes :8081-8085, :9001-9006"]
+        kui["kafka UI<br/>topic backlogs"]
+    end
+
     inv -.-> lf
     pln -.-> lf
     fix -.-> lf
-
-    prom["prometheus + grafana"]
-    kui["kafka UI<br/>topic backlogs"]
 
     classDef javaSvc fill:#1e3a5f,stroke:#3b82f6,color:#dbeafe
     classDef pySvc fill:#1e3a2f,stroke:#22c55e,color:#dcfce7
     classDef storage fill:#3a1e5f,stroke:#a78bfa,color:#ede9fe
     classDef gateway fill:#5f3a1e,stroke:#f59e0b,color:#fef3c7
-    classDef client fill:#1e293b,stroke:#94a3b8,color:#e2e8f0
     classDef obs fill:#1e1e1e,stroke:#737373,color:#d4d4d4
-    class ei,gf,orch,orch2,orch3,orch4,orch5,orch6,tr,gb javaSvc
-    class inv,pln,fix,grd,rev,ca,preg pySvc
-    class pg,neo,qd,rd,prout storage
+    class orch,gf javaSvc
+    class inv,pln,fix,rev,ca,preg pySvc
+    class pg,neo,qd,rd storage
     class gw gateway
-    class dash,cli,gh client
     class llm,lf,prom,kui obs
 ```
 
