@@ -56,6 +56,34 @@ public class TestRunnerController {
     // runtime catch in runInDocker(), which applies the same two-gate check.
     private volatile boolean dockerAvailable = false;
 
+    // A dedicated bridge network, not Docker's default `bridge`. Docker's
+    // default bridge has inter-container communication enabled among every
+    // container attached to it — if any of GitOracle's own containers (or a
+    // concurrent test-runner job) were ever on that same default network,
+    // an untrusted test container could reach them directly by container IP
+    // with no host port involved at all. A dedicated network isolates the
+    // sandbox tier from every other container GitOracle runs.
+    private static final String SANDBOX_NETWORK = "gitoracle-sandbox-net";
+
+    // Docker containers default to root when the image doesn't declare a
+    // USER (true of every stock language image used below). Running the
+    // sandbox as root hands a compromised/malicious test process root
+    // *inside* the container, which is one `--cap-add`/kernel bug away from
+    // root on the host. Resolved once at startup: if this service's own
+    // process is non-root (the normal case), the sandbox runs as that same
+    // uid/gid — which already owns the bind-mounted workspace this service
+    // created, so no permission workaround is needed. If this service is
+    // somehow running as root, running the sandbox as the same uid would
+    // mean root-in-container too, so fall back to a fixed non-root uid and
+    // chown the workspace to it (root can always do that; a non-root
+    // process chowning a file it already owns to itself is a harmless
+    // no-op, so this chown runs unconditionally either way).
+    private static final String SANDBOX_FALLBACK_USER = "65534:65534";
+    private String sandboxUser = SANDBOX_FALLBACK_USER;
+    private String sandboxUid = "65534";
+    private String sandboxGid = "65534";
+    private volatile boolean sandboxNetworkReady = false;
+
     @PostConstruct
     private void init() {
         trustedRepos = Arrays.stream(trustedReposRaw.split(","))
@@ -83,11 +111,102 @@ public class TestRunnerController {
         }
         if (dockerAvailable) {
             logger.info("Docker sandbox available.");
+            sandboxUser = resolveSandboxUser();
+            String[] parts = sandboxUser.split(":");
+            sandboxUid = parts[0];
+            sandboxGid = parts.length > 1 ? parts[1] : parts[0];
+            ensureSandboxNetwork();
         } else {
             logger.error("Docker is not available at startup (`docker info` failed). Test execution will be " +
                 "refused (503) for any repo not on the unsafe-native trusted-repos allowlist, since there is " +
                 "no way to safely sandbox a cloned repo's own build otherwise.");
         }
+    }
+
+    private String resolveSandboxUser() {
+        try {
+            RunResult uid = run(Path.of(System.getProperty("java.io.tmpdir")), 5, "id", "-u");
+            RunResult gid = run(Path.of(System.getProperty("java.io.tmpdir")), 5, "id", "-g");
+            if (uid.success() && gid.success() && !"0".equals(uid.output().trim())) {
+                return uid.output().trim() + ":" + gid.output().trim();
+            }
+        } catch (Exception e) {
+            logger.warn("Could not resolve this service's own uid/gid for sandbox containers, " +
+                "falling back to {}: {}", SANDBOX_FALLBACK_USER, e.getMessage());
+        }
+        logger.warn("test-runner is running as root (or its uid couldn't be resolved) — sandbox " +
+            "containers will run as {} instead, with the workspace chowned to match.", SANDBOX_FALLBACK_USER);
+        return SANDBOX_FALLBACK_USER;
+    }
+
+    private void ensureSandboxNetwork() {
+        try {
+            RunResult inspect = run(Path.of(System.getProperty("java.io.tmpdir")), 10,
+                "docker", "network", "inspect", SANDBOX_NETWORK);
+            if (inspect.success()) {
+                sandboxNetworkReady = true;
+                return;
+            }
+            // Deliberately NOT --internal: dependency installs (npm ci, pip
+            // install, mvn/gradle test) need internet egress to package
+            // registries. This network only isolates the sandbox tier from
+            // GitOracle's other containers (see SANDBOX_NETWORK) — it does
+            // NOT by itself block reaching the docker host's published ports
+            // via the bridge gateway or block RFC1918/cloud-metadata egress.
+            // That requires host-level iptables/nftables rules on the
+            // FORWARD chain for this bridge, which is a production
+            // deployment step (see infrastructure/docker/README) and is not
+            // something this JVM process applies itself: doing so would
+            // require running this service with NET_ADMIN/root on the host,
+            // which is itself a privilege this sandboxing service shouldn't
+            // need, and the equivalent host network namespace isn't reachable
+            // this way at all on Docker Desktop (macOS/Windows) dev machines.
+            RunResult create = run(Path.of(System.getProperty("java.io.tmpdir")), 15,
+                "docker", "network", "create", "--driver", "bridge", SANDBOX_NETWORK);
+            if (create.success()) {
+                sandboxNetworkReady = true;
+                logger.info("Created dedicated sandbox network {}.", SANDBOX_NETWORK);
+            } else {
+                logger.error("Could not create sandbox network {} — falling back to the default bridge " +
+                    "network for this run, which permits inter-container communication with any other " +
+                    "container GitOracle runs: {}", SANDBOX_NETWORK, create.output());
+            }
+        } catch (Exception e) {
+            logger.error("Could not ensure sandbox network {} exists: {}", SANDBOX_NETWORK, e.getMessage());
+        }
+    }
+
+    // Most package managers cache under $HOME (redirected onto disk-backed
+    // scratch space via -e HOME=/tmp below), but two of the stock images
+    // bake in a *different*, absolute cache path that ignores $HOME
+    // entirely — confirmed by inspecting each image directly, not assumed:
+    // Cargo's CARGO_HOME=/usr/local/cargo and Go's GOPATH=/go (Maven's
+    // MAVEN_CONFIG=/root/.m2 looked like a third case but its own entrypoint
+    // script unsets it before the test command runs, so HOME alone handles
+    // it). --read-only would make those paths unwritable regardless of
+    // $HOME, so they get their own targeted bind mounts instead — narrow
+    // ones (the registry/module cache subdirectory, not the whole
+    // CARGO_HOME/GOPATH) so the toolchain binaries the image ships under
+    // those same trees aren't shadowed by an empty mount over them.
+    private List<String> sandboxCacheBindMounts(Path scratchRoot, TestFramework framework) throws IOException {
+        List<String> mounts = new java.util.ArrayList<>();
+        for (var entry : cacheMountPoints(framework).entrySet()) {
+            Path hostDir = scratchRoot.resolve(entry.getKey());
+            Files.createDirectories(hostDir);
+            mounts.add("-v");
+            mounts.add(hostDir.toAbsolutePath() + ":" + entry.getValue() + ":rw");
+        }
+        return mounts;
+    }
+
+    private Map<String, String> cacheMountPoints(TestFramework framework) {
+        return switch (framework) {
+            case CARGO -> Map.of(
+                "cargo-registry", "/usr/local/cargo/registry",
+                "cargo-git", "/usr/local/cargo/git");
+            case GO_TEST -> Map.of("go-pkg", "/go/pkg");
+            default -> Map.of();
+        };
     }
 
     private boolean isNativeFallbackAuthorized(String repoUrl) {
@@ -246,7 +365,9 @@ public class TestRunnerController {
 
     // ─── Framework Detection ──────────────────────────────────────────────────
 
-    private record FrameworkConfig(TestFramework framework, String subDir) {}
+    // Package-private (not private): constructed directly in SandboxHardeningTest
+    // to exercise buildDockerRunCommand() without needing a live Docker daemon.
+    record FrameworkConfig(TestFramework framework, String subDir) {}
 
     private FrameworkConfig detectFramework(Path workDir, TestFramework hint) {
         if (hint != null && hint != TestFramework.UNKNOWN) return new FrameworkConfig(hint, ".");
@@ -289,6 +410,56 @@ public class TestRunnerController {
 
     // ─── Docker Execution ─────────────────────────────────────────────────────
 
+    /**
+     * Builds the full `docker run` argv for sandboxing one job's test
+     * execution. Extracted as its own method (rather than inline in
+     * runInDocker) specifically so the security-relevant flags here can be
+     * asserted directly in a unit test without needing a live Docker daemon.
+     */
+    List<String> buildDockerRunCommand(Path workDir, FrameworkConfig config, String containerWorkDir,
+                                        String dockerImage, String testCommand) throws IOException {
+        // Scratch space for /tmp and the framework-specific caches below is a
+        // host-directory bind mount, not --tmpfs. tmpfs is RAM-backed and its
+        // pages count against --memory, so it seemed like the obvious choice
+        // for "writable space under a --read-only root" — until a live run
+        // against this repo's own (unremarkable-sized) Gradle build OOM'd
+        // partway through unzipping just the ~130MB Gradle wrapper
+        // distribution, because that download plus the dependency cache
+        // landing in the same tmpfs blew past the container's 512m memory
+        // limit. A disk-backed bind mount has no such coupling — this is the
+        // same trade-off the pre-hardening code already had (writes landed on
+        // the container's normal disk-backed layer, uncapped by --memory),
+        // just now under a read-only root instead of a writable one. It is
+        // cleaned up for free: this whole directory lives under the job's
+        // workDir, which the caller already deletes in its `finally` block.
+        Path scratchRoot = workDir.resolve(".sandbox-scratch");
+        Path tmpDir = scratchRoot.resolve("tmp");
+        Files.createDirectories(tmpDir);
+
+        List<String> dockerCmd = new java.util.ArrayList<>(List.of(
+            "docker", "run", "--rm",
+            "--network", sandboxNetworkReady ? SANDBOX_NETWORK : "bridge",
+            "--user", sandboxUser,
+            "--read-only",
+            "-v", tmpDir.toAbsolutePath() + ":/tmp:rw",
+            "--security-opt", "no-new-privileges",
+            "--cap-drop=ALL",
+            "--pids-limit=256",
+            "--ulimit", "nofile=1024:1024",
+            "--ulimit", "fsize=209715200",              // 200MB max single file
+            "--memory=512m", "--memory-swap=512m", "--cpus=1", // no swap beyond the memory limit
+            "-e", "HOME=/tmp"                           // package-manager caches land in the mount above
+        ));
+        dockerCmd.addAll(sandboxCacheBindMounts(scratchRoot, config.framework()));
+        dockerCmd.addAll(List.of(
+            "-v", workDir.toAbsolutePath() + ":/repo:rw",
+            "-w", containerWorkDir.replaceAll("/\\.$", ""), // clean trailing /.
+            dockerImage,
+            "sh", "-c", testCommand
+        ));
+        return dockerCmd;
+    }
+
     private TestResult runInDocker(Path workDir, FrameworkConfig config, String jobId, String repoUrl) {
         String dockerImage = getDockerImage(config.framework());
         String testCommand = getTestCommand(config.framework());
@@ -296,16 +467,35 @@ public class TestRunnerController {
 
         logger.info("Running '{}' in Docker image '{}' (dir {}) for job {}", testCommand, dockerImage, containerWorkDir, jobId);
 
-        try {
-            List<String> dockerCmd = List.of(
-                "docker", "run", "--rm",
-                "--memory=512m", "--cpus=1",                  // resource limits
-                "-v", workDir.toAbsolutePath() + ":/repo:rw",
-                "-w", containerWorkDir.replaceAll("/\\.$", ""), // clean trailing /.
-                dockerImage,
-                "sh", "-c", testCommand
-            );
+        // sandboxNetworkReady=false means network isolation from GitOracle's own
+        // containers isn't in effect for this run — see ensureSandboxNetwork()'s
+        // logged error for why. Still every other hardening flag still applies.
+        if (!sandboxNetworkReady) {
+            logger.warn("Running job {} on the default bridge network — sandbox network " +
+                "{} was not available.", jobId, SANDBOX_NETWORK);
+        }
 
+        try {
+            // Creates the scratch/cache subdirectories under workDir as a side
+            // effect, so chown below (which must run AFTER this, not before)
+            // covers them too.
+            List<String> dockerCmd = buildDockerRunCommand(workDir, config, containerWorkDir, dockerImage, testCommand);
+
+            // The container will run as sandboxUser (never root — see
+            // resolveSandboxUser()), which may not be the uid that owns this
+            // bind-mounted workspace (it is only guaranteed to when this
+            // service itself is non-root, the common case). chown
+            // unconditionally: when sandboxUser IS this process's own uid,
+            // chowning a path you already own to yourself is a no-op; when
+            // it's the root-fallback uid, only root (which is what that
+            // branch implies) can chown to an arbitrary uid, and root always
+            // can.
+            try {
+                run(workDir, 10, "chown", "-R", sandboxUser, workDir.toAbsolutePath().toString());
+            } catch (Exception e) {
+                logger.warn("Could not chown workspace {} to sandbox user {} for job {}: {}",
+                    workDir, sandboxUser, jobId, e.getMessage());
+            }
             RunResult result = run(workDir, TIMEOUT_SECONDS, dockerCmd.toArray(String[]::new));
 
             if (result.timedOut()) {
@@ -437,15 +627,31 @@ public class TestRunnerController {
 
     // ─── Docker Image + Command Mapping ───────────────────────────────────────
 
+    // Pinned by digest, not tag: a tag (e.g. "python:3.11-slim") can be
+    // repointed by the upstream image owner (or a compromised registry
+    // account) to different, potentially malicious content at any time —
+    // the next job would silently pull and run it. A digest is immutable
+    // content-addressing, so this only ever runs the exact image reviewed
+    // when it was pinned. Refresh deliberately, not automatically:
+    //   docker pull <tag> && docker inspect --format='{{index .RepoDigests 0}}' <tag>
+    // then update both the digest below and the tag in the comment (kept
+    // purely for human readability — the digest is what's actually used).
     private String getDockerImage(TestFramework framework) {
         return switch (framework) {
-            case PYTEST    -> "python:3.11-slim";
-            case MAVEN     -> "maven:3.9-eclipse-temurin-21-alpine";
-            case GRADLE    -> "gradle:8.7-jdk21-alpine";
-            case NPM_JEST  -> "node:20-alpine";
-            case CARGO     -> "rust:1.78-slim";
-            case GO_TEST   -> "golang:1.22-alpine";
-            default        -> "python:3.11-slim";
+            // python:3.11-slim
+            case PYTEST    -> "python@sha256:1042b61448fef4ba92d16a8c7eb4996d027568ce64792a7877fd88511e0af7c6";
+            // maven:3.9-eclipse-temurin-21-alpine
+            case MAVEN     -> "maven@sha256:65353f527c86cb23187c8233475713e15067e8d36220d18863c379680698fe85";
+            // gradle:8.7-jdk21-alpine
+            case GRADLE    -> "gradle@sha256:d6ea1c746d8365fae41c70d5812c28c8fca88c905b69d5f9da57ad4cc0218ab1";
+            // node:20-alpine
+            case NPM_JEST  -> "node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293";
+            // rust:1.78-slim
+            case CARGO     -> "rust@sha256:0fea967628dc796a2b9d1d57ddb3af3b3f0a35b6c8c0e23690dbe0ceb71a2dc9";
+            // golang:1.22-alpine
+            case GO_TEST   -> "golang@sha256:1699c10032ca2582ec89a24a1312d986a3f094aed3d5c1147b19880afe40e052";
+            // python:3.11-slim
+            default        -> "python@sha256:1042b61448fef4ba92d16a8c7eb4996d027568ce64792a7877fd88511e0af7c6";
         };
     }
 
