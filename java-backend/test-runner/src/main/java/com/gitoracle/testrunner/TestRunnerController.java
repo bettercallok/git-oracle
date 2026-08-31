@@ -1,8 +1,11 @@
 package com.gitoracle.testrunner;
 
 import com.gitoracle.testrunner.security.RepoRefValidator;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -11,6 +14,7 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.*;
+import java.util.stream.Collectors;
 
 /**
  * GitOracle Test Runner — Real sandboxed test execution.
@@ -31,6 +35,65 @@ public class TestRunnerController {
     private static final Logger logger = LoggerFactory.getLogger(TestRunnerController.class);
     private static final String WORKSPACE_ROOT = "/tmp/gitoracle-workspaces";
     private static final int TIMEOUT_SECONDS = 180;
+
+    // Docker is the only sandbox this service has — running a cloned repo's own
+    // build/test command (mvn test / npm ci / pip install -r / cargo test) is
+    // executing arbitrary third-party code, so it must never happen unsandboxed
+    // by default. Both gates below must be true before a native fallback runs;
+    // an unset trusted-repos allowlist means deny-all, the same convention
+    // guardrails uses for its own file allowlist.
+    @Value("${gitoracle.allow-unsafe-native-tests:false}")
+    private boolean allowUnsafeNativeTests;
+
+    @Value("${gitoracle.testrunner.trusted-repos:}")
+    private String trustedReposRaw;
+
+    private Set<String> trustedRepos = Set.of();
+
+    // Snapshot taken once at startup rather than re-checked per request — a
+    // per-job `docker info` would add avoidable latency to every test run. A
+    // Docker daemon that goes down *between* requests is still caught by the
+    // runtime catch in runInDocker(), which applies the same two-gate check.
+    private volatile boolean dockerAvailable = false;
+
+    @PostConstruct
+    private void init() {
+        trustedRepos = Arrays.stream(trustedReposRaw.split(","))
+            .map(String::trim)
+            .filter(s -> !s.isEmpty())
+            .collect(Collectors.toUnmodifiableSet());
+
+        if (allowUnsafeNativeTests) {
+            logger.warn("################################################################");
+            logger.warn("# gitoracle.allow-unsafe-native-tests is ENABLED.");
+            logger.warn("# Test execution may fall back to running a cloned repo's own");
+            logger.warn("# build/test command DIRECTLY ON THIS HOST when the Docker");
+            logger.warn("# sandbox is unavailable. This is only authorized for repos");
+            logger.warn("# on gitoracle.testrunner.trusted-repos ({} entr{}). NEVER set", trustedRepos.size(),
+                trustedRepos.size() == 1 ? "y" : "ies");
+            logger.warn("# this in an environment that clones untrusted or public repos.");
+            logger.warn("################################################################");
+        }
+
+        try {
+            RunResult result = run(Path.of(System.getProperty("java.io.tmpdir")), 15, "docker", "info");
+            dockerAvailable = result.success();
+        } catch (Exception e) {
+            dockerAvailable = false;
+        }
+        if (dockerAvailable) {
+            logger.info("Docker sandbox available.");
+        } else {
+            logger.error("Docker is not available at startup (`docker info` failed). Test execution will be " +
+                "refused (503) for any repo not on the unsafe-native trusted-repos allowlist, since there is " +
+                "no way to safely sandbox a cloned repo's own build otherwise.");
+        }
+    }
+
+    private boolean isNativeFallbackAuthorized(String repoUrl) {
+        return allowUnsafeNativeTests && !trustedRepos.isEmpty()
+            && repoUrl != null && trustedRepos.contains(repoUrl);
+    }
 
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
@@ -66,6 +129,17 @@ public class TestRunnerController {
             logger.warn("Rejected test request for job {}: {}", jobId, e.getMessage());
             return ResponseEntity.ok(new TestResult(false, 0.0, 0.0,
                 "Rejected: " + e.getMessage()));
+        }
+
+        // Fail loud (503) rather than silently degrading to an unsandboxed host
+        // execution per job. Checked before cloning (and after the repoUrl/branch
+        // validation above) to avoid wasting a clone on a request that's going to
+        // be refused anyway, and to match the trusted-repos allowlist against the
+        // canonical validated URL rather than a raw, unvalidated one.
+        if (!dockerAvailable && !isNativeFallbackAuthorized(repoUrl)) {
+            logger.error("Refusing test request for job {}: Docker sandbox is unavailable and this repo is " +
+                "not authorized for unsafe-native fallback.", jobId);
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
         }
 
         Path workDir = Path.of(WORKSPACE_ROOT, jobId);
@@ -153,7 +227,7 @@ public class TestRunnerController {
             logger.info("Detected framework {} in dir {} for job {}", config.framework(), config.subDir(), jobId);
 
             // ── Step 5: Run tests in Docker ────────────────────────────────────
-            return ResponseEntity.ok(runInDocker(workDir, config, jobId));
+            return ResponseEntity.ok(runInDocker(workDir, config, jobId, repoUrl));
 
         } catch (Exception e) {
             logger.error("Unexpected error running tests for job {}: {}", jobId, e.getMessage(), e);
@@ -215,7 +289,7 @@ public class TestRunnerController {
 
     // ─── Docker Execution ─────────────────────────────────────────────────────
 
-    private TestResult runInDocker(Path workDir, FrameworkConfig config, String jobId) {
+    private TestResult runInDocker(Path workDir, FrameworkConfig config, String jobId, String repoUrl) {
         String dockerImage = getDockerImage(config.framework());
         String testCommand = getTestCommand(config.framework());
         String containerWorkDir = "/repo/" + config.subDir();
@@ -266,17 +340,41 @@ public class TestRunnerController {
                 "[exit=" + result.exitCode() + "]\n" + result.output());
 
         } catch (Exception e) {
-            // Docker not available — run natively as fallback
-            logger.warn("Docker unavailable ({}), running natively for job {}", e.getMessage(), jobId);
-            return runNative(workDir, config, jobId);
+            // Docker failed for this specific job (daemon down, image pull
+            // failure, etc.) — this used to fall through to running the repo's
+            // own build command directly on the host, unsandboxed, for ANY
+            // repo. That is arbitrary third-party code execution (npm lifecycle
+            // scripts, maven plugins, setup.py, build.rs) as this service's own
+            // user, with this service's own environment and filesystem access.
+            // A sandbox that can't be established must fail closed, not
+            // silently degrade — the only exception is a repo explicitly
+            // authorized via both gates in isNativeFallbackAuthorized().
+            logger.error("Docker execution failed for job {}: {}", jobId, e.getMessage(), e);
+            if (isNativeFallbackAuthorized(repoUrl)) {
+                return runNativeUnsafe(workDir, config, jobId);
+            }
+            return new TestResult(false, 0.0, 0.0,
+                "Sandbox unavailable — test execution refused rather than run unsandboxed on the host. " +
+                "Docker error: " + e.getMessage());
         }
     }
 
-    private TestResult runNative(Path workDir, FrameworkConfig config, String jobId) {
+    /**
+     * Runs the repo's own test command directly on this host, as this
+     * service's user, with this service's environment and full filesystem/
+     * network access — only reached when gitoracle.allow-unsafe-native-tests
+     * is true AND the repo is explicitly listed in
+     * gitoracle.testrunner.trusted-repos (checked by the caller via
+     * isNativeFallbackAuthorized()). Never call this for an untrusted or
+     * public repo.
+     */
+    private TestResult runNativeUnsafe(Path workDir, FrameworkConfig config, String jobId) {
+        logger.warn("Running UNSANDBOXED native test execution on the host for job {} — this repo is on " +
+            "the trusted-repos allowlist with unsafe-native testing enabled.", jobId);
         String cmd = config.framework().getCommand();
         if (cmd == null || cmd.contains("exit 0")) {
             return new TestResult(true, 1.0, 0.0,
-                "WARN: Docker unavailable and no native command for " + config.framework() + ". Safe-pass.");
+                "WARN: no native command available for " + config.framework() + ". Safe-pass.");
         }
 
         try {
