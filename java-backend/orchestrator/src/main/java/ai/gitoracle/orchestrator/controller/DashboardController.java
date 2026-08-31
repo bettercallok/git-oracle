@@ -5,6 +5,7 @@ import ai.gitoracle.core.entity.Escalation;
 import ai.gitoracle.core.entity.EvalRun;
 import ai.gitoracle.core.kafka.KafkaTopics;
 import ai.gitoracle.core.kafka.event.ErrorIngestedEvent;
+import ai.gitoracle.core.security.RepoRefValidator;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.web.bind.annotation.*;
@@ -158,6 +159,18 @@ public class DashboardController {
 
         if (repoUrl == null || issue == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "repoUrl and issueDescription are required"));
+        }
+
+        // Reject at the pipeline's entry point, not just at the git-invoking call
+        // sites downstream — repoUrl/branch eventually reach `git clone` in
+        // WorkspaceService, test-runner, and github-bot, all of which enforce the
+        // same restriction, but failing fast here gives the caller a clear 400
+        // instead of a job that silently never clones.
+        try {
+            repoUrl = RepoRefValidator.validateRepoUrl(repoUrl);
+            branch = RepoRefValidator.validateBranch(branch);
+        } catch (RepoRefValidator.InvalidRepoRefException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
 
         AgentJob job = new AgentJob();
