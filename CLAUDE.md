@@ -104,6 +104,9 @@ Postgres+pgvector (job state, escalations, PR outcomes, eval runs, prompt versio
 ### Memory constraints are load-bearing, not incidental
 The full stack targets 8GB RAM minimum: `java-backend/gradle.properties` (`org.gradle.daemon=false`, capped `jvmargs`), `start_local.sh`'s per-service `-Xmx`/`-XX:MaxMetaspaceSize` JVM args, and a `mem_limit` on every container in `docker-compose.infra.yml` all exist specifically to prevent Docker Desktop from being OOM-killed on smaller machines — this has happened in practice. Don't remove these caps to "simplify" a service's startup.
 
+### Docker is required for test execution — there is no unsandboxed fallback
+`test-runner` runs a cloned repo's test suite in a Docker container. It used to silently fall back to running that repo's own build/test command directly on the host whenever Docker was unavailable for any reason — since that command (`mvn test`, `npm ci`, `pip install -r requirements.txt`, `cargo test`, ...) executes the repo's own build scripts, that fallback was arbitrary code execution as the service's own user. It's gone: a `docker info` preflight at startup and a runtime check on every job both fail closed (503 at startup, a failed `TestResult` per job) instead. If Docker Desktop stops while services are running, test execution stops working rather than silently running unsandboxed — that's intentional, not a bug. A native fallback still exists for local dev behind two env vars (`GITORACLE_ALLOW_UNSAFE_NATIVE_TESTS=true` **and** `GITORACLE_TESTRUNNER_TRUSTED_REPOS` listing the exact repo URL) — never set these where an untrusted or public repo could be cloned.
+
 ## Project structure
 - `java-backend/` — 6 Java microservices (each its own gradle subproject) + `git-oracle-core` shared library.
 - `ai_core/` — 7 Python FastAPI agents (`agents/`), shared LLM/kafka/memory/prompt-registry helpers (`shared/`), regression suite (`tests/`).

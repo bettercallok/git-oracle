@@ -52,6 +52,18 @@ else
   make infra-up
 fi
 
+# Docker isn't just for infra: test-runner's own sandbox for running a cloned
+# repo's tests requires Docker too. It used to silently fall back to running
+# the repo's own build command directly on this host whenever Docker wasn't
+# reachable — that's arbitrary third-party code execution, so it now refuses
+# instead (503 at startup, or a failed TestResult per job; see
+# TestRunnerController's docker preflight). If Docker Desktop is ever stopped
+# while services are running, test execution stops working rather than
+# silently running unsandboxed — that's intentional.
+if ! docker info >/dev/null 2>&1; then
+  echo "⚠️  Docker daemon not reachable — test-runner will refuse to run tests until it is."
+fi
+
 echo "☕ Building Java Microservices..."
 set -a
 source .env
