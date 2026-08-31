@@ -1,5 +1,6 @@
 package ai.gitoracle.orchestrator.service;
 
+import ai.gitoracle.core.security.RepoRefValidator;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
@@ -49,14 +50,30 @@ public class WorkspaceService {
             return clonePath;
         }
 
+        // repoUrl/branch are per-request overrides threaded from the original
+        // webhook/dashboard payload with no upstream authentication. JGit doesn't
+        // shell out, so this isn't command-injectable, but with no validation it
+        // would clone from any scheme/host a caller supplies (SSRF, file:// local
+        // reads) — restrict to https://github.com/<owner>/<repo> like every other
+        // git-invoking call site in the pipeline.
+        String validatedRepoUrl;
+        String validatedBranch;
+        try {
+            validatedRepoUrl = RepoRefValidator.validateRepoUrl(repoUrl);
+            validatedBranch = RepoRefValidator.validateBranch(branch);
+        } catch (RepoRefValidator.InvalidRepoRefException e) {
+            logger.error("Refusing to clone for job {}: {}", jobId, e.getMessage());
+            return clonePath;
+        }
+
         try {
             logger.info("Cloning {} (branch: {}) into {} for job {}",
-                        repoUrl, branch != null && !branch.isBlank() ? branch : "<default>", clonePath, jobId);
+                        validatedRepoUrl, validatedBranch != null ? validatedBranch : "<default>", clonePath, jobId);
             var cloneCommand = Git.cloneRepository()
-                    .setURI(repoUrl)
+                    .setURI(validatedRepoUrl)
                     .setDirectory(localPath);
-            if (branch != null && !branch.isBlank()) {
-                cloneCommand.setBranch(branch);
+            if (validatedBranch != null) {
+                cloneCommand.setBranch(validatedBranch);
             }
             cloneCommand.call().close();
             logger.info("Successfully cloned {} for job {}", repoUrl, jobId);

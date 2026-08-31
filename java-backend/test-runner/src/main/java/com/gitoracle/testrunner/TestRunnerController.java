@@ -1,5 +1,6 @@
 package com.gitoracle.testrunner;
 
+import com.gitoracle.testrunner.security.RepoRefValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -50,6 +51,23 @@ public class TestRunnerController {
                 "Provide 'repoUrl' in the TestRequest to enable real test execution."));
         }
 
+        // repoUrl and branch reach this endpoint from HTTP request bodies with no
+        // upstream authentication. Before this validation, a repoUrl of
+        // `ext::sh -c '<cmd>'` (git's ext:: transport) executed arbitrary commands,
+        // and a value starting with `-` was parsed as a git option rather than a
+        // repository — both because the value went straight into the clone argv
+        // with no terminator and no allowlist. Reject anything that isn't an
+        // https://github.com/<owner>/<repo> URL before it ever reaches `git`.
+        String branch = request.getBranch();
+        try {
+            repoUrl = RepoRefValidator.validateRepoUrl(repoUrl);
+            branch = RepoRefValidator.validateBranch(branch);
+        } catch (RepoRefValidator.InvalidRepoRefException e) {
+            logger.warn("Rejected test request for job {}: {}", jobId, e.getMessage());
+            return ResponseEntity.ok(new TestResult(false, 0.0, 0.0,
+                "Rejected: " + e.getMessage()));
+        }
+
         Path workDir = Path.of(WORKSPACE_ROOT, jobId);
 
         try {
@@ -63,13 +81,16 @@ public class TestRunnerController {
             // cloned the default branch regardless of which branch the Fixer actually
             // read from and patched, so a patch generated against a non-default
             // branch's file content could apply against the wrong base or fail outright.
-            String branch = request.getBranch();
+            // repoUrl/branch are already validated above; the "--" still guards
+            // against any value that slips past validation being reinterpreted as
+            // a git option instead of a positional argument.
             java.util.List<String> cloneCmd = new java.util.ArrayList<>(
                 java.util.List.of("git", "clone", "--depth=1"));
             if (branch != null && !branch.isBlank()) {
                 cloneCmd.add("--branch");
                 cloneCmd.add(branch);
             }
+            cloneCmd.add("--");
             cloneCmd.add(repoUrl);
             cloneCmd.add(workDir.toString());
 
@@ -360,6 +381,14 @@ public class TestRunnerController {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(dir.toFile());
         pb.redirectErrorStream(true);
+        // Belt-and-braces alongside RepoRefValidator: even if a forbidden value
+        // somehow reached a `git` invocation, these disable the alternate
+        // transports (ext::, fd::) and any interactive/credential prompt that a
+        // crafted URL or config could otherwise trigger. Harmless for non-git
+        // commands (docker run, etc.) invoked through this same helper.
+        pb.environment().put("GIT_ALLOW_PROTOCOL", "https");
+        pb.environment().put("GIT_TERMINAL_PROMPT", "0");
+        pb.environment().put("GIT_CONFIG_NOSYSTEM", "1");
         Process process = pb.start();
 
         StringBuilder output = new StringBuilder();
