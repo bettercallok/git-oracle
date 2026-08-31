@@ -1,5 +1,6 @@
 package com.gitoracle.githubbot;
 
+import com.gitoracle.githubbot.security.RepoRefValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -31,6 +32,28 @@ public class GitHubController {
         logger.info("Received request to open PR for job: {}", request.getJobId());
 
         try {
+            // repoFullName and sourceBranch flow from upstream pipeline events into
+            // a `git clone`/`git checkout` invocation below. Before this validation,
+            // a crafted sourceBranch starting with `-` was passed straight to
+            // `--branch` with no terminator, and repoFullName had no format check
+            // at all. Reject anything that isn't a plain "owner/repo" slug or a
+            // well-formed branch name before either reaches `git`.
+            try {
+                RepoRefValidator.validateRepoUrl("https://github.com/" + request.getRepoFullName());
+            } catch (RepoRefValidator.InvalidRepoRefException e) {
+                logger.warn("Rejected PR request for job {}: invalid repoFullName: {}",
+                    request.getJobId(), e.getMessage());
+                return ResponseEntity.badRequest().body(new PullRequestResult(false, null, e.getMessage()));
+            }
+            String requestedBranch;
+            try {
+                requestedBranch = RepoRefValidator.validateBranch(request.getSourceBranch());
+            } catch (RepoRefValidator.InvalidRepoRefException e) {
+                logger.warn("Rejected PR request for job {}: invalid sourceBranch: {}",
+                    request.getJobId(), e.getMessage());
+                return ResponseEntity.badRequest().body(new PullRequestResult(false, null, e.getMessage()));
+            }
+
             String markdown = generateMarkdown(request);
 
             // Connect to GitHub
@@ -44,8 +67,8 @@ public class GitHubController {
             // is cut from, and merges back into, the same code the patch was built
             // against. Previously this was always defaultBranch regardless of what
             // the rest of the pipeline used.
-            String baseBranch = (request.getSourceBranch() != null && !request.getSourceBranch().isBlank())
-                ? request.getSourceBranch() : defaultBranch;
+            String baseBranch = (requestedBranch != null && !requestedBranch.isBlank())
+                ? requestedBranch : defaultBranch;
 
             String newBranchName = "gitoracle-fix-" + request.getJobId().substring(0, 8);
 
@@ -61,11 +84,11 @@ public class GitHubController {
             // that resolved DNS fine a moment before and after (the same blip hit
             // the fixer's clone and test-runner's clone earlier in the pipeline).
             try {
-                runCommand(workDir, "git", "clone", "-c", "credential.helper=", "--branch", baseBranch, cloneUrl, ".");
+                runCommand(workDir, "git", "clone", "-c", "credential.helper=", "--branch", baseBranch, "--", cloneUrl, ".");
             } catch (Exception e) {
                 logger.warn("Clone failed for job {}, retrying once: {}", request.getJobId(), e.getMessage());
                 Thread.sleep(2000);
-                runCommand(workDir, "git", "clone", "-c", "credential.helper=", "--branch", baseBranch, cloneUrl, ".");
+                runCommand(workDir, "git", "clone", "-c", "credential.helper=", "--branch", baseBranch, "--", cloneUrl, ".");
             }
 
             logger.info("Creating branch {}", newBranchName);
