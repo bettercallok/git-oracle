@@ -23,6 +23,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
@@ -226,5 +229,77 @@ class OrchestratorServiceTest {
     void rankedCauseReturnsEmptyWhenInvestigationIsNotAMap() {
         assertThat(service.rankedCause("not a map")).isEmpty();
         assertThat(service.rankedCause(null)).isEmpty();
+    }
+
+    // ── handleFixGenerated: guardrails must be checked against authorizedFiles,
+    //    not the fixer's own filesModified self-report (C4) ─────────────────
+
+    @Test
+    void handleFixGeneratedSendsAuthorizedFilesToGuardrailsNotFilesModified() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "TESTING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        // filesModified (the LLM's own claim) deliberately differs from
+        // authorizedFiles (resolved before the LLM ran) — a compromised or
+        // manipulated fixer completion could claim to have only touched an
+        // authorized file while filesModified says otherwise; guardrails must
+        // be validated against authorizedFiles regardless of what
+        // filesModified says. Respond with a server error so the method
+        // returns right after this call, without needing a second mocked
+        // expectation for the test-runner call that would otherwise follow.
+        mockGitHubBot.expect(requestTo("http://localhost:9006/validate/patch"))
+            .andExpect(content().string(containsString("UserService.java")))
+            .andExpect(content().string(not(containsString("evil-payload.sh"))))
+            .andRespond(withServerError());
+
+        service.handleFixGenerated(Map.of(
+            "jobId", jobId.toString(),
+            "patch", "diff",
+            "filesModified", "evil-payload.sh",
+            "authorizedFiles", "src/main/java/com/example/UserService.java"
+        ));
+
+        mockGitHubBot.verify();
+    }
+
+    @Test
+    void handleFixGeneratedSendsEmptyAllowedFilesWhenAuthorizedFilesIsMissing() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "TESTING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        // No authorizedFiles at all (e.g. an older fixer build, or one that
+        // couldn't resolve anything) must still mean deny-all — not "trust
+        // whatever the diff touches", and not a fallback to filesModified.
+        mockGitHubBot.expect(requestTo("http://localhost:9006/validate/patch"))
+            .andExpect(content().string(containsString("\"allowed_files\":[]")))
+            .andRespond(withServerError());
+
+        service.handleFixGenerated(Map.of(
+            "jobId", jobId.toString(),
+            "patch", "diff",
+            "filesModified", "src/main/java/com/example/UserService.java"
+        ));
+
+        mockGitHubBot.verify();
+    }
+
+    @Test
+    void handleFixGeneratedPersistsAuthorizedFilesOnTheJob() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "TESTING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        mockGitHubBot.expect(requestTo("http://localhost:9006/validate/patch"))
+            .andRespond(withServerError());
+
+        service.handleFixGenerated(Map.of(
+            "jobId", jobId.toString(),
+            "patch", "diff",
+            "authorizedFiles", "src/main/java/com/example/UserService.java"
+        ));
+
+        assertThat(job.getAuthorizedFiles()).isEqualTo("src/main/java/com/example/UserService.java");
     }
 }

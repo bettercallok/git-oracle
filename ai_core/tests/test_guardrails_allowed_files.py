@@ -65,3 +65,54 @@ def test_still_rejects_files_outside_the_allowed_set():
 
     assert result.safe is False
     assert any("unauthorized files" in v for v in result.violations)
+
+
+def _patch_touching(path: str) -> str:
+    return f"""--- a/{path}
++++ b/{path}
+@@ -1,1 +1,1 @@
+-old
++new
+"""
+
+
+def test_denied_workflow_path_rejected_even_when_explicitly_allowed():
+    """A plan/fixer completion naming .github/workflows/ci.yml in its own
+    output must not be able to authorize touching it — deny-globs are a hard
+    boundary independent of allowed_files, precisely so a manipulated
+    completion can't grant itself CI-workflow write access just by listing
+    the path."""
+    patch = _patch_touching(".github/workflows/ci.yml")
+    result = scan_patch(patch, allowed_files=[".github/workflows/ci.yml"])
+
+    assert result.safe is False
+    assert any("denied paths" in v for v in result.violations)
+
+
+def test_denied_env_and_pem_paths_rejected():
+    for path in [".env", ".env.production", "secrets/github-app.pem"]:
+        result = scan_patch(_patch_touching(path), allowed_files=[path])
+        assert result.safe is False, f"expected {path} to be denied"
+        assert any("denied paths" in v for v in result.violations)
+
+
+def test_denied_lockfiles_rejected():
+    for path in ["package-lock.json", "backend/yarn.lock", "Cargo.lock"]:
+        result = scan_patch(_patch_touching(path), allowed_files=[path])
+        assert result.safe is False, f"expected {path} to be denied"
+        assert any("denied paths" in v for v in result.violations)
+
+
+def test_absolute_path_and_traversal_rejected_even_when_allowed():
+    for path in ["/etc/passwd", "../../etc/passwd", "a/../../b.py"]:
+        result = scan_patch(_patch_touching(path), allowed_files=[path])
+        assert result.safe is False, f"expected {path} to be denied"
+        assert any("denied paths" in v for v in result.violations)
+
+
+def test_ordinary_authorized_file_still_passes_with_deny_globs_in_place():
+    """The new deny-glob check must not become an accidental deny-all —
+    a normal, correctly-authorized source file still passes."""
+    result = scan_patch(SIMPLE_PATCH, allowed_files=["src/main/java/com/example/UserService.java"])
+    assert result.safe is True
+    assert result.violations == []

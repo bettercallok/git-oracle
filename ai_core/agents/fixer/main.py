@@ -54,7 +54,8 @@ class FixerRequest(BaseModel):
 class PatchOutput(BaseModel):
     diff: str                   # unified diff format
     summary: str                # one-line description of change
-    files_modified: List[str]   # must match Planner's affected_files
+    files_modified: List[str]   # the LLM's own claim about what it edited — informational only, never used for authorization (see authorized_files)
+    authorized_files: List[str] = []  # the file list resolved BEFORE the patch-generating LLM call ran (plan.affected_files, or the regex fallback over human-authored text) — this is what guardrails validates the diff against, so a patch can't authorize itself
     new_tests: Optional[str] = None # optional: new test cases agent wrote
     confidence: float
 
@@ -307,6 +308,13 @@ Do not write a diff yourself — the unified diff is computed automatically from
             diff=diff_text,
             summary=edit.summary,
             files_modified=[edit.file_path],
+            # affected_files was resolved above, before this attempt's LLM call —
+            # from the plan, or the regex fallback over human_instructions/
+            # bug_description when the plan had none. Publishing THIS (not
+            # files_modified) as the authorization boundary means guardrails
+            # checks the diff against a list the patch-generating completion had
+            # no way to influence, instead of against its own self-report.
+            authorized_files=affected_files,
             confidence=edit.confidence,
         )
 
@@ -417,6 +425,10 @@ async def handle_fix_job(payload: dict):
                 "humanInstructions": human_instructions or "",
                 "isRegeneration": bool(human_instructions),
                 "filesModified": ",".join(result.patch.files_modified),
+                # What guardrails' allowed_files check actually validates
+                # against — resolved before the fixer's own LLM call, not the
+                # LLM's self-report (filesModified, above). See PatchOutput.
+                "authorizedFiles": ",".join(result.patch.authorized_files),
                 "branch": branch or "",
             }
             await producer.publish("fix-generated", fix_payload)
