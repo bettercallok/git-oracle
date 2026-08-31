@@ -262,12 +262,18 @@ public class OrchestratorService {
         // — which silently broke the eval harness, whose LLM judge grades the agent's
         // patch against the golden fix and therefore always scored 0 against an empty
         // string. It also left the dashboard unable to ever show what was changed.
+        //
+        // authorizedFiles is persisted here too, alongside the patch it gates, purely
+        // for audit/observability — the actual enforcement below reads it straight off
+        // the event, not this row.
+        String authorizedFilesCsv = event.getOrDefault("authorizedFiles", "");
         jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
             job.setState("TESTING");
             String patch = event.get("patch");
             if (patch != null && !patch.isBlank()) {
                 job.setFixPatch(patch);
             }
+            job.setAuthorizedFiles(authorizedFilesCsv);
             jobRepository.save(job);
         });
 
@@ -277,15 +283,20 @@ public class OrchestratorService {
             var guardrailsRequest = new java.util.HashMap<String, Object>();
             guardrailsRequest.put("diff", event.get("patch"));
             // patch_scanner.scan_patch computes unauthorized = touched_files - allowed_files,
-            // so an empty allowed_files list means EVERY touched file is rejected — this
-            // silently rejected every fix ever generated, confirmed live: "Patch touches
-            // unauthorized files: ['...UserService.java']" for a patch that only touched
-            // the file it was specifically asked to fix. filesModified now carries the
-            // fixer's actual edited file(s), comma-joined (Map<String,String> event).
-            String filesModified = event.getOrDefault("filesModified", "");
-            java.util.List<String> allowedFiles = filesModified.isBlank()
+            // so an empty allowed_files list means EVERY touched file is rejected — that's
+            // deliberate deny-by-default, not a bug (see the fixer-side comment on why an
+            // unresolvable job legitimately produces an empty list here).
+            //
+            // This used to read "filesModified" — the fixer's own claim about which file
+            // ITS patch touched, taken from the same LLM completion that wrote the patch.
+            // A patch validated against a list its own author supplied can never disagree
+            // with itself, so that check always passed regardless of what the diff actually
+            // touched. "authorizedFiles" is resolved by the fixer BEFORE it calls the
+            // patch-generating LLM (from the plan, or a regex fallback over the human's own
+            // instructions) — the completion that wrote the diff had no way to influence it.
+            java.util.List<String> allowedFiles = authorizedFilesCsv.isBlank()
                 ? java.util.Collections.emptyList()
-                : java.util.Arrays.asList(filesModified.split(","));
+                : java.util.Arrays.asList(authorizedFilesCsv.split(","));
             guardrailsRequest.put("allowed_files", allowedFiles);
 
             restTemplate.postForObject("http://localhost:9006/validate/patch", guardrailsRequest, Map.class);

@@ -48,6 +48,15 @@ public class AgentJob {
     @Column(name = "pr_url")
     private String prUrl;
 
+    // Comma-joined list of files the fixer was authorized to touch when it
+    // produced fixPatch — resolved before the patch-generating LLM call ran
+    // (the plan's affected_files, or a regex fallback over human instructions),
+    // never the LLM's own after-the-fact claim about what it edited. This is
+    // what guardrails' allowed_files check is actually validated against;
+    // persisted here alongside the patch purely for audit/dashboard visibility.
+    @Column(name = "authorized_files", columnDefinition = "TEXT")
+    private String authorizedFiles;
+
     private Integer attempts = 0;
 
     @Column(name = "causal_score")
