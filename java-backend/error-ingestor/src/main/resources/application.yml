@@ -28,10 +28,15 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
-        spring.json.trusted.packages: "*"
+        # Was "*" — see orchestrator's application.yml for why. error-ingestor
+        # has no @KafkaListener today (it only produces), but Spring Boot
+        # autoconfigures the consumer factory regardless, so this stays
+        # narrowed rather than left wide for whenever one is added.
+        spring.json.trusted.packages: java.util,ai.gitoracle.core.kafka.event
 
 server:
   port: 8081
+  address: ${SERVER_BIND_HOST:127.0.0.1}
 
 management:
   endpoints:

@@ -17,10 +17,14 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
-        spring.json.trusted.packages: "*"
+        # Was "*" — see orchestrator's application.yml for why. This service's
+        # one listener (ForensicsOrchestrator.handleErrorIngested) deserializes
+        # ErrorIngestedEvent only.
+        spring.json.trusted.packages: java.util,ai.gitoracle.core.kafka.event
 
 server:
   port: 8082
+  address: ${SERVER_BIND_HOST:127.0.0.1}
 
 management:
   endpoints:

@@ -26,7 +26,10 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
-        spring.json.trusted.packages: "*"
+        # Was "*" — see orchestrator's application.yml for why. api-gateway
+        # has no @KafkaListener today, but Spring Boot autoconfigures the
+        # consumer factory regardless, so this stays narrowed.
+        spring.json.trusted.packages: java.util,ai.gitoracle.core.kafka.event
   data:
     redis:
       host: ${REDIS_HOST:127.0.0.1}

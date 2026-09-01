@@ -7,9 +7,12 @@ import ai.gitoracle.orchestrator.token.AgentJobRepository;
 import ai.gitoracle.orchestrator.service.WorkspaceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +37,12 @@ public class OrchestratorService {
     private final RestTemplate restTemplate = new RestTemplate();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
+    // Every internal service now requires this on every request (see
+    // InternalAuthFilter on the receiving side) — it used to be reachable
+    // with no auth of its own as long as you knew the port.
+    @Value("${gitoracle.internal-token:}")
+    private String internalToken;
+
     public OrchestratorService(AgentJobRepository jobRepository, KafkaTemplate<String, Object> kafkaTemplate,
                                WorkspaceService workspaceService, EntityManager entityManager,
                                ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository) {
@@ -42,6 +51,13 @@ public class OrchestratorService {
         this.workspaceService = workspaceService;
         this.entityManager = entityManager;
         this.prOutcomeRepository = prOutcomeRepository;
+    }
+
+    /** Wraps a request body with the X-Internal-Token header every internal-service call needs. */
+    private <T> HttpEntity<T> withInternalAuth(T body) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Internal-Token", internalToken);
+        return new HttpEntity<>(body, headers);
     }
 
     /**
@@ -299,7 +315,7 @@ public class OrchestratorService {
                 : java.util.Arrays.asList(authorizedFilesCsv.split(","));
             guardrailsRequest.put("allowed_files", allowedFiles);
 
-            restTemplate.postForObject("http://localhost:9006/validate/patch", guardrailsRequest, Map.class);
+            restTemplate.postForObject("http://localhost:9006/validate/patch", withInternalAuth(guardrailsRequest), Map.class);
             logger.info("Guardrails validation passed.");
         } catch (org.springframework.web.client.HttpClientErrorException e) {
             logger.warn("Guardrails validation FAILED for job {}: {}", jobIdStr, e.getResponseBodyAsString());
@@ -344,7 +360,7 @@ public class OrchestratorService {
             testRequest.put("branch",    branch);
             testRequest.put("framework", "UNKNOWN");             // let runner auto-detect
 
-            var response = restTemplate.postForObject("http://localhost:8084/test", testRequest, Map.class);
+            var response = restTemplate.postForObject("http://localhost:8084/test", withInternalAuth(testRequest), Map.class);
 
             if (response != null && Boolean.TRUE.equals(response.get("allPassed"))) {
                 logger.info("Tests passed! Publishing to {}...", KafkaTopics.TESTS_PASSED);
@@ -437,7 +453,7 @@ public class OrchestratorService {
             prRequest.put("tokenBudgetUsed", 500);
 
             ResponseEntity<Map> response = restTemplate.postForEntity(
-                "http://localhost:8085/pull-request", prRequest, Map.class);
+                "http://localhost:8085/pull-request", withInternalAuth(prRequest), Map.class);
             Map<String, Object> body = response.getBody();
             boolean success = body != null && Boolean.TRUE.equals(body.get("success"));
 
@@ -519,7 +535,7 @@ public class OrchestratorService {
 
             @SuppressWarnings("unchecked")
             java.util.Map<String, Object> reviewResponse =
-                restTemplate.postForObject("http://localhost:9003/review", reviewRequest, java.util.Map.class);
+                restTemplate.postForObject("http://localhost:9003/review", withInternalAuth(reviewRequest), java.util.Map.class);
 
             if (reviewResponse == null) {
                 logger.warn("Reviewer Agent returned null for job {}", jobIdStr);

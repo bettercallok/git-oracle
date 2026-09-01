@@ -63,7 +63,8 @@ async def _report_tokens(job_id: str, tokens_used: int, agent_name: str) -> None
             # token-based figure in the system was structurally always zero.
             await client.post(
                 f"{ORCHESTRATOR_URL}/api/v1/budget/{job_id}/record",
-                json={"tokensUsed": tokens_used, "agentName": agent_name}
+                json={"tokensUsed": tokens_used, "agentName": agent_name},
+                headers={"X-Internal-Token": os.environ.get("GITORACLE_INTERNAL_TOKEN", "")}
             )
     except Exception as e:
         logger.warning(f"Failed to report tokens to Orchestrator: {e}")

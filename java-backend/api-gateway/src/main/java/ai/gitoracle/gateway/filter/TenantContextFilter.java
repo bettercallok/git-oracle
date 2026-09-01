@@ -20,6 +20,15 @@ import reactor.core.publisher.Mono;
  *   X-Tenant-ID — UUID identifying the tenant (used downstream)
  *
  * Health/actuator endpoints are exempt from auth.
+ *
+ * Also injects X-Internal-Token on every proxied request once the checks
+ * above pass — every internal service (orchestrator, error-ingestor,
+ * git-forensics, and every Python agent behind them) now requires that
+ * header itself, since previously each was directly reachable on its own
+ * port with no auth of its own, making this gateway's own checks advisory
+ * rather than an actual boundary. Any X-Internal-Token an external caller
+ * sent is stripped first, so a client can't hand itself the internal trust
+ * boundary just by setting the header — only this filter gets to set it.
  */
 @Component
 public class TenantContextFilter implements GlobalFilter, Ordered {
@@ -28,6 +37,9 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
 
     @Value("${gitoracle.api-key:}")
     private String configuredApiKey;
+
+    @Value("${gitoracle.internal-token:}")
+    private String configuredInternalToken;
 
     // Paths that bypass auth entirely
     private static final java.util.List<String> EXEMPT_PATHS = java.util.List.of(
@@ -59,6 +71,17 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
             return unauthorized(exchange, "Invalid or missing X-API-Key header.");
         }
 
+        // ── Internal token ────────────────────────────────────────────────────
+        // Same fail-closed posture as X-API-Key above: every internal service
+        // now rejects requests without this, so an unconfigured value here
+        // would make every proxied request fail downstream anyway — better to
+        // say so clearly at the gateway than let a client see a confusing 401
+        // from whatever service happened to be routed to.
+        if (configuredInternalToken == null || configuredInternalToken.isBlank()) {
+            logger.error("Request rejected: GITORACLE_INTERNAL_TOKEN is not configured on the server — refusing all traffic rather than proxying requests every internal service will itself reject.");
+            return unauthorized(exchange, "Server misconfiguration: GITORACLE_INTERNAL_TOKEN is not set.");
+        }
+
         // ── Tenant ID ──────────────────────────────────────────────────────────
         String tenantId = exchange.getRequest().getHeaders().getFirst("X-Tenant-ID");
         if (tenantId == null || tenantId.isBlank()) {
@@ -67,8 +90,17 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
 
         logger.debug("Authorized request tenant={} path={}", tenantId, path);
 
+        // Explicit remove-then-set rather than relying on .header()'s
+        // add-vs-replace semantics for a header the client may have already
+        // sent — this must never end up multi-valued with the client's own
+        // attempted value still present alongside the real one.
+        String internalToken = configuredInternalToken;
         ServerHttpRequest mutated = exchange.getRequest().mutate()
             .header("X-Tenant-ID", tenantId)
+            .headers(headers -> {
+                headers.remove("X-Internal-Token");
+                headers.set("X-Internal-Token", internalToken);
+            })
             .build();
 
         return chain.filter(exchange.mutate().request(mutated).build());
