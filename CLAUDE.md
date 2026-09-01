@@ -82,7 +82,7 @@ Each of the 7 agents starts a Kafka consumer thread in its `@app.on_event("start
 ### Service map
 | service | port | role |
 |---|---|---|
-| api-gateway (Java) | 8080 | single entry point; fail-closed `X-API-Key` auth + centralized CORS (`TenantContextFilter`), routes `/webhook/**`→error-ingestor, `/api/v1/risk`→git-forensics, `/api/v1/**`→orchestrator |
+| api-gateway (Java) | 8080 | single entry point; fail-closed `X-API-Key` auth, API-key→tenant resolution, centralized CORS (`TenantContextFilter`), routes `/webhook/**`→error-ingestor, `/api/v1/risk`→git-forensics, `/api/v1/**`→orchestrator |
 | error-ingestor (Java) | 8081 | github webhooks + sentry-style reports, semantic dedup, kicks off jobs |
 | git-forensics (Java) | 8082 | neo4j-backed risk heatmap queries |
 | orchestrator (Java) | 8083 | pipeline brain — owns `AgentJob` state, all Kafka consume/produce, synchronous calls to guardrails/test-runner/github-bot |
@@ -97,6 +97,15 @@ Each of the 7 agents starts a Kafka consumer thread in its `@app.on_event("start
 | planner (Python) | 9007 | scopes a fix strategy + affected files/functions + max-lines-to-change |
 
 `git-oracle-core` is the shared Java library (JPA entities, `KafkaTopics` constants, event DTOs) — the intended single source of truth for cross-service contracts (with the dot-topic caveat above).
+
+### Tenancy is derived from the API key, never from a header
+`X-Tenant-ID` used to be read straight off the inbound request and defaulted to the zero UUID — combined with one shared `GITORACLE_API_KEY`, any authenticated caller could read or mutate any tenant's data by changing a header. Now `TenantContextFilter` (gateway) resolves the tenant from the presented key against the `api_keys` table and **strips** any client-supplied `X-Tenant-ID`/`X-Scopes` before routing. Downstream, the orchestrator's own `TenantContextFilter` puts that value in a request-scoped `TenantContext`, and every tenant-owned query carries a `tenantId` predicate.
+
+Keys are `gor_<12-hex prefix>_<64-hex secret>`; only a SHA-256 hash is stored, located by the indexed public prefix and compared with `MessageDigest.isEqual`. Mint/list/revoke via `/api/v1/admin/api-keys` (requires the `platform:admin` scope, enforced at the gateway). Two things to know:
+- **Revocation is not instant** — the gateway caches key rows for `GITORACLE_API_KEY_CACHE_TTL_SECONDS` (default 60). Restart the gateway to purge immediately.
+- **`GITORACLE_API_KEY` is legacy** — a single shared secret resolving to the default tenant with `platform:admin`. It exists only to bootstrap the first real key; set `GITORACLE_LEGACY_API_KEY_ENABLED=false` afterwards. The gateway logs a warning every boot while it is on.
+
+`TenantContext` is **request-scoped only**. Kafka listeners run on consumer threads with no request, so they must take the tenant from the event payload (`ErrorIngestedEvent.tenantId`); `TenantContext.requireTenantId()` throws there rather than silently defaulting.
 
 ### Storage
 Postgres+pgvector (job state, escalations, PR outcomes, eval runs, prompt versions, episodic/semantic agent memory) · Neo4j (repo dependency/risk graph) · Qdrant (RAG context vectors) · Redis (gateway rate limiting, prompt-registry cache) · Langfuse/Prometheus/Grafana/Kafka UI (observability).

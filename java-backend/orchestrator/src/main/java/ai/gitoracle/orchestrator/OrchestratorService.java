@@ -134,14 +134,12 @@ public class OrchestratorService {
             job.setRepo(event.getRepoUrl());
             job.setErrorId(event.getErrorId());
 
-            // Set the tenant to fix NOT NULL constraint
-            ai.gitoracle.core.model.postgres.Tenant tenant = new ai.gitoracle.core.model.postgres.Tenant();
-            if (event.getTenantId() != null) {
-                tenant.setId(event.getTenantId());
-            } else {
-                tenant.setId(UUID.fromString("00000000-0000-0000-0000-000000000000"));
-            }
-            job.setTenant(tenant);
+            // The event's tenant is authoritative — it was derived from the
+            // authenticated API key at the gateway. Falling back to the default
+            // tenant only covers events published before this field existed.
+            job.setTenantId(event.getTenantId() != null
+                ? event.getTenantId()
+                : ai.gitoracle.core.model.postgres.Tenant.DEFAULT_ID);
             job.setCreatedAt(OffsetDateTime.now());
         }
 
@@ -527,7 +525,7 @@ public class OrchestratorService {
         try {
             java.util.Map<String, Object> reviewRequest = new java.util.HashMap<>();
             reviewRequest.put("job_id",          jobIdStr);
-            reviewRequest.put("tenant_id",       job.getTenant().getId().toString());
+            reviewRequest.put("tenant_id",       job.getTenantId().toString());
             reviewRequest.put("repo_path",       "/tmp/gitoracle-workspaces/" + jobIdStr);
             reviewRequest.put("bug_description", job.getErrorId());
             reviewRequest.put("fixer_patch",     "(stored patch not available — review based on comment only)");

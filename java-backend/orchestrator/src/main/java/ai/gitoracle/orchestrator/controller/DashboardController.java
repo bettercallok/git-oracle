@@ -6,6 +6,7 @@ import ai.gitoracle.core.entity.EvalRun;
 import ai.gitoracle.core.kafka.KafkaTopics;
 import ai.gitoracle.core.kafka.event.ErrorIngestedEvent;
 import ai.gitoracle.core.security.RepoRefValidator;
+import ai.gitoracle.orchestrator.security.TenantContext;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.web.bind.annotation.*;
@@ -52,7 +53,9 @@ public class DashboardController {
 
     @GetMapping("/jobs")
     public ResponseEntity<List<AgentJob>> getJobs() {
-        List<AgentJob> jobs = entityManager.createQuery("SELECT j FROM AgentJob j ORDER BY j.createdAt DESC", AgentJob.class)
+        List<AgentJob> jobs = entityManager.createQuery(
+                "SELECT j FROM AgentJob j WHERE j.tenantId = :tenantId ORDER BY j.createdAt DESC", AgentJob.class)
+            .setParameter("tenantId", TenantContext.requireTenantId())
             .setMaxResults(50)
             .getResultList();
         return ResponseEntity.ok(jobs);
@@ -60,21 +63,58 @@ public class DashboardController {
 
     @GetMapping("/jobs/{id}")
     public ResponseEntity<AgentJob> getJob(@PathVariable UUID id) {
-        AgentJob job = entityManager.find(AgentJob.class, id);
-        if (job == null) return ResponseEntity.notFound().build();
-        return ResponseEntity.ok(job);
+        return findOwnedJob(id)
+            .map(ResponseEntity::ok)
+            .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     @PostMapping("/jobs")
     public ResponseEntity<AgentJob> createJob(@RequestBody Map<String, String> request) {
-        // CLI hits this endpoint
+        // CLI hits this endpoint.
+        //
+        // The id is deliberately NOT set here. AgentJob#id is @GeneratedValue,
+        // so assigning one makes Hibernate classify the instance as detached
+        // rather than new, and persist() then throws
+        // "detached entity passed to persist". This endpoint returned 500 on
+        // every call for that reason — a pre-existing bug, unrelated to
+        // tenancy, found while verifying this change. Every other creation path
+        // (triggerFix, SemanticDedupService) already left the id unset.
         AgentJob job = new AgentJob();
-        job.setId(UUID.randomUUID());
+        job.setTenantId(TenantContext.requireTenantId());
         job.setRepo(request.get("repoUrl"));
         job.setState("QUEUED");
         job.setErrorId("manual-trigger");
         entityManager.persist(job);
         return ResponseEntity.ok(job);
+    }
+
+    /**
+     * Loads a job only if it belongs to the calling tenant.
+     *
+     * <p>A job owned by another tenant is reported as <b>absent</b>, not
+     * forbidden. A 403 would confirm that the requested UUID names a real job
+     * somewhere in the installation, which lets a caller enumerate the existence
+     * of other tenants' work even though they can never read it. 404 for
+     * "yours doesn't exist" and 404 for "it's someone else's" are indistinguishable,
+     * which is the point.
+     */
+    private java.util.Optional<AgentJob> findOwnedJob(UUID id) {
+        AgentJob job = entityManager.find(AgentJob.class, id);
+        if (job == null) return java.util.Optional.empty();
+        if (!TenantContext.requireTenantId().equals(job.getTenantId())) {
+            logger.warn("Tenant {} attempted to access job {} owned by tenant {} — reporting as not found.",
+                TenantContext.requireTenantId(), id, job.getTenantId());
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(job);
+    }
+
+    private boolean ownsEscalation(Escalation escalation) {
+        AgentJob job = escalation.getJob();
+        // An escalation with no job cannot be attributed to a tenant. Treat it
+        // as not owned rather than as universally accessible.
+        if (job == null || job.getTenantId() == null) return false;
+        return TenantContext.requireTenantId().equals(job.getTenantId());
     }
 
     /**
@@ -87,7 +127,7 @@ public class DashboardController {
             @PathVariable UUID jobId,
             @RequestBody Map<String, String> request) {
 
-        AgentJob job = entityManager.find(AgentJob.class, jobId);
+        AgentJob job = findOwnedJob(jobId).orElse(null);
         if (job == null) return ResponseEntity.notFound().build();
 
         String instructions = request.get("instructions");
@@ -173,15 +213,18 @@ public class DashboardController {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
 
+        // The caller's own tenant, resolved from their API key at the gateway.
+        // This was hardcoded to the zero UUID, so every job created through the
+        // dashboard was filed against the default tenant no matter who created it.
+        UUID tenantId = TenantContext.requireTenantId();
+
         AgentJob job = new AgentJob();
         job.setRepo(repoUrl);
         job.setState("QUEUED");
         job.setErrorId("dashboard-trigger-" + System.currentTimeMillis());
         job.setCreatedAt(OffsetDateTime.now());
         job.setRawPayload(null);
-        ai.gitoracle.core.model.postgres.Tenant tenant = new ai.gitoracle.core.model.postgres.Tenant();
-        tenant.setId(UUID.fromString("00000000-0000-0000-0000-000000000000"));
-        job.setTenant(tenant);
+        job.setTenantId(tenantId);
         entityManager.persist(job);
         entityManager.flush(); // ensure ID is assigned
 
@@ -194,7 +237,7 @@ public class DashboardController {
             // instead of being duplicated here. handleErrorIngested reuses this job
             // via jobId rather than creating a second row for the same request.
             ErrorIngestedEvent event = ErrorIngestedEvent.builder()
-                .tenantId(UUID.fromString("00000000-0000-0000-0000-000000000000"))
+                .tenantId(tenantId)
                 .jobId(job.getId())
                 .errorId(job.getErrorId())
                 .errorType("dashboard_request")
@@ -245,9 +288,17 @@ public class DashboardController {
         ));
     }
 
+    /**
+     * Escalations have no tenant column of their own — they are scoped through
+     * the job they belong to, which is the real owner of the tenant
+     * relationship. Joining rather than denormalising keeps one source of truth
+     * for which tenant a piece of work belongs to.
+     */
     @GetMapping("/escalations")
     public ResponseEntity<List<Escalation>> getEscalations() {
-        List<Escalation> escalations = entityManager.createQuery("SELECT e FROM Escalation e ORDER BY e.createdAt DESC", Escalation.class)
+        List<Escalation> escalations = entityManager.createQuery(
+                "SELECT e FROM Escalation e WHERE e.job.tenantId = :tenantId ORDER BY e.createdAt DESC", Escalation.class)
+            .setParameter("tenantId", TenantContext.requireTenantId())
             .setMaxResults(50)
             .getResultList();
         return ResponseEntity.ok(escalations);
@@ -256,6 +307,14 @@ public class DashboardController {
     @PostMapping("/escalations/{id}/resolve")
     public ResponseEntity<Void> resolveEscalation(@PathVariable UUID id, @RequestBody Map<String, String> request) {
         Escalation escalation = entityManager.find(Escalation.class, id);
+        if (escalation != null && !ownsEscalation(escalation)) {
+            // Same reasoning as findOwnedJob: indistinguishable from "no such
+            // escalation". Approving another tenant's escalation would have
+            // resumed their pipeline and opened a pull request against their repo.
+            logger.warn("Tenant {} attempted to resolve escalation {} it does not own — reporting as not found.",
+                TenantContext.requireTenantId(), id);
+            return ResponseEntity.notFound().build();
+        }
         if (escalation != null) {
             String action = request.get("action"); // 'approve' or 'reject'
             escalation.setStatus("approve".equals(action) ? "APPROVED" : "REJECTED");
@@ -352,7 +411,7 @@ public class DashboardController {
         for (String k : List.of("MERGED", "CLOSED", "APPROVED", "REVERTED")) {
             counts.put(k, 0L);
         }
-        for (Object[] row : prOutcomeRepository.countByDistinctJobOutcome()) {
+        for (Object[] row : prOutcomeRepository.countByDistinctJobOutcome(TenantContext.requireTenantId())) {
             counts.put((String) row[0], ((Number) row[1]).longValue());
         }
 
@@ -404,7 +463,7 @@ public class DashboardController {
     @GetMapping("/prompts/stats")
     public ResponseEntity<List<Map<String, Object>>> getPromptStats() {
         List<Map<String, Object>> out = new java.util.ArrayList<>();
-        for (Object[] r : jobPromptVersionRepository.aggregatePerformance()) {
+        for (Object[] r : jobPromptVersionRepository.aggregatePerformance(TenantContext.requireTenantId())) {
             long jobs = ((Number) r[2]).longValue();
             long successes = ((Number) r[3]).longValue();
             Map<String, Object> row = new HashMap<>();

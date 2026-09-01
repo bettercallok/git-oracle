@@ -44,8 +44,9 @@ public interface JobPromptVersionRepository extends JpaRepository<JobPromptVersi
               AND pv.version    = jpv.prompt_version
               AND pv.prompt_key = 'system'
         WHERE j.state IN ('PR_OPENED', 'ESCALATED', 'FAILED')
+          AND j.tenant_id = :tenantId
         GROUP BY jpv.agent_name, jpv.prompt_version
         ORDER BY jpv.agent_name, jpv.prompt_version DESC
         """, nativeQuery = true)
-    List<Object[]> aggregatePerformance();
+    List<Object[]> aggregatePerformance(@org.springframework.data.repository.query.Param("tenantId") UUID tenantId);
 }
