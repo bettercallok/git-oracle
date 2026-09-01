@@ -47,7 +47,7 @@ services:
     restart: unless-stopped
     networks: [ git-oracle-net ]
     ports:
-      - "8083:8083"
+      - "127.0.0.1:8083:8083"
     environment:
       <<: *java-env
     logging: *default-logging
@@ -78,7 +78,7 @@ services:
     restart: unless-stopped
     networks: [ git-oracle-net ]
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     environment:
       <<: *java-env
     logging: *default-logging
@@ -93,7 +93,7 @@ services:
     restart: unless-stopped
     networks: [ git-oracle-net ]
     ports:
-      - "8082:8082"
+      - "127.0.0.1:8082:8082"
     environment:
       <<: *java-env
     logging: *default-logging
@@ -108,7 +108,7 @@ services:
     restart: unless-stopped
     networks: [ git-oracle-net ]
     ports:
-      - "8085:8085"
+      - "127.0.0.1:8085:8085"
     environment:
       <<: *java-env
     logging: *default-logging
@@ -123,7 +123,7 @@ services:
     restart: unless-stopped
     networks: [ git-oracle-net ]
     ports:
-      - "8084:8084"
+      - "127.0.0.1:8084:8084"
     environment:
       <<: *java-env
     # Test-runner shells out to `docker run` to sandbox test execution,

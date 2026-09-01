@@ -1,11 +1,16 @@
 import os
+import sys
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import asyncpg
 import redis.asyncio as redis
 import uvicorn
+
+# Ensure ai_core modules can be imported
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+from shared.internal_auth import require_internal_token
 
 # Build the connection string from the same POSTGRES_* env vars the other agents
 # use (see ai_core/shared/memory.py), so a single .env password works everywhere.
@@ -41,7 +46,7 @@ async def lifespan(app: FastAPI):
     await db_pool.close()
     await redis_client.close()
 
-app = FastAPI(title="GitOracle Prompt Registry", lifespan=lifespan)
+app = FastAPI(title="GitOracle Prompt Registry", lifespan=lifespan, dependencies=[Depends(require_internal_token)])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -136,4 +141,4 @@ async def activate_version(agent: str, key: str, version: int):
     return {"status": "activated", "version": version}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=9005)
+    uvicorn.run(app, host=os.getenv("BIND_HOST", "127.0.0.1"), port=9005)

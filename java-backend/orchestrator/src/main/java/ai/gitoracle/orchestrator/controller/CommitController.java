@@ -7,6 +7,9 @@ import org.kohsuke.github.GitHub;
 import org.kohsuke.github.PagedIterable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.ResourceAccessException;
@@ -45,6 +48,9 @@ public class CommitController {
 
     private final GitHubClientService githubClientService;
     private final RestTemplate restTemplate = new RestTemplate();
+
+    @Value("${gitoracle.internal-token:}")
+    private String internalToken;
 
     public CommitController(GitHubClientService githubClientService) {
         this.githubClientService = githubClientService;
@@ -288,9 +294,12 @@ public class CommitController {
             agentPayload.put("question",     question);
             agentPayload.put("chatHistory",  chatHistory);
 
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("X-Internal-Token", internalToken);
+
             @SuppressWarnings("unchecked")
             Map<String, Object> agentResponse =
-                    restTemplate.postForObject(COMMIT_ANALYST_URL, agentPayload, Map.class);
+                    restTemplate.postForObject(COMMIT_ANALYST_URL, new HttpEntity<>(agentPayload, headers), Map.class);
 
             if (agentResponse == null) {
                 return ResponseEntity.status(502).body(Map.of(

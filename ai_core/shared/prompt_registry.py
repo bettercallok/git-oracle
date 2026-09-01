@@ -25,7 +25,8 @@ async def fetch_prompt_versioned(
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(
-                f"{PROMPT_REGISTRY_URL}/prompts/{agent_name}/{prompt_key}/active"
+                f"{PROMPT_REGISTRY_URL}/prompts/{agent_name}/{prompt_key}/active",
+                headers={"X-Internal-Token": os.environ.get("GITORACLE_INTERNAL_TOKEN", "")}
             )
             response.raise_for_status()
             payload = response.json()
@@ -58,6 +59,7 @@ async def report_prompt_version(job_id: Optional[str], agent_name: str, version:
             await client.post(
                 f"{ORCHESTRATOR_URL}/api/v1/jobs/{job_id}/prompt-version",
                 json={"agentName": agent_name, "version": version},
+                headers={"X-Internal-Token": os.environ.get("GITORACLE_INTERNAL_TOKEN", "")}
             )
     except Exception as e:
         logger.warning(f"Failed to report prompt version for job {job_id}: {e}")

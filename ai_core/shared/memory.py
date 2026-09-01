@@ -133,7 +133,11 @@ class SemanticMemory:
     def __init__(self):
         qdrant_host = os.environ.get("QDRANT_HOST", "localhost")
         qdrant_port = int(os.environ.get("QDRANT_HTTP_PORT", "6333"))
-        self.client = AsyncQdrantClient(host=qdrant_host, port=qdrant_port)
+        # Required once QDRANT__SERVICE__API_KEY is set server-side (see
+        # docker-compose.infra.yml) — a separate AsyncQdrantClient from the
+        # one in shared/qdrant_client.py, so it needs the key wired in here too.
+        qdrant_api_key = os.environ.get("QDRANT_API_KEY") or None
+        self.client = AsyncQdrantClient(host=qdrant_host, port=qdrant_port, api_key=qdrant_api_key)
         self.collection_name = "repo-knowledge"
 
     async def initialize_collection(self):

@@ -5,7 +5,11 @@ from qdrant_client.http.models import VectorParams, Distance
 class QdrantStore:
     def __init__(self, collection_name="codebase_memory"):
         url = os.getenv("QDRANT_URL", "http://localhost:6333")
-        self.client = AsyncQdrantClient(url=url)
+        # Required once QDRANT__SERVICE__API_KEY is set on the server side
+        # (see docker-compose.infra.yml) — without this, every request from
+        # this, the only client that talks to Qdrant, gets rejected.
+        api_key = os.getenv("QDRANT_API_KEY") or None
+        self.client = AsyncQdrantClient(url=url, api_key=api_key)
         self.collection_name = collection_name
         
     async def init_collection(self):

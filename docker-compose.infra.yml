@@ -49,7 +49,7 @@ services:
     mem_reservation: 150m
     networks: [ git-oracle-net ]
     ports:
-      - "${POSTGRES_PORT:-5433}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-gitOracle}
       POSTGRES_USER: ${POSTGRES_USER:-gitOracle}
@@ -94,8 +94,8 @@ services:
     mem_reservation: 300m
     networks: [ git-oracle-net ]
     ports:
-      - "${NEO4J_HTTP_PORT:-7475}:7474" # Browser UI
-      - "${NEO4J_BOLT_PORT:-7688}:7687" # Bolt protocol (drivers)
+      - "127.0.0.1:${NEO4J_HTTP_PORT:-7475}:7474" # Browser UI
+      - "127.0.0.1:${NEO4J_BOLT_PORT:-7688}:7687" # Bolt protocol (drivers)
     environment:
       NEO4J_AUTH: "${NEO4J_AUTH:?NEO4J_AUTH is required}"
       NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
@@ -147,7 +147,7 @@ services:
     mem_reservation: 128m
     networks: [ git-oracle-net ]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     command: >
       redis-server
         --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
@@ -183,14 +183,18 @@ services:
     mem_reservation: 100m
     networks: [ git-oracle-net ]
     ports:
-      - "${QDRANT_HTTP_PORT:-6333}:6333" # REST API + Web UI
-      - "${QDRANT_GRPC_PORT:-6334}:6334" # gRPC
+      - "127.0.0.1:${QDRANT_HTTP_PORT:-6333}:6333" # REST API + Web UI
+      - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334" # gRPC
     volumes:
       - qdrant-data:/qdrant/storage
     environment:
       QDRANT__SERVICE__HTTP_PORT: 6333
       QDRANT__SERVICE__GRPC_PORT: 6334
       QDRANT__LOG_LEVEL: INFO
+      # Required — with this unset, Qdrant serves any request with no auth
+      # at all. Every real client must send the same value back in an
+      # api-key header (ai_core/shared/qdrant_client.py does this).
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set}
     healthcheck:
       test: [ "CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null || exit 1" ]
       interval: 10s
@@ -211,7 +215,7 @@ services:
     mem_reservation: 250m
     networks: [ git-oracle-net ]
     ports:
-      - "${KAFKA_PORT:-9092}:9092" # External (host access)
+      - "127.0.0.1:${KAFKA_PORT:-9092}:9092" # External (host access)
     environment:
       # KRaft mode — no Zookeeper
       KAFKA_NODE_ID: 1
@@ -270,7 +274,7 @@ services:
     mem_reservation: 150m
     networks: [ git-oracle-net ]
     ports:
-      - "8089:8080"
+      - "127.0.0.1:8089:8080"
     environment:
       JAVA_OPTS: "-Xmx160m"
       KAFKA_CLUSTERS_0_NAME: git-oracle
@@ -295,7 +299,7 @@ services:
     mem_reservation: 128m
     networks: [ git-oracle-net ]
     ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -330,7 +334,7 @@ services:
     mem_reservation: 100m
     networks: [ git-oracle-net ]
     ports:
-      - "${GRAFANA_PORT:-3001}:3000"
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
@@ -376,7 +380,7 @@ services:
     mem_reservation: 250m
     networks: [ git-oracle-net ]
     ports:
-      - "${LANGFUSE_PORT:-3002}:3000"
+      - "127.0.0.1:${LANGFUSE_PORT:-3002}:3000"
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-gitOracle}:${POSTGRES_PASSWORD}@postgres:5432/langfuse
       NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3002}

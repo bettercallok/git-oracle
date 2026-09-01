@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -16,11 +16,12 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
 from shared.memory import AgentMemory
 from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
+from shared.internal_auth import require_internal_token
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="GitOracle Fixer Agent", version="1.0")
+app = FastAPI(title="GitOracle Fixer Agent", version="1.0", dependencies=[Depends(require_internal_token)])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -342,6 +343,7 @@ Do not write a diff yourself — the unified diff is computed automatically from
                             "branch": branch,
                             "framework": "UNKNOWN"  # let Test Runner auto-detect (pom.xml/package.json/etc.)
                         },
+                        headers={"X-Internal-Token": os.environ.get("GITORACLE_INTERNAL_TOKEN", "")},
                         timeout=130.0
                     )
                     response.raise_for_status()
@@ -457,4 +459,4 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=9002)
+    uvicorn.run(app, host=os.getenv("BIND_HOST", "127.0.0.1"), port=9002)

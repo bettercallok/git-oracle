@@ -34,10 +34,20 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
-        spring.json.trusted.packages: "*"
+        # Was "*" — trusted-all-packages on an unauthenticated PLAINTEXT
+        # broker (see C7) is a polymorphic-deserialization gadget path for
+        # anyone who can write to a topic this service consumes. Listeners
+        # here deserialize into either java.util.Map/HashMap (the Python
+        # producer's __TypeId__) or git-oracle-core's own typed events
+        # (e.g. ErrorIngestedEvent) — nothing else needs to be trusted.
+        spring.json.trusted.packages: java.util,ai.gitoracle.core.kafka.event
 
 server:
   port: 8083
+  # Loopback by default — this service used to bind 0.0.0.0 (network-reachable)
+  # with no auth of its own. Override only for a real container network where
+  # the gateway reaches it by service name, not localhost.
+  address: ${SERVER_BIND_HOST:127.0.0.1}
 
 management:
   endpoints:

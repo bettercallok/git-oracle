@@ -24,7 +24,7 @@ GET /health
   Returns {"status": "ok", "agent": "commit_analyst"}
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
@@ -34,11 +34,12 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
+from shared.internal_auth import require_internal_token
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="GitOracle Commit Analyst", version="1.0")
+app = FastAPI(title="GitOracle Commit Analyst", version="1.0", dependencies=[Depends(require_internal_token)])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -172,4 +173,4 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 9004))
     logger.info("Starting Commit Analyst agent on port %d", port)
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host=os.getenv("BIND_HOST", "127.0.0.1"), port=port)

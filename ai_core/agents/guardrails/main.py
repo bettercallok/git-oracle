@@ -1,11 +1,17 @@
-from fastapi import FastAPI, HTTPException
+import os
+import sys
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 from injection_detector import detect_injection
 from patch_scanner import scan_patch, PatchScanResult
 
-app = FastAPI(title="GitOracle Guardrails Engine")
+# Ensure ai_core modules can be imported
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+from shared.internal_auth import require_internal_token
+
+app = FastAPI(title="GitOracle Guardrails Engine", dependencies=[Depends(require_internal_token)])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,4 +43,4 @@ async def validate_patch(payload: PatchPayload):
     return result
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=9006)
+    uvicorn.run(app, host=os.getenv("BIND_HOST", "127.0.0.1"), port=9006)
