@@ -5,9 +5,12 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api/
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
+  // No X-Tenant-ID. The tenant is derived server-side from the API key at the
+  // gateway, and any client-supplied value is stripped before routing — sending
+  // one here would have no effect beyond suggesting to a reader that the
+  // browser gets to choose which tenant's data it sees.
   headers: {
     'Content-Type': 'application/json',
-    'X-Tenant-ID': '00000000-0000-0000-0000-000000000000'
   },
 });
 

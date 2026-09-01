@@ -40,8 +40,16 @@ public class SemanticDedupService {
         try {
             logger.info("Deduplicating error in repo: {}", repo);
 
-            List<AgentJob> existing = entityManager.createQuery("SELECT j FROM AgentJob j WHERE j.errorId = :errorId", AgentJob.class)
+            // Scoped to the tenant. Without the tenant predicate this deduplicated
+            // across tenant boundaries: because error_id is caller-supplied, one
+            // tenant reporting an error whose id happened to match another's
+            // would have its report silently discarded as a "duplicate" — a
+            // cross-tenant denial of service, and a way to probe whether an
+            // arbitrary error id already exists somewhere in the installation.
+            List<AgentJob> existing = entityManager.createQuery(
+                    "SELECT j FROM AgentJob j WHERE j.errorId = :errorId AND j.tenantId = :tenantId", AgentJob.class)
                 .setParameter("errorId", errorId)
+                .setParameter("tenantId", tenantId)
                 .getResultList();
 
             if (!existing.isEmpty()) {
@@ -51,7 +59,7 @@ public class SemanticDedupService {
 
             // 3. Persist new job
             AgentJob job = new AgentJob();
-            job.setTenant(entityManager.getReference(ai.gitoracle.core.model.postgres.Tenant.class, tenantId));
+            job.setTenantId(tenantId);
             job.setRepo(repo);
             job.setState("QUEUED");
             job.setErrorId(errorId);

@@ -18,10 +18,26 @@ public class AgentJob {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @JsonIgnore
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "tenant_id", nullable = true)
-    private Tenant tenant;
+    /**
+     * The tenant this job belongs to — the predicate every read of this table
+     * must carry.
+     *
+     * <p>This was a {@code @ManyToOne} association to {@link Tenant}, which
+     * caused two concrete problems. First, callers that only knew a tenant UUID
+     * had to fabricate a detached {@code Tenant} instance purely to carry the
+     * foreign key, which reads as though a tenant is being created. Second, and
+     * more importantly, JPQL could not express {@code WHERE j.tenantId = :id}
+     * against it — {@code AdminController} contained exactly that query, which
+     * therefore threw on every call and was silently swallowed by a surrounding
+     * catch, reporting "failed to fetch metrics" rather than any tenant's real
+     * numbers.
+     *
+     * <p>A plain UUID column is both what the code actually needs and what makes
+     * tenant-scoped queries writable. Nothing ever navigated from a job to its
+     * tenant's other fields.
+     */
+    @Column(name = "tenant_id", nullable = false)
+    private UUID tenantId;
 
     @Column(name = "error_id", nullable = false)
     private String errorId;

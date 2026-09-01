@@ -12,6 +12,18 @@ import java.util.UUID;
 @Data
 public class Tenant {
 
+    /**
+     * The single-tenant installation's tenant, seeded at orchestrator startup.
+     *
+     * <p>Previously spelled as a literal zero-UUID string in five places across
+     * three services (and once more in the dashboard's axios client), which is
+     * how it ended up being used both as a legitimate default for a
+     * single-tenant deployment <em>and</em> as a hardcoded override that
+     * discarded whatever tenant a request actually belonged to. Naming it makes
+     * every remaining use visible and reviewable.
+     */
+    public static final UUID DEFAULT_ID = UUID.fromString("00000000-0000-0000-0000-000000000000");
+
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;

@@ -29,7 +29,14 @@ dependencies {
     implementation 'io.micrometer:micrometer-registry-prometheus'
     implementation 'org.springframework.kafka:spring-kafka'
     implementation 'org.springframework.boot:spring-boot-starter-data-redis-reactive'
+    // API-key -> tenant resolution reads one indexed row from api_keys. Plain
+    // JDBC only, deliberately: JPA/Hibernate is excluded in
+    // ApiGatewayApplication and pulling a SessionFactory into a WebFlux service
+    // for a single-row lookup would not pay for itself.
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    runtimeOnly 'org.postgresql:postgresql'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'io.projectreactor:reactor-test'
 }
 
 dependencyManagement {
