@@ -1,9 +1,14 @@
 package ai.gitoracle.ingestor.controller;
 
 import ai.gitoracle.core.kafka.KafkaTopics;
+import ai.gitoracle.ingestor.security.DeliveryReplayGuard;
+import ai.gitoracle.ingestor.security.HmacVerifier;
 import ai.gitoracle.ingestor.service.SemanticDedupService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.web.bind.annotation.*;
@@ -24,18 +29,43 @@ public class WebhookController {
 
     private final SemanticDedupService dedupService;
     private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final DeliveryReplayGuard replayGuard;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public WebhookController(SemanticDedupService dedupService, KafkaTemplate<String, Object> kafkaTemplate) {
+    // Both were already defined in .env.example and read by nothing — anyone
+    // who knew (or guessed) this endpoint's URL could inject an arbitrary
+    // job. Fails closed to match TenantContextFilter/InternalAuthFilter's
+    // established posture: an unconfigured secret refuses every request
+    // rather than silently accepting them unverified.
+    @Value("${gitoracle.github-webhook-secret:}")
+    private String githubWebhookSecret;
+
+    @Value("${gitoracle.sentry-webhook-secret:}")
+    private String sentryWebhookSecret;
+
+    public WebhookController(SemanticDedupService dedupService, KafkaTemplate<String, Object> kafkaTemplate,
+                              DeliveryReplayGuard replayGuard) {
         this.dedupService = dedupService;
         this.kafkaTemplate = kafkaTemplate;
+        this.replayGuard = replayGuard;
     }
 
     @PostMapping("/{tenantId}/sentry")
     public ResponseEntity<Void> sentryWebhook(
             @PathVariable UUID tenantId,
-            @RequestBody Map<String, Object> payload,
+            @RequestBody byte[] rawBody,
             @RequestHeader(value = "X-Sentry-Signature", required = false) String sig) {
-        
+
+        if (!HmacVerifier.verify(rawBody, sentryWebhookSecret, sig, "sha256=")) {
+            logger.warn("Rejected Sentry webhook for tenant {}: invalid or missing X-Sentry-Signature.", tenantId);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        Map<String, Object> payload = parseBody(rawBody);
+        if (payload == null) {
+            return ResponseEntity.badRequest().build();
+        }
+
         logger.info("Received Sentry webhook for tenant: {}", tenantId);
         dedupService.ingest(tenantId, payload);
         return ResponseEntity.accepted().build();
@@ -45,8 +75,25 @@ public class WebhookController {
     public ResponseEntity<Void> githubWebhook(
             @RequestHeader(value = "X-Tenant-ID", defaultValue = "00000000-0000-0000-0000-000000000000") UUID tenantId,
             @RequestHeader(value = "X-GitHub-Event", required = false) String githubEvent,
-            @RequestBody Map<String, Object> payload) {
-        
+            @RequestHeader(value = "X-GitHub-Delivery", required = false) String deliveryId,
+            @RequestHeader(value = "X-Hub-Signature-256", required = false) String signature,
+            @RequestBody byte[] rawBody) {
+
+        if (!HmacVerifier.verify(rawBody, githubWebhookSecret, signature, "sha256=")) {
+            logger.warn("Rejected GitHub webhook (event={}, delivery={}): invalid or missing X-Hub-Signature-256.",
+                githubEvent, deliveryId);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        if (replayGuard.isReplay(deliveryId)) {
+            logger.warn("Rejected GitHub webhook: delivery {} already processed within the replay window.", deliveryId);
+            return ResponseEntity.status(HttpStatus.CONFLICT).build();
+        }
+
+        Map<String, Object> payload = parseBody(rawBody);
+        if (payload == null) {
+            return ResponseEntity.badRequest().build();
+        }
+
         logger.info("Received GitHub webhook for tenant: {} (Event: {})", tenantId, githubEvent);
 
         // --- PR Review Comment (line-level comment on diff) ---
@@ -230,6 +277,24 @@ public class WebhookController {
         if (body == null) return null;
         Matcher m = JOB_ID_PATTERN.matcher(body);
         return m.find() ? m.group(1) : null;
+    }
+
+    /**
+     * Parses the request body only AFTER HMAC verification — deliberately
+     * bound as raw bytes (@RequestBody byte[]) rather than Spring's usual
+     * Map<String,Object> auto-binding, since re-serializing an
+     * already-parsed Map is not guaranteed to byte-for-byte match what the
+     * sender actually signed (key ordering, whitespace, number formatting
+     * can all differ), which would make every legitimate signature fail.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseBody(byte[] rawBody) {
+        try {
+            return objectMapper.readValue(rawBody, Map.class);
+        } catch (Exception e) {
+            logger.warn("Rejected webhook: body is not valid JSON: {}", e.getMessage());
+            return null;
+        }
     }
 
     @SuppressWarnings("unchecked")
