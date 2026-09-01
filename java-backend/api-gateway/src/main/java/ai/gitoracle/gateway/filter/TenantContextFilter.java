@@ -19,7 +19,10 @@ import reactor.core.publisher.Mono;
  *   X-API-Key   — secret key configured in application.yml (gitoracle.api-key)
  *   X-Tenant-ID — UUID identifying the tenant (used downstream)
  *
- * Health/actuator endpoints are exempt from auth.
+ * Health/actuator endpoints are exempt from auth entirely. /webhook/** is
+ * exempt from X-API-Key only (external senders like GitHub can't supply
+ * one) — WebhookController verifies an HMAC signature over the raw body
+ * instead; see the API Key validation block below for the detail.
  *
  * Also injects X-Internal-Token on every proxied request once the checks
  * above pass — every internal service (orchestrator, error-ingestor,
@@ -56,19 +59,32 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
         }
 
         // ── API Key validation ─────────────────────────────────────────────────
-        // Fails CLOSED: an unconfigured key used to mean "skip the check entirely"
-        // (auth silently disabled for every request, confirmed live — GITORACLE_API_KEY
-        // was blank in .env), which is backwards for a gate whose whole job is to
-        // reject unauthenticated traffic. A missing server-side key is now itself a
-        // rejection, not a bypass.
-        if (configuredApiKey == null || configuredApiKey.isBlank()) {
-            logger.error("Request rejected: GITORACLE_API_KEY is not configured on the server — refusing all traffic rather than allowing it unauthenticated.");
-            return unauthorized(exchange, "Server misconfiguration: GITORACLE_API_KEY is not set.");
-        }
-        String incomingKey = exchange.getRequest().getHeaders().getFirst("X-API-Key");
-        if (incomingKey == null || !incomingKey.equals(configuredApiKey)) {
-            logger.warn("Request rejected: Invalid or missing X-API-Key for path={}", path);
-            return unauthorized(exchange, "Invalid or missing X-API-Key header.");
+        // /webhook/** is exempt from X-API-Key specifically — GitHub/Sentry have
+        // no way to supply a GitOracle-specific secret on a webhook delivery.
+        // WebhookController verifies an HMAC signature over the raw body instead
+        // (see HmacVerifier), which is the real authentication for that path. It
+        // still falls through to the internal-token injection below like every
+        // other route, so a captured signed payload replayed directly against
+        // error-ingestor's own port — bypassing this gateway — is still rejected
+        // by that service's own InternalAuthFilter.
+        //
+        // Fails CLOSED for every other path: an unconfigured key used to mean
+        // "skip the check entirely" (auth silently disabled for every request,
+        // confirmed live — GITORACLE_API_KEY was blank in .env), which is
+        // backwards for a gate whose whole job is to reject unauthenticated
+        // traffic. A missing server-side key is now itself a rejection, not a
+        // bypass.
+        boolean isWebhook = path.startsWith("/webhook");
+        if (!isWebhook) {
+            if (configuredApiKey == null || configuredApiKey.isBlank()) {
+                logger.error("Request rejected: GITORACLE_API_KEY is not configured on the server — refusing all traffic rather than allowing it unauthenticated.");
+                return unauthorized(exchange, "Server misconfiguration: GITORACLE_API_KEY is not set.");
+            }
+            String incomingKey = exchange.getRequest().getHeaders().getFirst("X-API-Key");
+            if (incomingKey == null || !incomingKey.equals(configuredApiKey)) {
+                logger.warn("Request rejected: Invalid or missing X-API-Key for path={}", path);
+                return unauthorized(exchange, "Invalid or missing X-API-Key header.");
+            }
         }
 
         // ── Internal token ────────────────────────────────────────────────────

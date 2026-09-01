@@ -1,3 +1,12 @@
+# Bridges the existing GITHUB_APP_WEBHOOK_SECRET/SENTRY_WEBHOOK_SECRET env
+# var names (already present in .env.example, previously read nowhere) to
+# property names WebhookController binds via @Value — these don't follow the
+# gitoracle.* env-var convention Spring's relaxed binding resolves
+# automatically, so they need an explicit mapping here.
+gitoracle:
+  github-webhook-secret: ${GITHUB_APP_WEBHOOK_SECRET:}
+  sentry-webhook-secret: ${SENTRY_WEBHOOK_SECRET:}
+
 spring:
   application:
     name: error-ingestor
