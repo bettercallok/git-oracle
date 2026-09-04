@@ -17,6 +17,7 @@ from shared.structured_output import llm_structured
 from shared.memory import AgentMemory
 from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 from shared.internal_auth import require_internal_token
+from shared.safe_paths import UnsafePathError, partition_safe, resolve_within, safe_read_text
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -92,8 +93,20 @@ def build_unified_diff(repo_path: str, file_path: str, search: str, replace: str
     always syntactically valid, but a `replace` block that opens more braces than
     it closes (or vice versa) produces code that fails to compile (confirmed live:
     "reached end of file while parsing"). A cheap global brace-count check catches
-    this before spending a full test-runner round-trip on code that can't compile."""
-    full_path = os.path.join(repo_path, file_path)
+    this before spending a full test-runner round-trip on code that can't compile.
+
+    `file_path` here is raw LLM output (SearchReplaceEdit.file_path), so it is
+    resolved through safe_paths rather than joined directly: os.path.join with
+    an absolute second argument silently discards `repo_path` entirely, and the
+    resulting diff's `--- a/<path>` / `+++ b/<path>` headers are what a later
+    stage applies. An unconstrained path here is therefore both a read of an
+    arbitrary file and, downstream, a write outside the checkout."""
+    try:
+        full_path = resolve_within(repo_path, file_path, for_read=True)
+    except UnsafePathError as e:
+        logger.warning(f"Refusing to build a diff for unsafe path {file_path!r}: {e}")
+        return None
+
     try:
         with open(full_path, "r") as f:
             original = f.read()
@@ -191,6 +204,18 @@ async def execute_fix(request: FixerRequest):
         )
         resolved = []
         for candidate in candidates:
+            # These candidates come from a regex over human_instructions and
+            # bug_description — for a webhook-triggered job that is entirely
+            # attacker-supplied text, and the pattern accepts both '.' and '/',
+            # so "a/../../../../etc/nginx/nginx.conf" matches it in full.
+            # Screen every candidate before it can be probed for existence or
+            # promoted into affected_files (which becomes authorized_files).
+            try:
+                resolve_within(local_src_path, candidate, for_read=True)
+            except UnsafePathError as e:
+                logger.warning(f"Ignoring unsafe file reference {candidate!r} from instructions: {e}")
+                continue
+
             if os.path.isfile(os.path.join(local_src_path, candidate)):
                 resolved.append(candidate)
                 continue
@@ -213,14 +238,37 @@ async def execute_fix(request: FixerRequest):
         else:
             logger.warning("No affected_files in plan and none could be resolved from instructions")
 
+    # Contain affected_files BEFORE anything reads them or publishes them.
+    #
+    # This list is planner LLM output (or, above, a regex over attacker-supplied
+    # webhook text) — never human-authored. It was previously passed straight to
+    # os.path.join + open(), which reads an arbitrary host file whenever an entry
+    # is absolute or traverses upward, and places its contents in the prompt sent
+    # to the LLM provider. That is an exfiltration primitive whose output leaves
+    # the machine by design.
+    #
+    # Filtering here rather than only at the read below is deliberate:
+    # affected_files is also published as authorized_files — the allowlist
+    # Guardrails validates the eventual patch against — so an unsafe entry that
+    # survived this far would not merely be read, it would be *authorized*.
+    safe_files, rejected_files = partition_safe(local_src_path, affected_files)
+    if rejected_files:
+        for path, reason in rejected_files:
+            logger.warning(f"Dropping unsafe path from affected_files: {path!r} ({reason})")
+    affected_files = safe_files
+
     source_context = ""
     for file_path in affected_files:
-        full_path = os.path.join(local_src_path, file_path)
         try:
-            with open(full_path, "r") as f:
-                source_context += f"\n--- {file_path} ---\n{f.read()}\n"
+            source_context += f"\n--- {file_path} ---\n{safe_read_text(local_src_path, file_path)}\n"
+        except UnsafePathError as e:
+            # Should be unreachable after partition_safe, but this is the call
+            # that actually reads bytes into a prompt — it enforces containment
+            # itself rather than trusting an earlier filter to have run.
+            logger.warning(f"Refusing to read unsafe path {file_path!r}: {e}")
+            source_context += f"\n--- {file_path} ---\n[Rejected: path outside the repository]\n"
         except Exception as e:
-            logger.warning(f"Could not read {full_path}: {e}")
+            logger.warning(f"Could not read {file_path}: {e}")
             source_context += f"\n--- {file_path} ---\n[File not found or unreadable]\n"
 
     # ReAct Loop (Up to 3 attempts to save time during testing, normally 5)
