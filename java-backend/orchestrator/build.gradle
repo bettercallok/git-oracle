@@ -8,6 +8,11 @@ dependencies {
     implementation 'io.github.cdimascio:dotenv-java:3.0.0'
     implementation 'org.eclipse.jgit:org.eclipse.jgit:6.9.0.202403050737-r'
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // Bean Validation. Every request body in this module was a raw
+    // Map<String,Object> read with getOrDefault, so a missing field became a
+    // null or a silent default and a wrong type became a ClassCastException
+    // surfaced to the caller as a 500. See ai.gitoracle.orchestrator.dto.
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.kafka:spring-kafka'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'

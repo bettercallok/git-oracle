@@ -44,6 +44,36 @@ public class CommitController {
     private static final Logger logger = LoggerFactory.getLogger(CommitController.class);
     private static final int DEFAULT_PER_PAGE = 30;
     private static final int MAX_PER_PAGE     = 100;
+
+    /**
+     * H7. `page` was clamped only at the bottom (`Math.max(1, page)`), and the
+     * resulting `skip` ran against a LAZY PagedIterable — so the skipped
+     * commits are not free, they are fetched from the GitHub API one page at a
+     * time and thrown away. `?page=20000000` walks two billion commits: it
+     * pins a request thread indefinitely and burns the installation's shared
+     * GitHub API quota doing it, which degrades every tenant, not just the
+     * caller.
+     *
+     * Larger `page * perPage` also overflows int (`(page-1) * perPage` with
+     * page=100000000, perPage=100 exceeds Integer.MAX_VALUE), producing a
+     * negative skip and an IllegalArgumentException from Stream.skip — a 500
+     * for what is plainly bad input.
+     *
+     * Both bounds are enforced explicitly, and the arithmetic is done in long.
+     */
+    private static final int MAX_PAGE = 100;
+    private static final long MAX_SKIP = 5_000;
+
+    /**
+     * Strict owner/repo. The old check was `repo.contains("/")`, which admits
+     * "../../some/other/path" — and this value is interpolated into a GitHub
+     * API request path by the client library, so a traversing value is an
+     * attempt to address a different API resource entirely. GitHub's own naming
+     * rules are far narrower than "contains a slash".
+     */
+    private static final java.util.regex.Pattern OWNER_REPO =
+        java.util.regex.Pattern.compile("^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$");
+
     private static final String COMMIT_ANALYST_URL = "http://localhost:9004/analyze";
 
     private final GitHubClientService githubClientService;
@@ -56,6 +86,27 @@ public class CommitController {
         this.githubClientService = githubClientService;
     }
 
+    private static boolean isValidRepo(String repo) {
+        return repo != null && OWNER_REPO.matcher(repo).matches();
+    }
+
+    /**
+     * A commit SHA goes into a GitHub API path the same way `repo` does.
+     * RepoRefValidator already owns this rule (added for C1), so it is reused
+     * rather than restated.
+     */
+    private static boolean isValidSha(String sha) {
+        // validateSha treats a blank value as "not specified" and returns null
+        // rather than throwing, which is right for an optional field but wrong
+        // here — a blank sha must not pass a check whose whole job is to
+        // confirm one was supplied. Require a non-null result explicitly.
+        try {
+            return ai.gitoracle.core.security.RepoRefValidator.validateSha(sha) != null;
+        } catch (ai.gitoracle.core.security.RepoRefValidator.InvalidRepoRefException e) {
+            return false;
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // GET /api/v1/commits?repo=owner/repo&page=1&per_page=30
     // ─────────────────────────────────────────────────────────────────────────
@@ -65,13 +116,32 @@ public class CommitController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(name = "per_page", defaultValue = "30") int perPage) {
 
-        if (repo == null || repo.isBlank() || !repo.contains("/")) {
+        if (!isValidRepo(repo)) {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "repo parameter must be in 'owner/repo' format"));
         }
 
-        int safePage    = Math.max(1, page);
+        // Reject rather than silently clamp: a caller asking for page 100000000
+        // has misunderstood something, and quietly serving them page 100 hides
+        // that. Rejecting is also what makes this cheap — the whole point is to
+        // answer before doing any GitHub work at all.
+        if (page < 1 || page > MAX_PAGE) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "page must be between 1 and " + MAX_PAGE,
+                    "hint",  "Deep pagination over the commit list is not supported; narrow the range instead."));
+        }
+
+        int safePage    = page;
         int safePerPage = Math.min(Math.max(1, perPage), MAX_PER_PAGE);
+
+        // long, not int: (page-1)*perPage overflows int at the upper end of the
+        // old unbounded range and produces a negative skip.
+        long skip = (long) (safePage - 1) * safePerPage;
+        if (skip > MAX_SKIP) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "Requested offset is too deep (" + skip + " > " + MAX_SKIP + ")",
+                    "hint",  "Every skipped commit is still fetched from the GitHub API; use a narrower page/per_page."));
+        }
 
         logger.info("Listing commits for {} (page={}, perPage={})", repo, safePage, safePerPage);
 
@@ -81,9 +151,6 @@ public class CommitController {
 
             // Fetch commits — GitHub Java SDK paginates automatically via PagedIterable
             PagedIterable<GHCommit> pagedCommits = ghRepo.listCommits();
-
-            // Skip to the requested page manually (0-indexed internally)
-            int skip = (safePage - 1) * safePerPage;
 
             List<Map<String, Object>> commits = StreamSupport
                     .stream(pagedCommits.spliterator(), false)
@@ -103,7 +170,23 @@ public class CommitController {
                             entry.put("date",      info.getAuthor().getDate() != null
                                     ? info.getAuthor().getDate().toInstant().toString()
                                     : null);
-                            // Stats are only available in the full commit object
+                            // Stats are only available in the full commit object.
+                            //
+                            // NOTE (unfixed, deliberately): this is one extra
+                            // GitHub API call PER COMMIT, so a single request at
+                            // per_page=100 costs ~100 calls on top of the list
+                            // itself. An installation's quota is 5000/hour and
+                            // is SHARED ACROSS TENANTS, so roughly 50 requests
+                            // here can exhaust commit browsing for everyone.
+                            // The page/skip bounds above cap the damage per
+                            // request but do not remove this amplification.
+                            // Fixing it properly means either dropping stats
+                            // from the list view or caching commit stats by SHA
+                            // (they are immutable, so caching is trivially
+                            // correct) — both are behaviour changes to the
+                            // dashboard's data, not a validation fix, so they
+                            // are not folded into this change. The per-tenant
+                            // GitHub quota the plan calls for belongs with them.
                             try {
                                 GHCommit fullCommit = ghRepo.getCommit(commit.getSHA1());
                                 entry.put("filesChanged", fullCommit.getFiles().size());
@@ -156,9 +239,12 @@ public class CommitController {
             @PathVariable String sha,
             @RequestParam String repo) {
 
-        if (repo == null || repo.isBlank() || !repo.contains("/")) {
+        if (!isValidRepo(repo)) {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "repo parameter must be in 'owner/repo' format"));
+        }
+        if (!isValidSha(sha)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "sha is not a valid commit SHA"));
         }
 
         logger.info("Fetching diff for commit {} in {}", sha, repo);
@@ -225,21 +311,25 @@ public class CommitController {
     public ResponseEntity<?> analyzeCommit(
             @PathVariable String sha,
             @RequestParam String repo,
-            @RequestBody Map<String, Object> body) {
+            @jakarta.validation.Valid @RequestBody ai.gitoracle.orchestrator.dto.Requests.AnalyzeCommit body) {
 
-        if (repo == null || repo.isBlank() || !repo.contains("/")) {
+        if (!isValidRepo(repo)) {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "repo parameter must be in 'owner/repo' format"));
         }
-
-        String question = (String) body.getOrDefault("question", "");
-        if (question.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "question field is required"));
+        if (!isValidSha(sha)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "sha is not a valid commit SHA"));
         }
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, String>> chatHistory =
-                (List<Map<String, String>>) body.getOrDefault("chatHistory", List.of());
+        // question/chatHistory are validated on the record. chatHistory in
+        // particular is replayed verbatim into an LLM prompt, so it is now
+        // bounded in both message count and per-message length — previously an
+        // unchecked cast of whatever JSON arrived, which also meant a
+        // ClassCastException (500) if it wasn't a list of objects.
+        String question = body.question();
+        List<Map<String, String>> chatHistory = body.chatHistoryOrEmpty().stream()
+                .map(m -> Map.of("role", m.role(), "content", m.content()))
+                .toList();
 
         logger.info("Analyzing commit {} in {} — question: '{}'", sha, repo, question);
 

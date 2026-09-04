@@ -1,7 +1,9 @@
 package ai.gitoracle.orchestrator.controller;
 
+import ai.gitoracle.orchestrator.dto.Requests;
 import ai.gitoracle.orchestrator.model.TenantConfig;
 import ai.gitoracle.orchestrator.security.TenantContext;
+import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -44,11 +46,11 @@ public class AdminController {
 
     @PostMapping("/tenants")
     @org.springframework.transaction.annotation.Transactional
-    public ResponseEntity<Map<String, String>> registerTenant(@RequestBody Map<String, String> request) {
-        String tenantName = request.get("name");
-        if (tenantName == null || tenantName.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "name is required"));
-        }
+    public ResponseEntity<Map<String, String>> registerTenant(@Valid @RequestBody Requests.RegisterTenant request) {
+        // The hand-rolled blank check moved onto the record as @NotBlank, which
+        // also bounds the length — org_name is a varchar column, and an
+        // over-long value was previously a constraint violation surfaced as a 500.
+        String tenantName = request.name();
 
         ai.gitoracle.core.model.postgres.Tenant tenant = new ai.gitoracle.core.model.postgres.Tenant();
         tenant.setOrgName(tenantName);
@@ -130,9 +132,9 @@ public class AdminController {
     }
 
     @PostMapping("/prompts/{agent}/activate")
-    public ResponseEntity<Map<String, String>> switchPromptVersion(@PathVariable("agent") String agent, 
-                                                                   @RequestBody Map<String, String> request) {
-        String version = request.get("version");
+    public ResponseEntity<Map<String, String>> switchPromptVersion(@PathVariable("agent") String agent,
+                                                                   @Valid @RequestBody Requests.ActivatePrompt request) {
+        String version = request.version();
         logger.info("Switching active prompt for agent '{}' to version '{}'", agent, version);
         return ResponseEntity.ok(Map.of("agent", agent, "activeVersion", version));
     }
