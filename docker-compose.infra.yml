@@ -223,6 +223,30 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_HEAP_OPTS: "-Xmx200m -Xms200m"
 
+      # Kafka's log cleaner allocates log.cleaner.dedupe.buffer.size as a SINGLE
+      # contiguous HeapByteBuffer per cleaner thread during LogManager startup.
+      # The default is 128MB, which cannot fit in the 200MB heap above alongside
+      # the broker's own startup allocations — the result was
+      # "OutOfMemoryError: Java heap space" inside LogCleaner.startup, which
+      # ProcessTerminatingFaultHandler turns into an immediate exit, giving an
+      # endless restart loop (observed: 97 restarts, RestartCount=97,
+      # OOMKilled=false — i.e. the JVM heap, not the container mem_limit).
+      #
+      # 16MB is ample for this workload's only compacted topic
+      # (__consumer_offsets) and keeps the deliberate memory budget intact —
+      # see CLAUDE.md on why these caps are load-bearing rather than incidental.
+      KAFKA_LOG_CLEANER_DEDUPE_BUFFER_SIZE: 16777216
+      KAFKA_LOG_CLEANER_THREADS: 1
+
+      # Without this the broker writes to the image's default /tmp/kafka-logs —
+      # INSIDE the container, not the volume mounted below. Confirmed from the
+      # broker's own startup line ("Loading logs from log dirs
+      # ArrayBuffer(/tmp/kafka-logs)") and by the named volume being empty.
+      # Every restart therefore discarded all topics, messages, and consumer
+      # offsets, which reads as "Kafka keeps losing our topics" rather than as
+      # a missing config line.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+
       # Listeners
       KAFKA_LISTENERS: INTERNAL://0.0.0.0:9094,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
       KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9094,EXTERNAL://localhost:9092

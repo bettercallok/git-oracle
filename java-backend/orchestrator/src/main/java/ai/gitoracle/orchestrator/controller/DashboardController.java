@@ -6,7 +6,9 @@ import ai.gitoracle.core.entity.EvalRun;
 import ai.gitoracle.core.kafka.KafkaTopics;
 import ai.gitoracle.core.kafka.event.ErrorIngestedEvent;
 import ai.gitoracle.core.security.RepoRefValidator;
+import ai.gitoracle.orchestrator.dto.Requests;
 import ai.gitoracle.orchestrator.security.TenantContext;
+import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.web.bind.annotation.*;
@@ -69,7 +71,7 @@ public class DashboardController {
     }
 
     @PostMapping("/jobs")
-    public ResponseEntity<AgentJob> createJob(@RequestBody Map<String, String> request) {
+    public ResponseEntity<AgentJob> createJob(@Valid @RequestBody Requests.CreateJob request) {
         // CLI hits this endpoint.
         //
         // The id is deliberately NOT set here. AgentJob#id is @GeneratedValue,
@@ -81,7 +83,7 @@ public class DashboardController {
         // (triggerFix, SemanticDedupService) already left the id unset.
         AgentJob job = new AgentJob();
         job.setTenantId(TenantContext.requireTenantId());
-        job.setRepo(request.get("repoUrl"));
+        job.setRepo(request.repoUrl());
         job.setState("QUEUED");
         job.setErrorId("manual-trigger");
         entityManager.persist(job);
@@ -125,15 +127,14 @@ public class DashboardController {
     @PostMapping("/jobs/{jobId}/feedback")
     public ResponseEntity<Map<String, String>> submitFeedback(
             @PathVariable UUID jobId,
-            @RequestBody Map<String, String> request) {
+            @Valid @RequestBody Requests.Feedback request) {
 
         AgentJob job = findOwnedJob(jobId).orElse(null);
         if (job == null) return ResponseEntity.notFound().build();
 
-        String instructions = request.get("instructions");
-        if (instructions == null || instructions.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "instructions field is required"));
-        }
+        // The "instructions is required" check now lives on the record as
+        // @NotBlank, so an empty body is rejected before this method runs.
+        String instructions = request.instructions();
 
         logger.info("Dashboard feedback received for job {} — triggering new fix cycle", jobId);
 
@@ -187,19 +188,20 @@ public class DashboardController {
      * absent on every job that took this path.
      */
     @PostMapping("/trigger")
-    public ResponseEntity<Map<String, String>> triggerFix(@RequestBody Map<String, Object> request) {
-        String repoUrl = (String) request.get("repoUrl");
-        String issue   = (String) request.get("issueDescription");
-        String targetRepo = request.get("targetRepo") instanceof String s ? s : "";
+    public ResponseEntity<Map<String, String>> triggerFix(@Valid @RequestBody Requests.TriggerFix request) {
+        String repoUrl = request.repoUrl();
+        String issue   = request.issueDescription();
+        String targetRepo = request.targetRepoOrEmpty();
         // Empty = the repo's actual default branch. Threaded through both routes so
         // GitOracle reads, tests, and opens its PR against this branch instead of
         // whichever branch `git clone` picks with none specified.
-        String branch = request.get("branch") instanceof String b ? b : "";
-        boolean investigateFirst = !Boolean.FALSE.equals(request.get("investigateFirst"));
+        String branch = request.branchOrEmpty();
+        boolean investigateFirst = request.investigateFirstOrDefault();
 
-        if (repoUrl == null || issue == null) {
-            return ResponseEntity.badRequest().body(Map.of("error", "repoUrl and issueDescription are required"));
-        }
+        // The "repoUrl and issueDescription are required" check is now @NotBlank
+        // on the record. It also rejects a whitespace-only issueDescription,
+        // which the old null check let through into the pipeline as a job with
+        // no actual instruction.
 
         // Reject at the pipeline's entry point, not just at the git-invoking call
         // sites downstream — repoUrl/branch eventually reach `git clone` in
@@ -305,7 +307,8 @@ public class DashboardController {
     }
 
     @PostMapping("/escalations/{id}/resolve")
-    public ResponseEntity<Void> resolveEscalation(@PathVariable UUID id, @RequestBody Map<String, String> request) {
+    public ResponseEntity<Void> resolveEscalation(@PathVariable UUID id,
+                                                  @Valid @RequestBody Requests.ResolveEscalation request) {
         Escalation escalation = entityManager.find(Escalation.class, id);
         if (escalation != null && !ownsEscalation(escalation)) {
             // Same reasoning as findOwnedJob: indistinguishable from "no such
@@ -316,7 +319,11 @@ public class DashboardController {
             return ResponseEntity.notFound().build();
         }
         if (escalation != null) {
-            String action = request.get("action"); // 'approve' or 'reject'
+            // Constrained to exactly "approve" or "reject" on the record. It
+            // used to be any string, with everything that wasn't "approve"
+            // falling through to REJECTED — so a typo, or an absent field,
+            // silently rejected an escalation a human meant to approve.
+            String action = request.action();
             escalation.setStatus("approve".equals(action) ? "APPROVED" : "REJECTED");
             escalation.setResolvedAt(OffsetDateTime.now());
             entityManager.merge(escalation);
@@ -366,31 +373,19 @@ public class DashboardController {
     }
 
     @PostMapping("/evals")
-    public ResponseEntity<EvalRun> saveEval(@RequestBody Map<String, Object> request) {
+    public ResponseEntity<EvalRun> saveEval(@Valid @RequestBody Requests.SaveEval request) {
+        // Each field used to be read with an `instanceof Number` test that fell
+        // back to 0. A submission with a missing or non-numeric accuracy was
+        // therefore stored as a completed eval run scoring 0.0 — indistinguishable
+        // in the table from a real run that genuinely scored zero, and it drags
+        // down any average computed over that table. Malformed input is now
+        // rejected instead of being recorded as a fabricated result.
         EvalRun eval = new EvalRun();
         eval.setId(UUID.randomUUID());
-        eval.setGoldenDatasetVersion((String) request.getOrDefault("goldenDatasetVersion", "v1"));
-        
-        Object accObj = request.get("accuracy");
-        if (accObj instanceof Number) {
-            eval.setAccuracy(((Number) accObj).doubleValue());
-        } else {
-            eval.setAccuracy(0.0);
-        }
-        
-        Object latObj = request.get("avgLatencyMs");
-        if (latObj instanceof Number) {
-            eval.setAvgLatencyMs(((Number) latObj).intValue());
-        } else {
-            eval.setAvgLatencyMs(0);
-        }
-
-        Object casesObj = request.get("casesTotal");
-        if (casesObj instanceof Number) {
-            eval.setCasesTotal(((Number) casesObj).intValue());
-        } else {
-            eval.setCasesTotal(0);
-        }
+        eval.setGoldenDatasetVersion(request.goldenDatasetVersionOrDefault());
+        eval.setAccuracy(request.accuracy());
+        eval.setAvgLatencyMs(request.avgLatencyMs());
+        eval.setCasesTotal(request.casesTotal());
 
         entityManager.persist(eval);
         return ResponseEntity.ok(eval);
@@ -431,13 +426,13 @@ public class DashboardController {
     @PostMapping("/jobs/{jobId}/prompt-version")
     public ResponseEntity<Void> recordPromptVersion(
             @PathVariable UUID jobId,
-            @RequestBody Map<String, Object> request) {
+            @Valid @RequestBody Requests.RecordPromptVersion request) {
 
-        String agentName = (String) request.get("agentName");
-        Object versionObj = request.get("version");
-        if (agentName == null || !(versionObj instanceof Number)) {
-            return ResponseEntity.badRequest().build();
-        }
+        // The old hand-rolled check returned a bare 400 with no body, so an
+        // agent sending a malformed payload got no indication of which field
+        // was wrong. Constraints on the record produce a field-level problem
+        // detail instead.
+        String agentName = request.agentName();
 
         if (jobPromptVersionRepository.findByJobIdAndAgentName(jobId, agentName).isPresent()) {
             return ResponseEntity.ok().build();
@@ -447,7 +442,7 @@ public class DashboardController {
         row.setId(UUID.randomUUID());
         row.setJobId(jobId);
         row.setAgentName(agentName);
-        row.setPromptVersion(((Number) versionObj).intValue());
+        row.setPromptVersion(request.version());
         jobPromptVersionRepository.save(row);
         return ResponseEntity.ok().build();
     }
