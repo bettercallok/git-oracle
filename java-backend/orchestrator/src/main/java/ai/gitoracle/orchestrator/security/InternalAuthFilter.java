@@ -7,6 +7,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -37,6 +39,12 @@ import java.util.List;
  * conflict that keeps api-gateway reactive today.
  */
 @Component
+// Explicitly first: authentication precedes authorization. This service also
+// registers TenantContextFilter, which enforces the platform:admin scope on
+// /api/v1/admin/**; with both filters unordered, their relative order was
+// whatever the bean factory produced, and an unauthenticated request to an
+// admin path was being answered 403 before this filter ever ran.
+@Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class InternalAuthFilter extends OncePerRequestFilter {
 
     private static final Logger logger = LoggerFactory.getLogger(InternalAuthFilter.class);
