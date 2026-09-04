@@ -313,7 +313,23 @@ public class OrchestratorService {
                 : java.util.Arrays.asList(authorizedFilesCsv.split(","));
             guardrailsRequest.put("allowed_files", allowedFiles);
 
-            restTemplate.postForObject("http://localhost:9006/validate/patch", withInternalAuth(guardrailsRequest), Map.class);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> guardrailsResponse = restTemplate.postForObject(
+                "http://localhost:9006/validate/patch", withInternalAuth(guardrailsRequest), Map.class);
+
+            // Guardrails' content heuristics are advisory, not a gate — they are
+            // substring matches over the patch's added lines, trivially avoided by
+            // anyone who knows they exist, and previously they FAILED the job
+            // outright (including on unchanged context lines). They are still worth
+            // a reviewer's attention, so a passing patch that tripped one says so
+            // here rather than the signal being discarded with the response body.
+            if (guardrailsResponse != null) {
+                Object advisories = guardrailsResponse.get("advisories");
+                if (advisories instanceof java.util.List<?> list && !list.isEmpty()) {
+                    logger.warn("Guardrails passed job {} with advisories (non-blocking): {} — touched files: {}",
+                        jobIdStr, list, guardrailsResponse.get("touched_files"));
+                }
+            }
             logger.info("Guardrails validation passed.");
         } catch (org.springframework.web.client.HttpClientErrorException e) {
             logger.warn("Guardrails validation FAILED for job {}: {}", jobIdStr, e.getResponseBodyAsString());

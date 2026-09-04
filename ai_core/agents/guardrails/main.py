@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from fastapi import Depends, FastAPI, HTTPException
@@ -37,9 +38,27 @@ async def validate_injection(payload: TextPayload):
 @app.post("/validate/patch", response_model=PatchScanResult)
 async def validate_patch(payload: PatchPayload):
     result = scan_patch(payload.diff, payload.allowed_files)
+
+    # Advisories are reported on BOTH paths, and never decide the outcome.
+    # They are pattern matches over the patch's added lines, useful for drawing
+    # a reviewer's eye and useless as a boundary — see CONTENT_HEURISTICS in
+    # patch_scanner for why treating them as a gate was false assurance in both
+    # directions.
+    if result.advisories:
+        logging.warning(
+            "Patch advisories (non-blocking) for files %s: %s",
+            result.touched_files, result.advisories,
+        )
+
     if not result.safe:
-        # We can either return 400 or just return the result with safe=False
-        raise HTTPException(status_code=400, detail={"violations": result.violations})
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "violations": result.violations,
+                "advisories": result.advisories,
+                "touched_files": result.touched_files,
+            },
+        )
     return result
 
 if __name__ == "__main__":
