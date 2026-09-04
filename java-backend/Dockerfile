@@ -21,5 +21,21 @@ FROM eclipse-temurin:21-jre-alpine
 ARG SERVICE
 ENV SERVICE_MODULE=${SERVICE}
 WORKDIR /app
+
+# test-runner shells out to `docker run` to sandbox test execution, but this
+# base image ships no docker binary — so `docker info` failed at startup,
+# dockerAvailable stayed false, and every containerised test run failed closed.
+# The socket mount it used to carry was therefore pure liability: host-root
+# privilege that nothing could even use. Only the client is installed here; the
+# daemon it talks to is the rootless DinD sidecar (DOCKER_HOST), never a host
+# socket. See docker-compose.services.yml.
+#
+# Scoped to test-runner rather than added to every image, since no other
+# service invokes Docker and a docker client in, say, the gateway is just more
+# attack surface.
+RUN if [ "$SERVICE" = "test-runner" ]; then \
+      apk add --no-cache docker-cli; \
+    fi
+
 COPY --from=build /out/app.jar /app/app.jar
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]
