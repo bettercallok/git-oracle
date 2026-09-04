@@ -2,6 +2,7 @@ package ai.gitoracle.orchestrator.security;
 
 import ai.gitoracle.core.model.postgres.ApiKey;
 import ai.gitoracle.core.model.postgres.Tenant;
+import ai.gitoracle.core.security.RequestPaths;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -9,6 +10,8 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -69,6 +72,14 @@ import java.util.UUID;
  * scopes: a missing {@code X-Scopes} header is empty scopes, not admin scopes.
  */
 @Component
+// Runs after InternalAuthFilter (HIGHEST_PRECEDENCE + 10): authenticate first,
+// then authorize. Both filters were previously unordered @Components, so their
+// relative order was whatever the bean factory happened to produce — in
+// practice this one ran first, which meant an entirely unauthenticated request
+// to an admin path was answered 403 (from here) instead of 401 (from the token
+// check), telling a caller with no credentials at all that the path exists and
+// that scopes are what it lacks.
+@Order(Ordered.HIGHEST_PRECEDENCE + 20)
 public class TenantContextFilter extends OncePerRequestFilter {
 
     private static final Logger logger = LoggerFactory.getLogger(TenantContextFilter.class);
@@ -84,7 +95,7 @@ public class TenantContextFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
 
         String path = request.getRequestURI();
-        if (EXEMPT_PATHS.stream().anyMatch(exempt -> path.equals(exempt) || path.startsWith(exempt + "/"))) {
+        if (isExempt(path)) {
             chain.doFilter(request, response);
             return;
         }
@@ -94,7 +105,8 @@ public class TenantContextFilter extends OncePerRequestFilter {
             Set<String> scopes = ApiKey.Scopes.parse(request.getHeader("X-Scopes"));
             TenantContext.set(tenantId, scopes);
 
-            if (isAdminPath(path) && !scopes.contains(ApiKey.Scopes.PLATFORM_ADMIN)) {
+            if (RequestPaths.isUnderPrefix(path, ADMIN_PATH_PREFIX)
+                    && !scopes.contains(ApiKey.Scopes.PLATFORM_ADMIN)) {
                 logger.warn("Request rejected: platform:admin scope required for admin path={} (resolved tenant={})",
                     path, tenantId);
                 response.sendError(HttpServletResponse.SC_FORBIDDEN,
@@ -112,8 +124,20 @@ public class TenantContextFilter extends OncePerRequestFilter {
         }
     }
 
-    private boolean isAdminPath(String path) {
-        return path.equals(ADMIN_PATH_PREFIX) || path.startsWith(ADMIN_PATH_PREFIX + "/");
+    /**
+     * Exempting is a GRANT, so it is matched on the raw path and additionally
+     * requires that path to already be canonical — the opposite of how the
+     * admin prefix is matched below.
+     *
+     * <p>Canonicalising here instead would exempt
+     * {@code /actuator/../api/v1/admin/tenants}: it resolves to an admin route
+     * but its literal prefix looks like the exempt one. Requiring the raw path
+     * to be canonical means anything carrying encoding, path parameters, or dot
+     * segments simply fails the exemption and proceeds to normal authentication.
+     */
+    private boolean isExempt(String path) {
+        if (!RequestPaths.isCanonical(path)) return false;
+        return EXEMPT_PATHS.stream().anyMatch(exempt -> path.equals(exempt) || path.startsWith(exempt + "/"));
     }
 
     private UUID resolveTenant(HttpServletRequest request) {

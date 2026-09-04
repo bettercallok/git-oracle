@@ -107,6 +107,46 @@ class TenantContextFilterTest {
     }
 
     @Test
+    void encodedOrParameterisedAdminPathsAreStillGated() throws Exception {
+        // Both of these were confirmed live to reach AdminController and create
+        // a tenant with no platform:admin scope: the filter tested the raw
+        // request path, while Spring decoded %61 and Tomcat stripped ";x=1"
+        // before dispatching. See RequestPaths for the full explanation.
+        for (String path : new String[] {
+            "/api/v1/%61dmin/tenants",
+            "/api/v1/admin;x=1/tenants",
+            "/api/v1/%2561dmin/tenants",
+            "/api/v1//admin/tenants",
+            "/api/v1/foo/../admin/tenants",
+            "/api/v1/admin%2Ftenants"
+        }) {
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", path);
+            MockHttpServletResponse response = new MockHttpServletResponse();
+
+            filter.doFilter(request, response, mock(FilterChain.class));
+
+            assertThat(response.getStatus())
+                .as("path %s must be gated as an admin path", path)
+                .isEqualTo(403);
+        }
+    }
+
+    @Test
+    void anExemptLookingPrefixThatResolvesToAnAdminPathIsNotExempted() throws Exception {
+        // The reason the exempt list matches raw-and-canonical rather than
+        // canonicalising: this starts with "/actuator" but resolves to an
+        // admin route.
+        MockHttpServletRequest request =
+            new MockHttpServletRequest("POST", "/actuator/../api/v1/admin/tenants");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(403);
+        verifyNoInteractions(chain);
+    }
+
+    @Test
     void aPathThatMerelyStartsWithAdminAsATextPrefixIsNotTreatedAsAdmin() throws Exception {
         // /api/v1/adminXYZ is a different route than /api/v1/admin/XYZ and
         // must not be swept into the admin gate by a naive string prefix

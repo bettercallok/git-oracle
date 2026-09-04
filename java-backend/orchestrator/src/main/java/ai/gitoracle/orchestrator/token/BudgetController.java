@@ -1,5 +1,6 @@
 package ai.gitoracle.orchestrator.token;
 
+import ai.gitoracle.orchestrator.security.TenantContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -50,10 +51,23 @@ public class BudgetController {
     /**
      * GET /budget/{jobId}
      * Returns current token budget status for a job.
+     *
+     * <p>Scoped to the calling tenant. This read had no tenant predicate at
+     * all: any caller could retrieve any job's token usage by id, and the
+     * 200-vs-404 distinction confirmed whether an arbitrary job id existed
+     * anywhere in the installation. Missed when tenant predicates were added
+     * to the other read paths — this controller lives under
+     * {@code token/} rather than {@code controller/} and was not part of that
+     * sweep.
+     *
+     * <p>Another tenant's job is reported as absent rather than forbidden, for
+     * the same reason as everywhere else: a 403 would confirm the id names a
+     * real job.
      */
     @GetMapping("/{jobId}")
     public ResponseEntity<Map<String, Object>> getBudgetStatus(@PathVariable UUID jobId) {
         return jobRepository.findById(jobId)
+                .filter(job -> TenantContext.requireTenantId().equals(job.getTenantId()))
                 .map(job -> {
                     int used    = job.getTokenBudgetUsed();
                     int limit   = job.getTokenBudgetLimit();

@@ -1,6 +1,7 @@
 package ai.gitoracle.gateway.filter;
 
 import ai.gitoracle.core.model.postgres.ApiKey;
+import ai.gitoracle.core.security.RequestPaths;
 import ai.gitoracle.gateway.security.ApiKeyAuthenticator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -105,7 +106,12 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
             return deny(exchange, HttpStatus.UNAUTHORIZED, "Server misconfiguration: GITORACLE_INTERNAL_TOKEN is not set.");
         }
 
-        if (path.startsWith("/webhook")) {
+        // Also a GRANT (it skips the X-API-Key requirement), so it is matched
+        // the same defensive way as isExempt: the raw path must already be
+        // canonical and match on a segment boundary. Otherwise
+        // "/webhook/../api/v1/admin/tenants" could claim the webhook exemption
+        // on its literal prefix while resolving to an entirely different route.
+        if (RequestPaths.isCanonical(path) && RequestPaths.isUnderPrefix(path, "/webhook")) {
             // No key, so no derivable tenant. Strip whatever the caller sent and
             // forward with the internal token only.
             return chain.filter(exchange.mutate().request(sanitised(exchange, null).build()).build());
@@ -163,19 +169,39 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
     }
 
     /**
-     * Exact match, or a match on a full path segment.
+     * Exact match, or a match on a full path segment, and only for a path that
+     * is already canonical.
      *
      * <p>A plain {@code startsWith} meant {@code /actuatorFOO} — and, more to the
      * point, {@code /healthcheck-bypass} or any route an attacker could get
      * mapped — skipped authentication entirely, because the exempt list was
      * tested as a raw string prefix rather than a path prefix.
+     *
+     * <p>Exempting is a GRANT, so unlike {@link #isAdminPath} this deliberately
+     * does <em>not</em> canonicalise before comparing: normalising first would
+     * exempt {@code /actuator/../api/v1/admin/tenants}, whose literal prefix
+     * looks exempt but which resolves to an admin route. Requiring the raw path
+     * to already be canonical makes anything ambiguous fall through to normal
+     * authentication instead.
      */
     private boolean isExempt(String path) {
+        if (!RequestPaths.isCanonical(path)) return false;
         return EXEMPT_PATHS.stream().anyMatch(p -> path.equals(p) || path.startsWith(p + "/"));
     }
 
+    /**
+     * Matched against the canonicalised path, because this is a DENY rule and
+     * the router does not dispatch on the raw string.
+     *
+     * <p>{@code POST /api/v1/admin;x=1/tenants} was confirmed live to reach
+     * AdminController and create a tenant using an ordinary tenant-scoped API
+     * key holding no {@code platform:admin} scope: this gateway forwarded it
+     * because the raw path did not match the prefix, and Tomcat then stripped
+     * the {@code ;x=1} path parameter before mapping it to the admin route. See
+     * {@link RequestPaths} for the full set.
+     */
     private boolean isAdminPath(String path) {
-        return path.equals("/api/v1/admin") || path.startsWith("/api/v1/admin/");
+        return RequestPaths.isUnderPrefix(path, "/api/v1/admin");
     }
 
     private Mono<Void> deny(ServerWebExchange exchange, HttpStatus status, String message) {
