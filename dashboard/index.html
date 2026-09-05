@@ -4,6 +4,45 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!--
+      Content Security Policy — the other half of H11.
+
+      Moving the API key out of localStorage limits what an XSS can steal; a CSP
+      reduces how easily one executes in the first place. `script-src 'self'`
+      means an injected inline <script> or a script from another origin will not
+      run, which is the delivery mechanism for most credential theft in a SPA.
+
+      Two honest caveats:
+
+      * `style-src` allows 'unsafe-inline'. Vite injects stylesheets as inline
+        <style> elements, and removing this would break the build's own CSS.
+        Inline STYLE carries far less risk than inline SCRIPT, but it is a
+        relaxation and should not be read as "strict CSP".
+
+      * `frame-ancestors` is deliberately absent: browsers ignore it in a <meta>
+        CSP, so writing it here would be decoration. Clickjacking protection has
+        to come from a real response header. This meta tag exists because the
+        dashboard is served as static files with no server of ours in front of
+        it; a deployment that terminates TLS at a proxy should set
+        Content-Security-Policy and X-Frame-Options as headers there, which also
+        lets it drop 'unsafe-inline' via a nonce.
+
+      connect-src includes localhost:8080 for local dev against the gateway. A
+      deployment pointing VITE_API_URL elsewhere must add that origin here.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self';
+               script-src 'self';
+               style-src 'self' 'unsafe-inline';
+               img-src 'self' data:;
+               font-src 'self' data:;
+               connect-src 'self' http://localhost:8080 http://127.0.0.1:8080 ws://localhost:5173 ws://127.0.0.1:5173;
+               object-src 'none';
+               base-uri 'self';
+               form-action 'self'"
+    />
     <meta name="description" content="GitOracle — Intelligent CI/CD Dashboard for autonomous code repair, agent monitoring, and risk analysis." />
     <title>GitOracle — Dashboard</title>
   </head>
