@@ -1,0 +1,1 @@
+NullPointerException in UserService.java line 11 (user.getId()). The user object can sometimes be null.

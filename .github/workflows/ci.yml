@@ -87,7 +87,16 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r ai_core/requirements.txt
+          # Hash-pinned lock, not the loose >= ranges in requirements.in.
+          # Every version is fixed and every artifact is verified against a
+          # recorded sha256, so a compromised or yanked release cannot silently
+          # enter a build. Regenerate with:
+          #   pip-compile --generate-hashes --output-file=ai_core/requirements.lock.txt ai_core/requirements.in
+          # under the SAME Python version this job uses — resolution is
+          # interpreter-specific.
+          pip install -r ai_core/requirements.lock.txt
+          # Separate invocation on purpose: pip refuses to mix hashed and
+          # unhashed requirements in one command.
           pip install pytest fastapi uvicorn
 
       - name: Run Mock LLM Server & Pytest
@@ -100,6 +109,38 @@ jobs:
           
           # Run pytest on the agents
           pytest ai_core/tests/
+
+  # The dashboard was not built in CI at all, which is how it came to sit on
+  # main with two TypeScript errors that failed `tsc -b` outright — nothing
+  # would have caught a broken build before a deploy. This job also enforces the
+  # lockfile: `npm ci` installs exactly what package-lock.json records and fails
+  # if package.json and the lock disagree, where `npm install` would quietly
+  # resolve something new and rewrite the lock.
+  dashboard-build:
+    name: Dashboard Lint & Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install (locked)
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Lint
+        working-directory: dashboard
+        run: npm run lint
+
+      - name: Build
+        working-directory: dashboard
+        run: npm run build
 
   eval-harness:
     name: Golden Dataset Eval Harness
