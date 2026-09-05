@@ -1,0 +1,53 @@
+# gitleaks configuration for GitOracle.
+#
+# Extends the upstream default ruleset rather than replacing it — the defaults
+# already cover AWS, GitHub, Slack, Stripe, private keys and dozens more, and a
+# hand-written replacement would silently lose all of that.
+
+[extend]
+useDefault = true
+
+# ── Provider keys this repo actually uses ───────────────────────────────────
+# The defaults do not cover these, and both have appeared in .env.
+
+[[rules]]
+id = "groq-api-key"
+description = "Groq API key"
+regex = '''gsk_[A-Za-z0-9]{40,}'''
+keywords = ["gsk_"]
+
+[[rules]]
+id = "langfuse-secret-key"
+description = "Langfuse secret key"
+regex = '''sk-lf-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'''
+keywords = ["sk-lf-"]
+
+[[rules]]
+id = "gitoracle-api-key"
+description = "GitOracle API key (gor_<prefix>_<secret>)"
+regex = '''gor_[0-9a-f]{12}_[0-9a-f]{64}'''
+keywords = ["gor_"]
+
+[allowlist]
+description = "Paths and values that are placeholders or documentation, not secrets"
+
+paths = [
+    # The template is meant to contain obviously-fake values, and is the one
+    # place a "secret-shaped" string is correct.
+    '''\.env\.example$''',
+    # Documents findings and remediation; quoting a redacted pattern there is
+    # the point of the file.
+    '''SECURITY_AUDIT\.md$''',
+    '''\.gitleaks\.toml$''',
+    # The hook's own detection patterns are regexes, not credentials.
+    '''\.githooks/pre-commit$''',
+]
+
+regexes = [
+    # Placeholder conventions used throughout .env.example and the docs.
+    '''change_me[A-Za-z0-9_]*''',
+    '''your_[a-z_]*(key|secret|token|id)''',
+    '''generate_with_openssl[A-Za-z0-9_]*''',
+    # The all-zero UUID is the default tenant id, not a credential.
+    '''00000000-0000-0000-0000-000000000000''',
+]

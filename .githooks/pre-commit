@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#
+# Blocks a commit that would introduce a secret.
+#
+# Why a hook and not only CI: by the time CI sees a secret it is already pushed
+# to a remote, and rewriting history does not un-leak it — the value must be
+# rotated. The only cheap moment to catch a secret is before the commit exists.
+# CI still runs the same scan (see .github/workflows/ci.yml) because a hook is
+# advisory: it lives outside the repo's object store, is not installed by
+# default, and `--no-verify` skips it.
+#
+# Install once:
+#   git config core.hooksPath .githooks
+#
+set -uo pipefail
+
+# ── gitleaks, when available ────────────────────────────────────────────────
+if command -v gitleaks >/dev/null 2>&1; then
+    if ! gitleaks protect --staged --redact --no-banner; then
+        echo ""
+        echo "✖ gitleaks flagged a secret in the staged changes (values redacted above)."
+        echo "  Remove it and commit again. If the value ever reached a remote,"
+        echo "  ROTATE it — deleting the commit does not un-leak it."
+        echo ""
+        echo "  False positive? Add a narrowly-scoped rule to .gitleaks.toml"
+        echo "  rather than using --no-verify, so the exception is reviewable."
+        exit 1
+    fi
+else
+    echo "ℹ gitleaks not installed — falling back to the built-in checks below."
+    echo "  Install for full coverage:  brew install gitleaks"
+fi
+
+# ── Backstop checks that run with or without gitleaks ───────────────────────
+# Deliberately narrow: this catches the specific mistakes this repo has already
+# been close to making, and is not a general secret scanner.
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+fail=0
+
+# 1. Files that must never be committed, whatever they contain.
+while IFS= read -r file; do
+    case "$file" in
+        .env|*/.env)
+            echo "✖ $file — the real environment file must never be committed (.env.example is the template)."
+            fail=1
+            ;;
+        *.pem|*.key|*.p12|*.pfx|*/id_rsa|*/id_ed25519|id_rsa|id_ed25519)
+            echo "✖ $file — private key material. Keep it in ./secrets/ (gitignored)."
+            fail=1
+            ;;
+        secrets/*)
+            echo "✖ $file — ./secrets/ is for local credentials and must stay out of git."
+            fail=1
+            ;;
+    esac
+done <<< "$staged"
+
+# 2. Credential-shaped strings in the diff. Restricted to well-known, unambiguous
+#    prefixes so this does not fire on ordinary code — a noisy hook gets
+#    bypassed, and a bypassed hook protects nothing.
+if git diff --cached -U0 | grep -qE '^\+.*(gsk_[A-Za-z0-9]{40,}|sk-lf-[0-9a-f-]{20,}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{50,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----)'; then
+    echo "✖ A credential-shaped value appears in the staged diff"
+    echo "  (Groq gsk_, Langfuse sk-lf-, GitHub token, AWS key, or a PEM private key block)."
+    echo "  If it is real: remove it AND rotate it."
+    fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+    echo ""
+    echo "Commit blocked. Use --no-verify only if you are certain, and say why in the message."
+    exit 1
+fi
+
+exit 0

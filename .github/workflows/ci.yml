@@ -7,6 +7,28 @@ on:
     branches: [ "main" ]
 
 jobs:
+  # The pre-commit hook (.githooks/pre-commit) runs the same scan locally, but a
+  # hook is advisory — it lives outside the repo's object store, is not
+  # installed by default, and --no-verify skips it. This job is the part that
+  # cannot be bypassed.
+  #
+  # fetch-depth: 0 so the scan covers full history, not just the tip commit: a
+  # secret added and then "removed" in a later commit is still in the history
+  # and still leaked.
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   python-lint:
     name: Python Agent Lint & Typecheck
     runs-on: ubuntu-latest
