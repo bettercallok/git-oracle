@@ -50,4 +50,22 @@ regexes = [
     '''generate_with_openssl[A-Za-z0-9_]*''',
     # The all-zero UUID is the default tenant id, not a credential.
     '''00000000-0000-0000-0000-000000000000''',
+
+    # Fabricated tokens used as fixtures in CredentialRedactionTest, which
+    # exists to prove the M5 redactor actually strips credentials. The test
+    # needs realistically-shaped tokens to be worth anything, so it trips the
+    # scanner by construction — this was the scan's first real finding, and it
+    # was a false positive in the very code added to prevent token leaks.
+    #
+    # Allowlisted as EXACT VALUES rather than by file path, deliberately. A
+    # path allowlist would silence that file forever, so a genuine token pasted
+    # into it later would sail through; matching the specific fake strings keeps
+    # every other credential in that file in scope.
+    #
+    # These must stay regex-matched rather than fixed in the source, because
+    # gitleaks scans full history: the strings exist in commit 106dc0d and no
+    # later edit removes them from the repository.
+    '''ghs_16C7e42F292c6912E7710c838347Ae178B4a''',
+    '''gh[pousr]_abcdefghijklmnopqrstuvwxyz012345''',
+    '''github_pat_11ABCDEFG0abcdefghijklmnopqrstuvwxyz0123456789''',
 ]
