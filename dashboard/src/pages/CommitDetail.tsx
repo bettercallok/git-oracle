@@ -342,7 +342,7 @@ export default function CommitDetail() {
       }, { params: { repo } });
       return res.data as { answer: string; suggested_action: string };
     },
-    onSuccess: (data, q) => {
+    onSuccess: (data) => {
       setChatHistory(prev => [
         ...prev,
         { role: 'assistant', content: data.answer, suggestedAction: data.suggested_action },
