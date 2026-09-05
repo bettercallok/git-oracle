@@ -98,9 +98,34 @@ services:
       - "127.0.0.1:${NEO4J_BOLT_PORT:-7688}:7687" # Bolt protocol (drivers)
     environment:
       NEO4J_AUTH: "${NEO4J_AUTH:?NEO4J_AUTH is required}"
-      NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
-      NEO4J_dbms_security_procedures_unrestricted: "apoc.*,gds.*"
-      NEO4J_dbms_security_procedures_allowlist: "apoc.*,gds.*"
+      # APOC and GDS are NOT installed, and nothing in this repository uses
+      # them — grepped repo-wide for `apoc.` and `gds.`: zero call sites. Every
+      # Cypher statement GitOracle runs is plain MATCH / CREATE CONSTRAINT
+      # (RiskController, Neo4jGraphService, infrastructure/neo4j/init.cypher).
+      #
+      # What was here before:
+      #
+      #   NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
+      #   NEO4J_dbms_security_procedures_unrestricted: "apoc.*,gds.*"
+      #   NEO4J_dbms_security_procedures_allowlist:    "apoc.*,gds.*"
+      #
+      # `apoc.*` includes apoc.load.json / apoc.load.jsonParams / apoc.load.csv,
+      # which fetch a URL the CALLER supplies. That is a server-side request
+      # forgery primitive reachable through Cypher — it would let a query pull
+      # from 169.254.169.254, from any RFC1918 address, or from file:// — and
+      # `unrestricted` additionally lifts the sandbox those procedures normally
+      # run in. Granting it to run procedures nobody calls is pure surface.
+      #
+      # Removing the plugins rather than narrowing the allowlist is deliberate:
+      # an allowlist that grants nothing depends on how a given Neo4j version
+      # interprets an empty value, whereas an uninstalled procedure cannot be
+      # called under any interpretation.
+      #
+      # To reintroduce them, install the specific plugin and allowlist the exact
+      # procedures needed (e.g. "gds.graph.project,gds.pageRank.stream") — never
+      # `apoc.*`, and never via `unrestricted`.
+      NEO4J_dbms_security_procedures_unrestricted: ""
+      NEO4J_dbms_security_procedures_allowlist: ""
       NEO4J_server_memory_heap_initial__size: "192m"
       NEO4J_server_memory_heap_max__size: "192m"
       NEO4J_server_memory_pagecache_size: "96m"
