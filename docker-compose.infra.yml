@@ -340,8 +340,29 @@ services:
       - --storage.tsdb.retention.time=3d
       - --web.console.libraries=/usr/share/prometheus/console_libraries
       - --web.console.templates=/usr/share/prometheus/consoles
-      - --web.enable-lifecycle
-      - --web.enable-admin-api
+      # --web.enable-lifecycle and --web.enable-admin-api REMOVED.
+      #
+      # Prometheus has no authentication of its own, so every flag here is
+      # granted to anyone who can reach the port. Those two turn an unauthenticated
+      # read-only endpoint into an unauthenticated control plane:
+      #
+      #   --web.enable-lifecycle   POST /-/reload and POST /-/quit — reload the
+      #                            config, or shut the process down outright.
+      #   --web.enable-admin-api   POST /api/v1/admin/tsdb/delete_series and
+      #                            .../clean_tombstones — delete metric history.
+      #
+      # Deleting series is the part that matters beyond availability: metrics are
+      # the record of what the system was doing, so an attacker who reaches this
+      # port can erase the evidence of everything else they did.
+      #
+      # C5 already bound the port to 127.0.0.1, which is what kept this from
+      # being critical — but "only reachable from the host" is one misconfigured
+      # proxy or one SSRF away from "reachable", and nothing in this repo
+      # actually calls either API. Neither is used: config changes ship by
+      # restarting the container, which is what `make infra-up` does.
+      #
+      # To reload without a restart, re-add --web.enable-lifecycle deliberately
+      # and put authentication in front of the port.
     healthcheck:
       test: [ "CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/healthy" ]
       interval: 15s
