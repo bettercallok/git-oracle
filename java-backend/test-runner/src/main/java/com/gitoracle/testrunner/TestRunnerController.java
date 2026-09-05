@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.*;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.*;
@@ -905,12 +906,61 @@ public class TestRunnerController {
         return new RunResult(process.exitValue(), output.toString(), false);
     }
 
+    /**
+     * Deletes a workspace without following symlinks out of it.
+     *
+     * <p>This used {@link Files#walk}, which follows symbolic links to
+     * directories. The tree being deleted is a clone of an untrusted
+     * repository, so a repo containing
+     *
+     * <pre>  ln -s /etc evil</pre>
+     *
+     * had its link descended into, and every file underneath enumerated and
+     * passed to {@code File::delete}. What survived that was down to filesystem
+     * permissions rather than to anything this code did — as root, or against
+     * any directory the service could write, it would have deleted host files
+     * during ordinary cleanup, with no attack needed beyond committing a
+     * symlink.
+     *
+     * <p>{@code walkFileTree} does not follow links unless
+     * {@link java.nio.file.FileVisitOption#FOLLOW_LINKS} is passed, so a
+     * symlink is visited as a file and unlinked — removing the link itself and
+     * leaving its target alone, which is what deleting a workspace should mean.
+     *
+     * <p>Delete failures are also no longer silent. {@code File::delete}
+     * returns a boolean that was discarded, so a workspace that could not be
+     * removed left disk filling up with no indication anywhere.
+     */
     private void deleteDirectory(Path path) throws IOException {
-        if (!Files.exists(path)) return;
-        try (var stream = Files.walk(path)) {
-            stream.sorted(Comparator.reverseOrder())
-                  .map(Path::toFile)
-                  .forEach(File::delete);
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return;
+
+        Files.walkFileTree(path, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                // Reached for regular files AND for symlinks (they are not
+                // followed), so this unlinks the link, never its target.
+                Files.deleteIfExists(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                // A file we cannot stat still needs removing; if that also
+                // fails, fall through to postVisitDirectory's reporting rather
+                // than aborting the whole cleanup.
+                Files.deleteIfExists(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                Files.deleteIfExists(dir);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+
+        if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            logger.warn("Workspace {} could not be fully removed — disk will accumulate if this repeats.", path);
         }
     }
 }
