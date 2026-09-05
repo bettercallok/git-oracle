@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List
 from enum import Enum
 import os
+import uuid
 import logging
 import sys
 
@@ -118,9 +119,18 @@ Constrain the Fixer Agent by setting 'max_lines_to_change' to the absolute minim
             agent_name="planner_agent"
         )
         return result
-    except Exception as e:
-        logger.error(f"Planning failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        # The exception text is logged, never returned. str(e) on an arbitrary
+        # exception leaks internals to the caller — asyncpg puts the DSN
+        # (including the database password) in its connection errors, httpx
+        # names internal hosts and ports, and tracebacks carry filesystem
+        # paths. The caller gets a correlation id to quote instead.
+        correlation_id = str(uuid.uuid4())
+        logger.exception("Planning failed [correlationId=%s]", correlation_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Planning failed. correlationId={correlation_id}",
+        )
 
 # ==========================================
 # Phase 3: Real Kafka Event Integration

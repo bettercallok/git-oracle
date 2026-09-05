@@ -698,7 +698,16 @@ public class TestRunnerController {
             return new TestResult(passed, passed ? 1.0 : 0.0, 0.0,
                 "[native][exit=" + result.exitCode() + "]\n" + result.output());
         } catch (Exception e) {
-            return new TestResult(false, 0.0, 0.0, "Native execution failed: " + e.getMessage());
+            // Test OUTPUT stays in the response above — that is the product,
+            // and stripping it would make every failure undiagnosable. What
+            // does not belong there is SERVER exception text, which describes
+            // this service (paths, class names, the sandbox's own plumbing)
+            // rather than the repo under test. Logged with a correlation id
+            // instead.
+            String correlationId = java.util.UUID.randomUUID().toString();
+            logger.error("Native test execution failed [correlationId={}]", correlationId, e);
+            return new TestResult(false, 0.0, 0.0,
+                "Native test execution failed. correlationId=" + correlationId);
         }
     }
 

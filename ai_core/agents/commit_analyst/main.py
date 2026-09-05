@@ -29,6 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 import os
+import uuid
 import logging
 import sys
 
@@ -159,11 +160,15 @@ async def analyze(request: AnalyzeRequest):
             request.repo, request.sha[:7], result.suggested_action
         )
         return result
-    except Exception as e:
-        logger.error("LLM call failed for commit_analyst: %s", e)
+    except Exception:
+        # Logged, not returned. An httpx error from the LLM call carries the
+        # provider URL, and provider errors frequently echo back the request —
+        # including the API key in an Authorization header on some clients.
+        correlation_id = str(uuid.uuid4())
+        logger.exception("LLM call failed for commit_analyst [correlationId=%s]", correlation_id)
         raise HTTPException(
             status_code=502,
-            detail=f"LLM inference failed: {e}"
+            detail=f"LLM inference failed. correlationId={correlation_id}",
         )
 
 

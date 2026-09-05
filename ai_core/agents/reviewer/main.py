@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from enum import Enum
 import os
+import uuid
 import logging
 import sys
 
@@ -90,9 +91,18 @@ If stance is 'acknowledge' and severity > 0.7, set action_needed = True.
             # TODO (Layer 8): Publish 'fix-regeneration-needed' to Kafka here
             
         return reply
-    except Exception as e:
-        logger.error(f"Review processing failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        # The exception text is logged, never returned. str(e) on an arbitrary
+        # exception leaks internals to the caller — asyncpg puts the DSN
+        # (including the database password) in its connection errors, httpx
+        # names internal hosts and ports, and tracebacks carry filesystem
+        # paths. The caller gets a correlation id to quote instead.
+        correlation_id = str(uuid.uuid4())
+        logger.exception("Review processing failed [correlationId=%s]", correlation_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Review processing failed. correlationId={correlation_id}",
+        )
 
 if __name__ == "__main__":
     import uvicorn

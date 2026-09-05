@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List
 import git
 import os
+import uuid
 import logging
 import sys
 
@@ -120,9 +121,18 @@ Rank them and provide a causal_effect_score (0.0 to 1.0) and reasoning for each.
             agent_name="investigator_agent"
         )
         return result
-    except Exception as e:
-        logger.error(f"Investigation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        # The exception text is logged, never returned. str(e) on an arbitrary
+        # exception leaks internals to the caller — asyncpg puts the DSN
+        # (including the database password) in its connection errors, httpx
+        # names internal hosts and ports, and tracebacks carry filesystem
+        # paths. The caller gets a correlation id to quote instead.
+        correlation_id = str(uuid.uuid4())
+        logger.exception("Investigation failed [correlationId=%s]", correlation_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Investigation failed. correlationId={correlation_id}",
+        )
 
 # ==========================================
 # Phase 3: Real Kafka Event Integration

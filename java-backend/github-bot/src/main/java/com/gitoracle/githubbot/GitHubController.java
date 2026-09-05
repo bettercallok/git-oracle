@@ -139,12 +139,19 @@ public class GitHubController {
 
             return ResponseEntity.ok(new PullRequestResult(true, pr.getHtmlUrl().toString(), null));
         } catch (Exception e) {
-            logger.error("Failed to process PR request", e);
+            // The exception text is logged with a correlation id, not returned.
+            // It can carry internal hostnames, filesystem paths, and — before
+            // M5 removed the token from argv — a live credential echoed back
+            // from a failed git command. The caller gets an id to quote.
+            String correlationId = UUID.randomUUID().toString();
+            logger.error("Failed to process PR request for job {} [correlationId={}]",
+                request.getJobId(), correlationId, e);
             // Distinguishable from success at the HTTP layer (was previously a 200
             // with an "Error: " string body — the orchestrator never checked the
             // body, so it recorded the job as PR_OPENED regardless of outcome).
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(new PullRequestResult(false, null, e.getMessage()));
+                .body(new PullRequestResult(false, null,
+                    "Failed to open the pull request. correlationId=" + correlationId));
         } finally {
             // Was only reached on the success path, so any failure — a rejected
             // patch, a push conflict, a GitHub outage — left a full checkout of
