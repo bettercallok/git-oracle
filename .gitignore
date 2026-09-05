@@ -55,7 +55,17 @@ logs/
 *.swo
 
 # ─── Keys & Temps ────────────────────────────────────────
+# Private keys belong in ./secrets/ (ignored above), not loose in the tree.
+# These patterns stay as a backstop for a key that lands somewhere else by
+# accident — but a backstop is not a place to keep one: an ignored file is
+# still on disk, still readable by anything running as this user, and still
+# picked up by backups and editor plugins.
 *.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
 *.txt
 *.pid
 *.log
