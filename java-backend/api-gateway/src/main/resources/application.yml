@@ -37,48 +37,55 @@ spring:
       password: ${REDIS_PASSWORD:}
   cloud:
     gateway:
-      globalcors:
-        cors-configurations:
-          '[/**]':
-            allowedOrigins: "${GITORACLE_ALLOWED_ORIGINS:http://localhost:5173}"
-            allowedMethods:
-              - GET
-              - POST
-              - PUT
-              - DELETE
-              - OPTIONS
-            allowedHeaders: "*"
-      routes:
-        - id: error_ingestor_api
-          uri: http://127.0.0.1:8081
-          predicates:
-            - Path=/webhook/**
-          filters:
-            - PreserveHostHeader=true
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: 50
-                redis-rate-limiter.burstCapacity: 100
-        - id: git_forensics_api
-          uri: http://127.0.0.1:8082
-          predicates:
-            - Path=/api/v1/risk
-          filters:
-            - PreserveHostHeader=true
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: 50
-                redis-rate-limiter.burstCapacity: 100
-        - id: orchestrator_api
-          uri: http://127.0.0.1:8083
-          predicates:
-            - Path=/api/v1/**
-          filters:
-            - PreserveHostHeader=true
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: 50
-                redis-rate-limiter.burstCapacity: 100
+      # Spring Cloud Gateway 2025.0.x moved every server-side property under
+      # `server.webflux`. Spring Boot still maps the old keys automatically and
+      # logs a deprecation warning, but that shim is explicitly temporary — the
+      # keys are updated here rather than left to be silently dropped by a
+      # future release, which would take routing and CORS down with them.
+      server:
+        webflux:
+          globalcors:
+            cors-configurations:
+              '[/**]':
+                allowedOrigins: "${GITORACLE_ALLOWED_ORIGINS:http://localhost:5173}"
+                allowedMethods:
+                  - GET
+                  - POST
+                  - PUT
+                  - DELETE
+                  - OPTIONS
+                allowedHeaders: "*"
+          routes:
+            - id: error_ingestor_api
+              uri: http://127.0.0.1:8081
+              predicates:
+                - Path=/webhook/**
+              filters:
+                - PreserveHostHeader=true
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 50
+                    redis-rate-limiter.burstCapacity: 100
+            - id: git_forensics_api
+              uri: http://127.0.0.1:8082
+              predicates:
+                - Path=/api/v1/risk
+              filters:
+                - PreserveHostHeader=true
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 50
+                    redis-rate-limiter.burstCapacity: 100
+            - id: orchestrator_api
+              uri: http://127.0.0.1:8083
+              predicates:
+                - Path=/api/v1/**
+              filters:
+                - PreserveHostHeader=true
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: 50
+                    redis-rate-limiter.burstCapacity: 100
 
 server:
   port: 8080
