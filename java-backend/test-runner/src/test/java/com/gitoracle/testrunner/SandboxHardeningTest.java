@@ -167,6 +167,25 @@ class SandboxHardeningTest {
     void imageAndTestCommandStillReachTheContainer() throws Exception {
         List<String> cmd = build(new TestRunnerController.FrameworkConfig(TestFramework.PYTEST, "."));
         assertThat(cmd).contains("some-image@sha256:abc");
-        assertThat(cmd).containsSubsequence("sh", "-c", "some test command");
+        assertThat(cmd).containsSubsequence("sh", "-c");
+
+        // The command is no longer the bare string: H9 prefixes it with a guard
+        // that refuses to run if /repo arrived empty (see
+        // guardEmptyWorkspace). The assertion is therefore "the command still
+        // reaches the container" rather than "the command is the whole
+        // argument" — an empty /repo used to be reported as a PASS.
+        String shellArg = cmd.get(cmd.size() - 1);
+        assertThat(shellArg).contains("some test command");
+        assertThat(shellArg).endsWith("some test command");
+    }
+
+    @Test
+    void theShellArgumentGuardsAgainstAnEmptyRepoMount() throws Exception {
+        List<String> cmd = build(new TestRunnerController.FrameworkConfig(TestFramework.PYTEST, "."));
+        String shellArg = cmd.get(cmd.size() - 1);
+
+        assertThat(shellArg).contains("ls -A /repo");
+        assertThat(shellArg).contains("exit 91");
+        assertThat(shellArg.indexOf("ls -A /repo")).isLessThan(shellArg.indexOf("some test command"));
     }
 }

@@ -15,6 +15,30 @@ networks:
     external: true
     name: git-oracle-net
 
+  # Carries exactly two containers: test-runner and its DinD sidecar, and
+  # exists solely so test-runner can reach the daemon API. `internal: true`
+  # means Docker attaches no gateway, so this root-equivalent API has no route
+  # from the host or from any other container — which is what makes running it
+  # without TLS an acceptable trade rather than a second finding.
+  sandbox-control-net:
+    driver: bridge
+    internal: true
+
+  # Registry egress for the sandbox DAEMON only, so it can pull test images.
+  # Deliberately a separate network with exactly one member: putting the daemon
+  # on git-oracle-net instead would expose its unauthenticated API to every
+  # other GitOracle service.
+  sandbox-egress-net:
+    driver: bridge
+
+volumes:
+  # Shared between test-runner (which clones into it) and the DinD daemon
+  # (which resolves the bind mount out of it) at an identical path in both.
+  test-workspaces:
+  # The sandbox daemon's image store, so test images are not re-pulled on
+  # every restart.
+  dind-storage:
+
 x-logging: &default-logging
   driver: "json-file"
   options:
@@ -121,13 +145,128 @@ services:
         SERVICE: test-runner
     container_name: git-oracle-test-runner
     restart: unless-stopped
-    networks: [ git-oracle-net ]
     ports:
       - "127.0.0.1:8084:8084"
     environment:
       <<: *java-env
-    # Test-runner shells out to `docker run` to sandbox test execution,
-    # so it needs access to the host's Docker daemon.
+      # Talk to the sidecar daemon below, never to a host socket. The `docker`
+      # CLI honours DOCKER_HOST, so no code change is needed to redirect it.
+      DOCKER_HOST: tcp://test-runner-dind:2375
+      # MUST match the mount path used by test-runner-dind. The bind mount in
+      # `docker run -v <workspace>/<job>:/repo` is resolved by the DAEMON, so
+      # the path only means the same thing in both places if the same volume is
+      # mounted at the same path in both. Docker silently creates a missing
+      # bind source as an empty directory, so a mismatch here does not error —
+      # it runs the tests against nothing and reports "no tests found".
+      GITORACLE_TESTRUNNER_WORKSPACE_ROOT: /var/lib/gitoracle/workspaces
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - test-workspaces:/var/lib/gitoracle/workspaces
+    networks: [ git-oracle-net, sandbox-control-net ]
+    depends_on:
+      - test-runner-dind
+    logging: *default-logging
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Dedicated Docker daemon for test sandboxes (H9).
+  #
+  # WHAT WAS WRONG
+  # test-runner mounted /var/run/docker.sock. Access to the host's Docker
+  # socket is equivalent to root on the host — the API can create a container
+  # that bind-mounts / and run it as root — so the service that executes
+  # untrusted third-party code (a cloned repo's own `mvn test` / `npm ci` /
+  # `pip install -r`) held a strictly larger privilege than the RCE it exists
+  # to contain.
+  #
+  # It also never worked: the runtime image (eclipse-temurin:21-jre-alpine)
+  # ships no `docker` binary, so `docker info` failed at startup,
+  # dockerAvailable stayed false, and every job failed closed. And the bind
+  # mount would have been wrong anyway — the HOST daemon resolves
+  # `-v /tmp/gitoracle-workspaces/<job>:/repo` against the HOST filesystem, not
+  # against the test-runner container's, so tests would have run on an empty
+  # directory. The socket was pure liability with no function.
+  #
+  # WHAT THIS BUYS, AND WHAT IT DOES NOT
+  # An escape from a test container now lands inside this sidecar, as an
+  # unprivileged user in a user namespace, on a network with no route off the
+  # host — instead of as root on the host.
+  #
+  # It is NOT a complete answer, and should not be read as one. `dind-rootless`
+  # still needs `privileged: true` on the OUTER container to set up its user
+  # namespaces and overlay mounts, so an attacker who escapes the test
+  # container AND then escapes this container has host access again. That is
+  # two boundaries where there were none, not zero risk. The real fixes are
+  # sysbox, a dedicated job-runner node pool, or the Kubernetes Job API with a
+  # constrained ServiceAccount — all infrastructure decisions beyond a compose
+  # file, and all recorded in the plan as such.
+  #
+  # A socket-proxy was considered and rejected: filtering by API endpoint does
+  # not help, because `containers/create` is itself root-equivalent unless the
+  # HostConfig payload is filtered too, and the common proxies do not do that.
+  # ─────────────────────────────────────────────────────────────────────────
+  test-runner-dind:
+    # NOT docker:27-dind-rootless, and that choice is measured, not assumed.
+    #
+    # Rootless would give a stronger second boundary (an escape lands as an
+    # unprivileged user in a user namespace). But rootless dind without
+    # systemd cgroup delegation reports `Cgroup Driver: none` and SILENTLY
+    # DISCARDS every resource limit. Measured on this host, same flags, both
+    # variants:
+    #
+    #            image                --memory=64m        --pids-limit=16
+    #   docker:27-dind-rootless   memory.max=max       pids.max=max      (ignored)
+    #   docker:27-dind            memory.max=67108864  pids.max=16       (enforced)
+    #
+    # C3 hardened the sandbox with --memory=512m, --memory-swap=512m,
+    # --cpus=1 and --pids-limit=256, and the plan verifies that a fork bomb
+    # hits the pid limit. Under rootless every one of those becomes a no-op
+    # with no error — the flags are still on the command line, they just stop
+    # meaning anything. Trading a working first boundary for a stronger second
+    # one is the wrong way round, and silently false guarantees are worse than
+    # known weaker ones.
+    #
+    # To run rootless anyway, configure cgroup v2 delegation on the host and
+    # confirm `docker info` reports a Cgroup Driver other than `none`.
+    # TestRunnerController preflights exactly that and warns loudly if limits
+    # are unenforced, so the downgrade cannot happen quietly.
+    image: docker:27-dind
+    container_name: git-oracle-test-runner-dind
+    restart: unless-stopped
+    # dind requires this to manage its own storage and networking. It is also
+    # the honest limit of this mitigation: an attacker who escapes the test
+    # container lands here, and escaping THIS container reaches the host. That
+    # is two boundaries where there were none — not zero risk.
+    privileged: true
+    environment:
+      # No TLS. The API is bound only to sandbox-control-net, which is
+      # `internal: true` and carries exactly two containers (this and
+      # test-runner) — nothing else, on any network, can route to it, and 2375
+      # is deliberately not published to the host. Enabling TLS would mean
+      # distributing and rotating certs for a link no third party can reach.
+      DOCKER_TLS_CERTDIR: ""
+    command: [ "--host=tcp://0.0.0.0:2375", "--tls=false" ]
+    # TWO networks, for two different reasons:
+    #
+    #   sandbox-control-net (internal) — how test-runner reaches the daemon
+    #     API. Internal, so the root-equivalent API has no route from anywhere
+    #     else, including the host.
+    #
+    #   sandbox-egress-net — how the DAEMON pulls test images
+    #     (maven/node/python/...) from the registry. Without it the daemon
+    #     cannot pull and every job fails on image resolution; confirmed live
+    #     ("dial tcp: lookup registry-1.docker.io ... i/o timeout") when this
+    #     container was internal-only.
+    #
+    # Only this container is attached to the egress network, so nothing else
+    # gains a path to its API through it. Note this is the DAEMON's egress, not
+    # the test containers' — those are placed on the separate, dedicated
+    # gitoracle-sandbox-net that test-runner creates inside this daemon
+    # (see SANDBOX_NETWORK in TestRunnerController), and remain isolated from
+    # both of these networks.
+    networks: [ sandbox-control-net, sandbox-egress-net ]
+    volumes:
+      # Same volume, same path as test-runner above — see that comment.
+      - test-workspaces:/var/lib/gitoracle/workspaces
+      # The daemon's own image/layer storage. Named so that pulled test images
+      # survive a restart instead of being re-pulled on every boot.
+      - dind-storage:/var/lib/docker
     logging: *default-logging

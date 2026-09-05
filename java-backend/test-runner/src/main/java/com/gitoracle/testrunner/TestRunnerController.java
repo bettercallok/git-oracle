@@ -33,8 +33,32 @@ import java.util.stream.Collectors;
 public class TestRunnerController {
 
     private static final Logger logger = LoggerFactory.getLogger(TestRunnerController.class);
-    private static final String WORKSPACE_ROOT = "/tmp/gitoracle-workspaces";
     private static final int TIMEOUT_SECONDS = 180;
+
+    /**
+     * Sentinel exit code meaning "the sandbox saw an empty /repo". Chosen well
+     * clear of the exit codes real test frameworks use (pytest tops out at 5,
+     * Maven/Gradle/npm use 1) so it cannot be confused with a test outcome.
+     */
+    private static final int EMPTY_WORKSPACE_EXIT = 91;
+
+    /**
+     * Where repos are cloned before their tests run.
+     *
+     * <p>Configurable because the bind mount built in
+     * {@link #buildDockerRunCommand} is resolved by <b>the Docker daemon</b>,
+     * not by this process. When the daemon is a separate container (the
+     * rootless DinD sidecar the containerised deployment now uses instead of
+     * mounting the host's socket), a path that exists here means nothing there
+     * unless the same volume is mounted at the same path in both — which is
+     * what docker-compose.services.yml now does.
+     *
+     * <p>Getting this wrong is silent, not loud: Docker creates a missing bind
+     * source as an empty directory, so the tests run against nothing and report
+     * "no tests found", which this service treats as a safe pass.
+     */
+    @Value("${gitoracle.testrunner.workspace-root:/tmp/gitoracle-workspaces}")
+    private String workspaceRoot;
 
     // Docker is the only sandbox this service has — running a cloned repo's own
     // build/test command (mvn test / npm ci / pip install -r / cargo test) is
@@ -111,6 +135,7 @@ public class TestRunnerController {
         }
         if (dockerAvailable) {
             logger.info("Docker sandbox available.");
+            warnIfResourceLimitsAreUnenforced();
             sandboxUser = resolveSandboxUser();
             String[] parts = sandboxUser.split(":");
             sandboxUid = parts[0];
@@ -261,7 +286,7 @@ public class TestRunnerController {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
         }
 
-        Path workDir = Path.of(WORKSPACE_ROOT, jobId);
+        Path workDir = Path.of(workspaceRoot, jobId);
 
         try {
             // ── Step 2: Clone ──────────────────────────────────────────────────
@@ -455,9 +480,95 @@ public class TestRunnerController {
             "-v", workDir.toAbsolutePath() + ":/repo:rw",
             "-w", containerWorkDir.replaceAll("/\\.$", ""), // clean trailing /.
             dockerImage,
-            "sh", "-c", testCommand
+            "sh", "-c", guardEmptyWorkspace(testCommand)
         ));
         return dockerCmd;
+    }
+
+    /**
+     * Refuses to run the test command if /repo arrived empty.
+     *
+     * <p>This closes a silent fail-open. The bind mount is resolved by the
+     * Docker <b>daemon</b>, not by this process, so whenever the daemon does
+     * not share this service's filesystem — which is exactly the case now that
+     * it is a separate DinD container rather than the host daemon reached
+     * through a mounted socket — a path that exists here can be absent there.
+     * Docker does not error on that: it creates the missing bind source as an
+     * empty directory.
+     *
+     * <p>The consequence was that the tests ran against nothing, and "nothing"
+     * looks like success. pytest exits 5 on an empty tree, which
+     * {@code runInDocker} deliberately treats as "no tests to verify against —
+     * safe pass". So a workspace path that did not line up between this service
+     * and the daemon would have marked <em>every</em> patch as passing its
+     * tests, with no error anywhere.
+     *
+     * <p>The sentinel exit code is checked explicitly by the caller and is
+     * never eligible for that safe-pass.
+     */
+    /**
+     * Warns if the connected daemon will silently ignore the sandbox's
+     * resource limits.
+     *
+     * <p>C3 hardened every test container with {@code --memory=512m},
+     * {@code --memory-swap=512m}, {@code --cpus=1} and
+     * {@code --pids-limit=256}. A daemon running rootless without cgroup v2
+     * delegation reports {@code Cgroup Driver: none} and accepts all of those
+     * flags <b>without applying any of them</b> — measured directly:
+     * {@code --memory=64m --pids-limit=16} produced {@code memory.max=max} and
+     * {@code pids.max=max} inside the container, versus {@code 67108864} and
+     * {@code 16} on a daemon with {@code cgroupfs}.
+     *
+     * <p>That is the worst kind of failure: the flags are still on the command
+     * line and nothing errors, so the sandbox looks hardened while the fork
+     * bomb and memory-exhaustion defences are gone. The shipped compose file
+     * therefore uses the non-rootless dind image; this check exists so that
+     * anyone who changes that — or points DOCKER_HOST at some other daemon —
+     * finds out at boot instead of discovering it after an incident.
+     *
+     * <p>Not fail-closed, deliberately: unenforced limits are a
+     * denial-of-service exposure, not a containment breach (cap-drop,
+     * no-new-privileges, read-only root and the non-root user all still
+     * apply), and refusing to start would take the pipeline down over a
+     * degradation the operator may have accepted knowingly.
+     */
+    private void warnIfResourceLimitsAreUnenforced() {
+        try {
+            RunResult info = run(Path.of(System.getProperty("java.io.tmpdir")), 15,
+                "docker", "info", "--format", "{{.CgroupDriver}}");
+            String driver = info.output() == null ? "" : info.output().trim();
+
+            if (!info.success() || driver.isEmpty()) {
+                logger.warn("Could not determine the Docker daemon's cgroup driver; "
+                    + "unable to confirm the sandbox's memory/pid limits are enforced.");
+                return;
+            }
+            if ("none".equalsIgnoreCase(driver)) {
+                logger.error("################################################################");
+                logger.error("# Docker reports 'Cgroup Driver: none'.");
+                logger.error("# --memory, --cpus and --pids-limit are ACCEPTED BUT IGNORED by");
+                logger.error("# this daemon, so the test sandbox has NO memory cap and NO");
+                logger.error("# fork-bomb protection. Containment (cap-drop, no-new-privileges,");
+                logger.error("# read-only root, non-root user) is unaffected; resource-based");
+                logger.error("# denial of service is NOT mitigated.");
+                logger.error("# Usual cause: a rootless dind daemon without cgroup v2");
+                logger.error("# delegation. Use the non-rootless image, or configure");
+                logger.error("# delegation until this reports 'cgroupfs' or 'systemd'.");
+                logger.error("################################################################");
+            } else {
+                logger.info("Docker cgroup driver '{}' — sandbox resource limits are enforced.", driver);
+            }
+        } catch (Exception e) {
+            logger.warn("Could not probe the Docker cgroup driver: {}", e.getMessage());
+        }
+    }
+
+    static String guardEmptyWorkspace(String testCommand) {
+        return "if [ -z \"$(ls -A /repo 2>/dev/null)\" ]; then "
+             + "echo 'GITORACLE: /repo is empty — the workspace bind mount did not resolve on the daemon side. "
+             + "Refusing to report a pass for tests that never ran.' >&2; "
+             + "exit " + EMPTY_WORKSPACE_EXIT + "; fi; "
+             + testCommand;
     }
 
     private TestResult runInDocker(Path workDir, FrameworkConfig config, String jobId, String repoUrl) {
@@ -502,6 +613,19 @@ public class TestRunnerController {
                 logger.warn("Tests timed out after {}s for job {}", TIMEOUT_SECONDS, jobId);
                 return new TestResult(false, 0.0, 0.0,
                     "Tests timed out after " + TIMEOUT_SECONDS + " seconds.\n" + result.output());
+            }
+
+            // Checked BEFORE the no-tests-collected safe-pass below, and never
+            // eligible for it: an empty /repo means the tests never ran at all,
+            // which is the opposite of "there was nothing to verify".
+            if (result.exitCode() == EMPTY_WORKSPACE_EXIT) {
+                logger.error("Workspace bind mount did not resolve for job {} — the sandbox saw an empty /repo. "
+                    + "This service clones into {}, and the Docker daemon must see that same path "
+                    + "(GITORACLE_TESTRUNNER_WORKSPACE_ROOT must match the daemon's mount). Failing the job "
+                    + "rather than reporting a pass for tests that never executed.", jobId, workspaceRoot);
+                return new TestResult(false, 0.0, 0.0,
+                    "Test execution aborted: the repository workspace was not visible inside the sandbox "
+                    + "container. This is a deployment misconfiguration, not a test failure.\n" + result.output());
             }
 
             boolean passed = result.success();
