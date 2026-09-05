@@ -5,7 +5,15 @@ spring:
     uri: bolt://${NEO4J_HOST:localhost}:${NEO4J_PORT:7688}
     authentication:
       username: ${NEO4J_USER:neo4j}
-      password: ${NEO4J_PASSWORD:password}
+      # No default. This used to fall back to the literal "password" — which is
+      # not merely a weak default but Neo4j's own well-known one, so an
+      # unconfigured deployment did not fail, it quietly tried the exact
+      # credential an attacker guesses first. The other three services already
+      # declare ${POSTGRES_PASSWORD} with no fallback; this was the only
+      # outlier. Spring now fails to start with a clear message when
+      # NEO4J_PASSWORD is unset, which is the correct outcome for a missing
+      # credential.
+      password: ${NEO4J_PASSWORD}
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:

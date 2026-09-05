@@ -128,7 +128,14 @@ services:
       neo4j:
         condition: service_healthy
     environment:
-      NEO4J_PASSWORD: ${POSTGRES_PASSWORD:?NEO4J_PASSWORD is required}
+      # Reads NEO4J_PASSWORD, not POSTGRES_PASSWORD. This interpolated
+      # ${POSTGRES_PASSWORD} while its own error message named NEO4J_PASSWORD —
+      # so the Neo4j schema init authenticated with the POSTGRES password. It
+      # worked only because .env happens to set both to the same value; setting
+      # a distinct NEO4J_PASSWORD would have made this container fail to
+      # authenticate for a reason its error message actively pointed away from,
+      # and it coupled two unrelated credentials.
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD is required}
     volumes:
       - ./infrastructure/neo4j:/neo4j-init:ro
     command: bash -c "echo '⏳ Running Neo4j schema init...' && cypher-shell -u neo4j -p $${NEO4J_PASSWORD} -a bolt://neo4j:7687 --file /neo4j-init/init.cypher && echo '✅ Neo4j schema initialised.'"
