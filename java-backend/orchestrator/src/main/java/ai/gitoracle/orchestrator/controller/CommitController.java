@@ -91,6 +91,39 @@ public class CommitController {
     }
 
     /**
+     * Builds an error body that tells the caller what happened without telling
+     * them what the server is made of.
+     *
+     * <p>These endpoints returned {@code Map.of("error", e.getMessage())}
+     * directly. Raw exception text is written for an operator reading a stack
+     * trace, not for a client: a DataAccessException carries the JDBC URL and
+     * SQL fragments, a ResourceAccessException carries internal hostnames and
+     * ports (the Python agents live on 9001-9007 behind this service), and
+     * almost anything else carries class names and filesystem paths. None of
+     * that helps the caller and all of it maps out the deployment.
+     *
+     * <p>The correlation id is the trade that keeps failures diagnosable: the
+     * full exception goes to the log with that id, the caller gets the id, and
+     * quoting it in a bug report finds the real error immediately.
+     *
+     * <p>This is deliberately NOT applied to validation failures. A message
+     * like "repo parameter must be in 'owner/repo' format" describes the
+     * caller's own input, is safe to return, and is the only thing that makes a
+     * 400 actionable.
+     */
+    private static ResponseEntity<Map<String, Object>> opaqueError(
+            org.springframework.http.HttpStatus status, String publicMessage, String context, Exception e) {
+
+        String correlationId = UUID.randomUUID().toString();
+        logger.error("{} [correlationId={}]", context, correlationId, e);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", publicMessage);
+        body.put("correlationId", correlationId);
+        return ResponseEntity.status(status).body(body);
+    }
+
+    /**
      * A commit SHA goes into a GitHub API path the same way `repo` does.
      * RepoRefValidator already owns this rule (added for C1), so it is reused
      * rather than restated.
@@ -224,10 +257,12 @@ public class CommitController {
                         "hint",  "Make sure the GitOracle GitHub App is installed on this repository."));
             }
             logger.error("GitHub API error listing commits for {}: {}", repo, e.getMessage());
-            return ResponseEntity.status(502).body(Map.of("error", "GitHub API error: " + e.getMessage()));
+            return opaqueError(org.springframework.http.HttpStatus.BAD_GATEWAY,
+                    "Upstream GitHub API error.", "GitHub API error for " + repo, e);
         } catch (Exception e) {
             logger.error("Unexpected error listing commits for {}: {}", repo, e.getMessage());
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+            return opaqueError(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR,
+                    "The request could not be completed.", "Unexpected error for " + repo, e);
         }
     }
 
@@ -296,10 +331,12 @@ public class CommitController {
                         "repo",  repo));
             }
             logger.error("GitHub API error fetching diff for {}/{}: {}", repo, sha, e.getMessage());
-            return ResponseEntity.status(502).body(Map.of("error", "GitHub API error: " + e.getMessage()));
+            return opaqueError(org.springframework.http.HttpStatus.BAD_GATEWAY,
+                    "Upstream GitHub API error.", "GitHub API error for " + repo, e);
         } catch (Exception e) {
             logger.error("Unexpected error fetching diff for {}/{}: {}", repo, sha, e.getMessage());
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+            return opaqueError(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR,
+                    "The request could not be completed.", "Unexpected error for " + repo, e);
         }
     }
 
@@ -368,10 +405,12 @@ public class CommitController {
                         "error", "Commit not found.", "sha", sha, "repo", repo));
             }
             logger.error("GitHub API error fetching diff for analyze {}/{}: {}", repo, sha, e.getMessage());
-            return ResponseEntity.status(502).body(Map.of("error", "GitHub API error: " + e.getMessage()));
+            return opaqueError(org.springframework.http.HttpStatus.BAD_GATEWAY,
+                    "Upstream GitHub API error.", "GitHub API error for " + repo, e);
         } catch (Exception e) {
             logger.error("Unexpected error fetching diff for analyze: {}", e.getMessage());
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+            return opaqueError(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR,
+                    "The request could not be completed.", "Unexpected error for " + repo, e);
         }
 
         // ── Step 2: Forward to the Python Commit Analyst agent ────────────
@@ -407,7 +446,8 @@ public class CommitController {
                     "details", e.getMessage()));
         } catch (Exception e) {
             logger.error("Unexpected error calling Commit Analyst for {}/{}: {}", repo, sha, e.getMessage());
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+            return opaqueError(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR,
+                    "The request could not be completed.", "Unexpected error for " + repo, e);
         }
     }
 }
