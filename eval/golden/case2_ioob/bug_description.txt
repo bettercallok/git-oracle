@@ -1,0 +1,1 @@
+IndexOutOfBoundsException in BatchProcessor.java line 8 (items.get(i)). The loop iterates past the end of the list.
