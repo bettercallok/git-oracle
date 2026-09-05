@@ -1,5 +1,4 @@
 from fastapi import Depends, FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import os
@@ -23,13 +22,24 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="GitOracle Fixer Agent", version="1.0", dependencies=[Depends(require_internal_token)])
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORSMiddleware.
+#
+# This agent used to run allow_origins=["*"] together with
+# allow_credentials=True. That pairing is rejected by every browser (the spec
+# forbids a wildcard origin on a credentialed request), so it never did what it
+# looked like it did — but it advertised an intent to be called cross-origin by
+# a browser, which is exactly what this service must not be.
+#
+# Nothing browser-side calls the agents. The dashboard talks only to the API
+# gateway on :8080, which owns CORS centrally (and has a test pinning that it is
+# the only place setting the header — a duplicate broke CORS outright once).
+# Since C5 these agents bind 127.0.0.1 and require X-Internal-Token, so their
+# callers are other services, and service-to-service calls have no origin and
+# need no CORS at all.
+#
+# Removing it is not cosmetic: CORS headers on a service that should never be
+# reached by a browser turn a future SSRF or a misrouted proxy into something a
+# page can read the response of, instead of something the browser blocks.
 
 class FixStrategy(str):
     pass
