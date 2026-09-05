@@ -1,6 +1,6 @@
 plugins {
     id 'java'
-    id 'org.springframework.boot' version '3.2.4' apply false
+    id 'org.springframework.boot' version '3.5.6' apply false
     id 'io.spring.dependency-management' version '1.1.6' apply false
 }
 
@@ -37,6 +37,22 @@ subprojects {
         testImplementation 'org.testcontainers:junit-jupiter'
         testImplementation 'org.testcontainers:postgresql'
         testImplementation 'org.testcontainers:kafka'
+
+        // Required from JUnit 5.12 onwards (which Spring Boot 3.5 brings in).
+        // Gradle injects its own junit-platform-launcher, and when that version
+        // is older than the junit-platform-engine on the classpath, discovery
+        // fails with "OutputDirectoryProvider not available; probably due to
+        // unaligned versions of the junit-platform-engine and
+        // junit-platform-launcher jars". Declaring it here resolves the
+        // launcher through the Spring Boot BOM so both come from the same
+        // JUnit release.
+        //
+        // It bit git-oracle-core specifically: every other module applies the
+        // Spring Boot plugin, which already aligns them. git-oracle-core is a
+        // plain java-library, so it silently lost all 61 of its tests — the
+        // module reported "1 test, 1 failure" rather than a compile error,
+        // which is how a version skew like this hides.
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     }
 
     tasks.withType(Test) {
