@@ -254,8 +254,10 @@ public class TestRunnerController {
         if (repoUrl == null) {
             logger.warn("No repo URL provided for job {}. Using safe-pass fallback.", jobId);
             return ResponseEntity.ok(new TestResult(true, 1.0, 0.0,
-                "WARN: No repository URL provided — tests skipped (safe-pass fallback).\n" +
-                "Provide 'repoUrl' in the TestRequest to enable real test execution."));
+                "WARNING: no test suite ran — this patch was not verified.\n" +
+                "No repository URL provided — tests skipped (safe-pass fallback).\n" +
+                "Provide 'repoUrl' in the TestRequest to enable real test execution.",
+                false));
         }
 
         // repoUrl and branch reach this endpoint from HTTP request bodies with no
@@ -637,21 +639,38 @@ public class TestRunnerController {
             // backend/): every patch was guaranteed to fail here regardless of
             // correctness, since exit 5 != 0. Treat "no tests collected" as a
             // safe-pass, same as the existing no-patch fallback above.
+            //
+            // The substring checks are anchored to a line that looks like a real
+            // framework summary rather than matched anywhere in the output. The
+            // loose form matched a repo whose own source or log output happened
+            // to contain "no tests ran" — and, more to the point, a repo that
+            // simply printed it on purpose. Anchoring does not make this
+            // trustworthy (see the note on computeQualityScore); it removes the
+            // one-line version of the trick.
             boolean noTestsCollected = result.exitCode() == 5
-                || result.output().contains("no tests ran")
-                || result.output().contains("collected 0 items");
+                || hasSummaryLineContaining(result.output(), "no tests ran")
+                || hasSummaryLineContaining(result.output(), "collected 0 items");
+
+            boolean verified = true;
             if (!passed && noTestsCollected) {
-                logger.info("No tests found for job {} (exit={}) — safe-pass, nothing to verify.",
+                logger.warn("No tests found for job {} (exit={}) — safe-pass, but NOTHING VERIFIED THIS PATCH.",
                             jobId, result.exitCode());
                 passed = true;
                 score = 1.0;
+                // The distinction allPassed alone cannot carry: this patch is
+                // not failing, but nothing checked it either. A repository with
+                // no test suite — or one whose suite was deleted — reaches this
+                // branch, and used to be indistinguishable from a full green run.
+                verified = false;
             }
 
-            logger.info("Tests {} for job {} (exit={})", passed ? "PASSED" : "FAILED",
-                        jobId, result.exitCode());
+            logger.info("Tests {} for job {} (exit={}, verified={})",
+                        passed ? "PASSED" : "FAILED", jobId, result.exitCode(), verified);
 
             return new TestResult(passed, score, 0.0,
-                "[exit=" + result.exitCode() + "]\n" + result.output());
+                (verified ? "" : "[WARNING: no test suite ran — this patch was not verified]\n")
+                + "[exit=" + result.exitCode() + "]\n" + result.output(),
+                verified);
 
         } catch (Exception e) {
             // Docker failed for this specific job (daemon down, image pull
@@ -688,7 +707,9 @@ public class TestRunnerController {
         String cmd = config.framework().getCommand();
         if (cmd == null || cmd.contains("exit 0")) {
             return new TestResult(true, 1.0, 0.0,
-                "WARN: no native command available for " + config.framework() + ". Safe-pass.");
+                "WARNING: no test suite ran — this patch was not verified.\n"
+                + "No native command available for " + config.framework() + ". Safe-pass.",
+                false);
         }
 
         try {
@@ -705,17 +726,76 @@ public class TestRunnerController {
     // ─── Quality Score ────────────────────────────────────────────────────────
 
     /**
+     * True if some line of {@code output} both looks like a test-framework
+     * summary line and contains {@code needle}.
+     *
+     * <p>A bare {@code output.contains(...)} matched the needle anywhere — in a
+     * source listing echoed by the build, in a dependency's log line, or in a
+     * string the repository printed deliberately. Requiring the line to carry a
+     * framework's own summary markers narrows that considerably.
+     */
+    static boolean hasSummaryLineContaining(String output, String needle) {
+        if (output == null) return false;
+        for (String line : output.split("\\R")) {
+            String trimmed = line.trim();
+            if (!trimmed.contains(needle)) continue;
+            // pytest brackets its summary in '='; jest/maven prefix theirs.
+            if (trimmed.startsWith("=") || trimmed.endsWith("=")
+                || trimmed.startsWith("Tests:") || trimmed.startsWith("Tests run:")
+                || trimmed.startsWith("collected")
+                || SUMMARY_LINE.matcher(trimmed).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** e.g. "3 passed, 1 failed in 0.42s" — a counts-and-duration summary tail. */
+    private static final Pattern SUMMARY_LINE =
+        Pattern.compile("\\b\\d+\\s+(passed|failed|error|skipped)\\b.*\\bin\\s+[\\d.]+s");
+
+    /**
      * Parse test output for pass/fail counts to produce a normalised quality score.
      * Falls back to 1.0 on pass / 0.0 on fail if counts can't be parsed.
+     *
+     * <h2>This is evidence, not proof — and cannot be made into proof here</h2>
+     * Every input to this method is produced by the repository under test. The
+     * test command IS the third-party code being evaluated, so its stdout, its
+     * exit code, and any report file it writes are all under the control of
+     * whoever wrote that repository. A repo that prints "5 passed" scores 1.0
+     * without running anything.
+     *
+     * <p>The plan's suggestion — parse --junitxml / surefire XML / jest --json
+     * instead of stdout — is a real improvement in ROBUSTNESS (structured
+     * output cannot be matched by accident, and the counts are unambiguous) but
+     * it is NOT a trust boundary: those files are written into the workspace by
+     * the same untrusted process, so a repo that wants to fake a green run can
+     * write a green report just as easily as it can print one.
+     *
+     * <p>What this change does do is remove the accidental and one-line-trivial
+     * matches: the patterns are anchored to lines that actually look like a
+     * framework summary, rather than matching "(\\d+) passed" anywhere in
+     * megabytes of build output. What actually contains a malicious repository
+     * is the sandbox it runs in (C2/C3/H9), the authorized-files allowlist, and
+     * human review of the resulting pull request — not this parser, and the
+     * documentation should not imply otherwise.
      */
     private double computeQualityScore(String output, TestFramework framework) {
         if (output == null) return 0.5;
 
-        // pytest: "3 passed, 1 failed"
-        Pattern pytestPassed = Pattern.compile("(\\d+) passed");
-        Pattern pytestFailed = Pattern.compile("(\\d+) failed");
-        Matcher pm = pytestPassed.matcher(output);
-        Matcher fm = pytestFailed.matcher(output);
+        // Only consider lines that look like a framework summary, so counts are
+        // not picked up from arbitrary build chatter.
+        String summary = output.lines()
+            .map(String::trim)
+            .filter(l -> l.startsWith("=") || l.endsWith("=")
+                      || l.startsWith("Tests:") || l.startsWith("Tests run:")
+                      || SUMMARY_LINE.matcher(l).find())
+            .reduce("", (a, b) -> a + "\n" + b);
+        if (summary.isBlank()) summary = output; // no recognisable summary; fall back
+
+        // pytest / jest: "3 passed, 1 failed"
+        Matcher pm = Pattern.compile("(\\d+) passed").matcher(summary);
+        Matcher fm = Pattern.compile("(\\d+) failed").matcher(summary);
         if (pm.find()) {
             int passed = Integer.parseInt(pm.group(1));
             int failed = fm.find() ? Integer.parseInt(fm.group(1)) : 0;
@@ -723,27 +803,13 @@ public class TestRunnerController {
             return total > 0 ? (double) passed / total : 1.0;
         }
 
-        // JUnit / Gradle: "Tests run: 5, Failures: 1"
-        Pattern junitRun  = Pattern.compile("Tests run: (\\d+)");
-        Pattern junitFail = Pattern.compile("Failures: (\\d+)");
-        Matcher jm = junitRun.matcher(output);
-        Matcher jf = junitFail.matcher(output);
+        // JUnit / Surefire: "Tests run: 5, Failures: 1"
+        Matcher jm = Pattern.compile("Tests run: (\\d+)").matcher(summary);
+        Matcher jf = Pattern.compile("Failures: (\\d+)").matcher(summary);
         if (jm.find()) {
             int run  = Integer.parseInt(jm.group(1));
             int fail = jf.find() ? Integer.parseInt(jf.group(1)) : 0;
             return run > 0 ? (double)(run - fail) / run : 1.0;
-        }
-
-        // Jest: "Tests: 3 passed, 1 failed"
-        Pattern jestPassed = Pattern.compile("(\\d+) passed");
-        Matcher jestM = jestPassed.matcher(output);
-        if (jestM.find()) {
-            int passed = Integer.parseInt(jestM.group(1));
-            int failed = 0;
-            Matcher jestF = Pattern.compile("(\\d+) failed").matcher(output);
-            if (jestF.find()) failed = Integer.parseInt(jestF.group(1));
-            int total = passed + failed;
-            return total > 0 ? (double) passed / total : 1.0;
         }
 
         return 0.5; // unknown output format
