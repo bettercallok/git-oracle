@@ -17,10 +17,17 @@ spring:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: update
-    show-sql: true
+    # Off by default; enable per-environment with GITORACLE_SHOW_SQL=true.
+    # This was hardcoded true, so every production log carried every statement
+    # this service ran — including the parameter-bearing SQL for tenant-scoped
+    # reads. That is a slow leak of customer data into a file with far weaker
+    # access control than the database it came from, it makes the log useless
+    # for anything else at volume, and it is a measurable throughput cost on a
+    # hot path. The other two services already had show-sql: false.
+    show-sql: ${GITORACLE_SHOW_SQL:false}
     properties:
       hibernate:
-        format_sql: true
+        format_sql: ${GITORACLE_SHOW_SQL:false}
         dialect: org.hibernate.dialect.PostgreSQLDialect
   kafka:
     bootstrap-servers: ${KAFKA_HOST:127.0.0.1}:${KAFKA_PORT:9092}

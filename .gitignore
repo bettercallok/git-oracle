@@ -66,7 +66,21 @@ logs/
 *.pfx
 id_rsa
 id_ed25519
-*.txt
+# NOT a blanket *.txt. That rule silently excluded two kinds of file that
+# belong in the repository:
+#
+#   ai_core/requirements.lock.txt        the hash-pinned dependency lock
+#   eval/golden/*/bug_description.txt    the eval harness's ground truth
+#   eval/golden/*/expected_root_commit.txt
+#
+# The golden dataset was half-committed as a result — the sibling
+# expected_fix.patch files were tracked but their .txt counterparts were not,
+# so a fresh clone could not run the eval harness at all. An ignore rule that
+# matches by extension will keep doing this every time someone adds a file that
+# happens to end in .txt; these are the actual scratch outputs.
+eval_output.txt
+lf_help.txt
+stats.txt
 *.pid
 *.log
 *.log*
