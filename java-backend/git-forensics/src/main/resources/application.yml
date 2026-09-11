@@ -30,7 +30,17 @@ spring:
         # ErrorIngestedEvent only.
         spring.json.trusted.packages: java.util,ai.gitoracle.core.kafka.event
 
+# Request body size cap (L3). Nothing bounded these, so Tomcat's 2GB default
+# applied: one request could make a service buffer gigabytes and be OOM-killed,
+# and these JVMs run with deliberately small heaps (start_local.sh caps them at
+# 224-320MB). Sized for only small risk-query bodies.
+# Headers are capped too — they are buffered before any application code runs,
+# so a large header set otherwise bypasses every body limit.
 server:
+  tomcat:
+    max-http-form-post-size: 1MB
+    max-swallow-size: 1MB
+  max-http-request-header-size: 16KB
   port: 8082
   address: ${SERVER_BIND_HOST:127.0.0.1}
 

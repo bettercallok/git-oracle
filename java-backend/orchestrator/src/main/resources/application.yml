@@ -42,7 +42,17 @@ spring:
         # (e.g. ErrorIngestedEvent) — nothing else needs to be trusted.
         spring.json.trusted.packages: java.util,ai.gitoracle.core.kafka.event
 
+# Request body size cap (L3). Nothing bounded these, so Tomcat's 2GB default
+# applied: one request could make a service buffer gigabytes and be OOM-killed,
+# and these JVMs run with deliberately small heaps (start_local.sh caps them at
+# 224-320MB). Sized for the largest legitimate body is a unified diff in a fix event.
+# Headers are capped too — they are buffered before any application code runs,
+# so a large header set otherwise bypasses every body limit.
 server:
+  tomcat:
+    max-http-form-post-size: 2MB
+    max-swallow-size: 2MB
+  max-http-request-header-size: 16KB
   port: 8083
   # Loopback by default — this service used to bind 0.0.0.0 (network-reachable)
   # with no auth of its own. Override only for a real container network where

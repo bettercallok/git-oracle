@@ -2,6 +2,19 @@ spring:
   application:
     name: api-gateway
 
+  # Request body cap (L3). This service is WebFlux/Netty, not Tomcat, so the
+  # servlet knobs the other services use do not apply — the equivalent is the
+  # codec's in-memory buffer limit, which bounds how much of a body Spring will
+  # accumulate before handing it to a handler. Default is 256KB for codecs but
+  # unbounded for the proxied body, and this is the ONLY externally reachable
+  # service, so it is the one that most needs a ceiling.
+  #
+  # 2MB matches the downstream services' own caps: letting the gateway accept
+  # more than the service behind it can process only moves the failure one hop
+  # later and wastes the bandwidth twice.
+  codec:
+    max-in-memory-size: 2MB
+
 
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:127.0.0.1}:${POSTGRES_PORT:5433}/${POSTGRES_DB:gitOracle}

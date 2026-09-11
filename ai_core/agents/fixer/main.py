@@ -17,12 +17,14 @@ from shared.structured_output import llm_structured
 from shared.memory import AgentMemory
 from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 from shared.internal_auth import require_internal_token
+from shared.body_limit import BodySizeLimitMiddleware
 from shared.safe_paths import UnsafePathError, partition_safe, resolve_within, safe_read_text
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="GitOracle Fixer Agent", version="1.0", dependencies=[Depends(require_internal_token)])
+app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

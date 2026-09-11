@@ -35,11 +35,13 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
 from shared.internal_auth import require_internal_token
+from shared.body_limit import BodySizeLimitMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="GitOracle Commit Analyst", version="1.0", dependencies=[Depends(require_internal_token)])
+app.add_middleware(BodySizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
