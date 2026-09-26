@@ -12,26 +12,63 @@
   /* Typography */
   --text-primary: #EDEDED;
   --text-secondary: #A1A1AA;
-  --text-muted: #71717A;
+  --text-muted: #8B8B94;   /* 4.5:1+ on every dark ground (was #71717A, 3.6-4.1:1) */
   
   /* Brand Accent */
   --accent: #FFFFFF;        /* Strict Monochrome */
   --accent-hover: #E4E4E7;
   --graph-blue: #5E6AD2;    /* Specific Blue for Graphs */
   
-  /* Semantic Colors (Strict Monochrome) */
-  --success: var(--text-primary);
-  --success-bg: rgba(255, 255, 255, 0.08);
-  --warning: var(--text-secondary);
-  --warning-bg: rgba(255, 255, 255, 0.04);
-  --danger: var(--text-muted);
-  --danger-bg: rgba(255, 255, 255, 0.02);
+  /* Semantic Colors: monochrome UI, but state gets a restrained hue so a
+     failure never reads quieter than a success. Always pair with a word. */
+  --success: #4ADE80;
+  --success-bg: rgba(74, 222, 128, 0.12);
+  --warning: #FBBF24;
+  --warning-bg: rgba(251, 191, 36, 0.12);
+  --danger: #F87171;
+  --danger-bg: rgba(248, 113, 113, 0.12);
   --info: #FFFFFF;
   --info-bg: rgba(255, 255, 255, 0.12);
 
   /* Filled confirm button (Approve) */
   --success-solid: #4ADE80;
   --on-success-solid: #052E16;
+
+  /* Data colours (diffs, file status, errors, heatmap): tuned per theme so
+     they hold 4.5:1 on light grounds too. */
+  --diff-add: #4ADE80;
+  --diff-add-text: #86EFAC;
+  --diff-add-bg: rgba(74, 222, 128, 0.08);
+  --diff-del: #F87171;
+  --diff-del-text: #FCA5A5;
+  --diff-del-bg: rgba(248, 113, 113, 0.08);
+  --diff-hunk: #6366F1;
+  --diff-hunk-text: #A5B4FC;
+  --diff-hunk-bg: rgba(99, 102, 241, 0.10);
+  --file-modified: #60A5FA;
+  --file-renamed: #C084FC;
+  --status-error: #EF4444;
+  --status-error-bg: rgba(239, 68, 68, 0.08);
+  --status-error-border: rgba(239, 68, 68, 0.25);
+  --status-ok: #10B981;
+  --status-ok-bg: rgba(34, 197, 94, 0.10);
+  --status-ok-border: rgba(34, 197, 94, 0.30);
+  --status-caution: #F59E0B;
+  --highlight-bg: rgba(99, 102, 241, 0.08);
+  --highlight-border: rgba(99, 102, 241, 0.30);
+  --on-graph-blue: #FFFFFF;
+  --heat-low: #FEF08A;
+  --heat-low-bg: rgba(253, 224, 71, 0.05);
+  --heat-low-border: rgba(253, 224, 71, 0.10);
+  --heat-medium: #FDE047;
+  --heat-medium-bg: rgba(253, 224, 71, 0.15);
+  --heat-medium-border: rgba(253, 224, 71, 0.30);
+  --heat-high: #FB923C;
+  --heat-high-bg: rgba(251, 146, 60, 0.15);
+  --heat-high-border: rgba(251, 146, 60, 0.30);
+  --heat-critical: #F87171;
+  --heat-critical-bg: rgba(248, 113, 113, 0.15);
+  --heat-critical-border: rgba(248, 113, 113, 0.30);
 
   /* Fonts */
   --font-display: 'Outfit', sans-serif;
@@ -65,17 +102,50 @@
   --accent-hover: #27272A;
   --graph-blue: #5E6AD2;
 
-  --success: var(--text-primary);
-  --success-bg: rgba(0, 0, 0, 0.06);
-  --warning: var(--text-secondary);
-  --warning-bg: rgba(0, 0, 0, 0.04);
-  --danger: var(--text-muted);
-  --danger-bg: rgba(0, 0, 0, 0.03);
+  --success: #166534;
+  --success-bg: rgba(22, 101, 52, 0.10);
+  --warning: #92400E;
+  --warning-bg: rgba(180, 83, 9, 0.10);
+  --danger: #991B1B;
+  --danger-bg: rgba(185, 28, 28, 0.08);
   --info: #18181B;
   --info-bg: rgba(0, 0, 0, 0.08);
 
   --success-solid: #15803D;
   --on-success-solid: #FFFFFF;
+
+  --diff-add: #15803D;
+  --diff-add-text: #166534;
+  --diff-add-bg: rgba(21, 128, 61, 0.08);
+  --diff-del: #B91C1C;
+  --diff-del-text: #991B1B;
+  --diff-del-bg: rgba(185, 28, 28, 0.07);
+  --diff-hunk: #4F46E5;
+  --diff-hunk-text: #3730A3;
+  --diff-hunk-bg: rgba(79, 70, 229, 0.08);
+  --file-modified: #1D4ED8;
+  --file-renamed: #7E22CE;
+  --status-error: #B91C1C;
+  --status-error-bg: rgba(185, 28, 28, 0.06);
+  --status-error-border: rgba(185, 28, 28, 0.25);
+  --status-ok: #047857;
+  --status-ok-bg: rgba(21, 128, 61, 0.08);
+  --status-ok-border: rgba(21, 128, 61, 0.30);
+  --status-caution: #B45309;
+  --highlight-bg: rgba(79, 70, 229, 0.06);
+  --highlight-border: rgba(79, 70, 229, 0.30);
+  --heat-low: #A16207;
+  --heat-low-bg: rgba(202, 138, 4, 0.06);
+  --heat-low-border: rgba(202, 138, 4, 0.20);
+  --heat-medium: #854D0E;
+  --heat-medium-bg: rgba(202, 138, 4, 0.14);
+  --heat-medium-border: rgba(202, 138, 4, 0.35);
+  --heat-high: #C2410C;
+  --heat-high-bg: rgba(234, 88, 12, 0.10);
+  --heat-high-border: rgba(234, 88, 12, 0.30);
+  --heat-critical: #B91C1C;
+  --heat-critical-bg: rgba(185, 28, 28, 0.08);
+  --heat-critical-border: rgba(185, 28, 28, 0.30);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -552,15 +622,15 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Heat Colors - Red and Yellow Shades */
-.heat-low { background: rgba(253, 224, 71, 0.05); border-color: rgba(253, 224, 71, 0.1); }
-.heat-low .bug-count { color: #FEF08A; }
+/* Heat colours: tokens above, redefined for the light theme */
+.heat-low { background: var(--heat-low-bg); border-color: var(--heat-low-border); }
+.heat-low .bug-count { color: var(--heat-low); }
 
-.heat-medium { background: rgba(253, 224, 71, 0.15); border-color: rgba(253, 224, 71, 0.3); }
-.heat-medium .bug-count { color: #FDE047; }
+.heat-medium { background: var(--heat-medium-bg); border-color: var(--heat-medium-border); }
+.heat-medium .bug-count { color: var(--heat-medium); }
 
-.heat-high { background: rgba(251, 146, 60, 0.15); border-color: rgba(251, 146, 60, 0.3); }
-.heat-high .bug-count { color: #FB923C; }
+.heat-high { background: var(--heat-high-bg); border-color: var(--heat-high-border); }
+.heat-high .bug-count { color: var(--heat-high); }
 
-.heat-critical { background: rgba(248, 113, 113, 0.15); border-color: rgba(248, 113, 113, 0.3); }
-.heat-critical .bug-count { color: #F87171; }
+.heat-critical { background: var(--heat-critical-bg); border-color: var(--heat-critical-border); }
+.heat-critical .bug-count { color: var(--heat-critical); }

@@ -81,7 +81,7 @@ function StatChip({ value, color, sign }: { value: number; color: string; sign: 
     <span style={{
       fontFamily: 'var(--mono)', fontSize: '0.72rem', fontWeight: 500,
       color, padding: '1px 5px', borderRadius: 4,
-      background: `${color}18`,
+      background: `color-mix(in srgb, ${color} 10%, transparent)`,
     }}>
       {sign}{value}
     </span>
@@ -265,13 +265,13 @@ export default function CommitExplorer() {
           {/* ── Error ── */}
           {isError && (
             <div style={{
-              background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+              background: 'var(--status-error-bg)', border: '1px solid var(--status-error-border)',
               borderRadius: 'var(--radius-md)', padding: '16px 20px',
               display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 16,
             }}>
-              <AlertCircle size={18} color="#ef4444" style={{ flexShrink: 0, marginTop: 1 }} />
+              <AlertCircle size={18} color="var(--status-error)" style={{ flexShrink: 0, marginTop: 1 }} />
               <div>
-                <div style={{ fontWeight: 600, color: '#ef4444', marginBottom: 4 }}>Failed to load commits</div>
+                <div style={{ fontWeight: 600, color: 'var(--status-error)', marginBottom: 4 }}>Failed to load commits</div>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                   {(error as any)?.response?.data?.hint ||
                    (error as any)?.response?.data?.error ||
@@ -357,8 +357,8 @@ export default function CommitExplorer() {
                           {commit.filesChanged > 0 && (
                             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 2, display: 'flex', gap: 6 }}>
                               <span>{commit.filesChanged} file{commit.filesChanged !== 1 ? 's' : ''}</span>
-                              <StatChip value={commit.additions} color="#4ade80" sign="+" />
-                              <StatChip value={commit.deletions} color="#f87171" sign="-" />
+                              <StatChip value={commit.additions} color="var(--diff-add)" sign="+" />
+                              <StatChip value={commit.deletions} color="var(--diff-del)" sign="-" />
                             </div>
                           )}
                         </div>

@@ -152,8 +152,8 @@ export default function Simulator() {
             )}
             
             {error && (
-              <div style={{ padding: 16, background: 'rgba(239, 68, 68, 0.1)', borderRadius: 8, border: '1px solid rgba(239, 68, 68, 0.2)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#ef4444', marginBottom: 8, fontWeight: 500 }}>
+              <div style={{ padding: 16, background: 'var(--status-error-bg)', borderRadius: 8, border: '1px solid var(--status-error-border)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--status-error)', marginBottom: 8, fontWeight: 500 }}>
                   <XCircle size={18} /> Error
                 </div>
                 <div style={{ fontSize: '0.9rem', color: 'var(--text)' }}>
@@ -168,7 +168,7 @@ export default function Simulator() {
                 animate={{ opacity: 1, y: 0 }}
                 style={{ padding: 16, background: 'var(--bg-darker)', borderRadius: 8, border: '1px solid var(--border)' }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: response.status >= 200 && response.status < 300 ? '#10b981' : '#ef4444', marginBottom: 12, fontWeight: 500 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: response.status >= 200 && response.status < 300 ? 'var(--status-ok)' : 'var(--status-error)', marginBottom: 12, fontWeight: 500 }}>
                   {response.status >= 200 && response.status < 300 ? <CheckCircle2 size={18} /> : <XCircle size={18} />}
                   Status: {response.status}
                 </div>

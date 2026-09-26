@@ -138,7 +138,7 @@ export default function JobDetail() {
           style={{
             display: 'flex', alignItems: 'center', gap: 12,
             padding: '14px 20px', borderRadius: 10, marginBottom: 16,
-            background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)'
+            background: 'var(--status-ok-bg)', border: '1px solid var(--status-ok-border)'
           }}
         >
           <GitPullRequest size={18} color="var(--success)" />
@@ -180,7 +180,7 @@ export default function JobDetail() {
 
             {isEscalated && (
               <motion.div className="timeline-item" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }}>
-                <div className="timeline-dot" style={{ borderColor: 'var(--danger, #ef4444)' }} />
+                <div className="timeline-dot" style={{ borderColor: 'var(--status-error)' }} />
                 <div className="timeline-time">Escalated</div>
                 <div className="timeline-title">Fixer Could Not Produce a Valid Patch</div>
                 <div className="timeline-body">The agent exhausted its attempts without a fix that passed guardrails or tests. Review the escalation queue, or submit new instructions below to retry.</div>
@@ -189,7 +189,7 @@ export default function JobDetail() {
 
             {status === 'REGENERATING' && (
               <motion.div className="timeline-item" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }}>
-                <div className="timeline-dot" style={{ borderColor: '#f59e0b', animationName: 'pulse' }} />
+                <div className="timeline-dot" style={{ borderColor: 'var(--status-caution)', animationName: 'pulse' }} />
                 <div className="timeline-time">Now</div>
                 <div className="timeline-title">Regenerating Fix</div>
                 <div className="timeline-body">Applying your instructions and generating a new patch...</div>
@@ -216,7 +216,7 @@ export default function JobDetail() {
                 style={{
                   display: 'flex', alignItems: 'center', gap: 10,
                   padding: '10px 14px', borderRadius: 8, marginBottom: 16,
-                  background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)',
+                  background: 'var(--status-ok-bg)', border: '1px solid var(--status-ok-border)',
                   color: 'var(--success)', fontSize: '0.9rem'
                 }}
               >

@@ -71,10 +71,10 @@ export default function FixCommand() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
           <div style={{
             width: 40, height: 40, borderRadius: 10,
-            background: 'linear-gradient(135deg, var(--accent), #a855f7)',
+            background: 'var(--accent)',
             display: 'flex', alignItems: 'center', justifyContent: 'center'
           }}>
-            <Wand2 size={20} color="#fff" />
+            <Wand2 size={20} color="var(--bg-app)" />
           </div>
           <h1 className="page-title" style={{ marginBottom: 0 }}>Ask GitOracle to Fix</h1>
         </div>
@@ -94,7 +94,7 @@ export default function FixCommand() {
           >
             <div style={{
               width: 64, height: 64, borderRadius: '50%',
-              background: 'rgba(34,197,94,0.15)', border: '2px solid var(--success)',
+              background: 'var(--status-ok-bg)', border: '2px solid var(--success)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               margin: '0 auto 20px'
             }}>
@@ -273,7 +273,7 @@ export default function FixCommand() {
                 style={{
                   display: 'flex', alignItems: 'center', gap: 10,
                   padding: '12px 16px', borderRadius: 8,
-                  background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
+                  background: 'var(--status-error-bg)', border: '1px solid var(--status-error-border)',
                   color: 'var(--danger)', marginBottom: 16, fontSize: '0.9rem'
                 }}
               >

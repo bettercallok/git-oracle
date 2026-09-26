@@ -70,9 +70,9 @@ function DiffLine({ line, index }: { line: string; index: number }) {
   let color = 'var(--text-secondary)';
   let borderLeft = '3px solid transparent';
 
-  if (isAdd)  { bg = 'rgba(74,222,128,0.08)';  color = '#86efac'; borderLeft = '3px solid #4ade80'; }
-  if (isDel)  { bg = 'rgba(248,113,113,0.08)'; color = '#fca5a5'; borderLeft = '3px solid #f87171'; }
-  if (isHunk) { bg = 'rgba(99,102,241,0.1)';  color = '#a5b4fc'; borderLeft = '3px solid #6366f1'; }
+  if (isAdd)  { bg = 'var(--diff-add-bg)';  color = 'var(--diff-add-text)';  borderLeft = '3px solid var(--diff-add)'; }
+  if (isDel)  { bg = 'var(--diff-del-bg)';  color = 'var(--diff-del-text)';  borderLeft = '3px solid var(--diff-del)'; }
+  if (isHunk) { bg = 'var(--diff-hunk-bg)'; color = 'var(--diff-hunk-text)'; borderLeft = '3px solid var(--diff-hunk)'; }
   if (isMeta) { color = 'var(--text-muted)'; }
 
   return (
@@ -113,8 +113,8 @@ function FileDiffCard({ file }: { file: CommitFile }) {
   };
 
   const statusColor: Record<string, string> = {
-    added: '#4ade80', removed: '#f87171', modified: '#60a5fa',
-    renamed: '#c084fc',
+    added: 'var(--diff-add)', removed: 'var(--diff-del)', modified: 'var(--file-modified)',
+    renamed: 'var(--file-renamed)',
   };
   const color = statusColor[file.status] || 'var(--text-muted)';
   const lines = file.patch ? file.patch.split('\n') : [];
@@ -144,16 +144,16 @@ function FileDiffCard({ file }: { file: CommitFile }) {
         </span>
         <span style={{
           fontSize: '0.68rem', fontWeight: 600, padding: '2px 7px',
-          borderRadius: 4, background: `${color}18`, color,
+          borderRadius: 4, background: `color-mix(in srgb, ${color} 10%, transparent)`, color,
           textTransform: 'uppercase', letterSpacing: '0.05em',
         }}>
           {file.status}
         </span>
         {file.additions > 0 && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: '#4ade80' }}>+{file.additions}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--diff-add)' }}>+{file.additions}</span>
         )}
         {file.deletions > 0 && (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: '#f87171' }}>−{file.deletions}</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--diff-del)' }}>−{file.deletions}</span>
         )}
         {file.patch && (
           <span
@@ -164,7 +164,7 @@ function FileDiffCard({ file }: { file: CommitFile }) {
               display: 'inline-flex', alignItems: 'center', gap: 4,
               padding: '3px 7px', borderRadius: 6,
               background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
-              color: diffCopied ? '#4ade80' : 'var(--text-muted)',
+              color: diffCopied ? 'var(--diff-add)' : 'var(--text-muted)',
               fontSize: '0.72rem', cursor: 'pointer', flexShrink: 0,
             }}
           >
@@ -211,17 +211,17 @@ const actionConfig: Record<string, { icon: React.ReactNode; label: string; color
   FIX: {
     icon: <Wand2 size={12} />,
     label: 'Suggested Action: Apply Fix',
-    color: '#4ade80',
+    color: 'var(--diff-add)',
   },
   INVESTIGATE: {
     icon: <AlertTriangle size={12} />,
     label: 'Suggested Action: Investigate Further',
-    color: '#f59e0b',
+    color: 'var(--status-caution)',
   },
   NONE: {
     icon: <Info size={12} />,
     label: 'Informational',
-    color: '#60a5fa',
+    color: 'var(--file-modified)',
   },
 };
 
@@ -251,7 +251,7 @@ function ChatBubble({
         border: isUser ? 'none' : '1px solid var(--border-subtle)',
         borderRadius: isUser ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
         padding: '10px 14px',
-        color: isUser ? '#fff' : (msg.isError ? '#f87171' : 'var(--text-primary)'),
+        color: isUser ? 'var(--on-graph-blue)' : (msg.isError ? 'var(--diff-del)' : 'var(--text-primary)'),
         fontSize: '0.85rem',
         lineHeight: 1.65,
         whiteSpace: 'pre-wrap',
@@ -267,7 +267,7 @@ function ChatBubble({
           <div style={{
             display: 'inline-flex', alignItems: 'center', gap: 5,
             padding: '4px 10px', borderRadius: 20,
-            background: `${action.color}18`, border: `1px solid ${action.color}44`,
+            background: `color-mix(in srgb, ${action.color} 10%, transparent)`, border: `1px solid color-mix(in srgb, ${action.color} 27%, transparent)`,
             color: action.color, fontSize: '0.72rem', fontWeight: 600,
           }}>
             {action.icon} {action.label}
@@ -280,8 +280,8 @@ function ChatBubble({
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 5,
                 padding: '4px 10px', borderRadius: 20,
-                background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.4)',
-                color: '#a5b4fc', fontSize: '0.72rem', fontWeight: 600,
+                background: 'var(--diff-hunk-bg)', border: '1px solid var(--highlight-border)',
+                color: 'var(--diff-hunk-text)', fontSize: '0.72rem', fontWeight: 600,
                 cursor: 'pointer',
               }}
             >
@@ -414,13 +414,13 @@ export default function CommitDetail() {
           <ArrowLeft size={14} /> Back to Commit Explorer
         </Link>
         <div style={{
-          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+          background: 'var(--status-error-bg)', border: '1px solid var(--status-error-border)',
           borderRadius: 'var(--radius-md)', padding: '20px 24px',
           display: 'flex', alignItems: 'flex-start', gap: 12,
         }}>
-          <AlertCircle size={18} color="#ef4444" style={{ flexShrink: 0, marginTop: 2 }} />
+          <AlertCircle size={18} color="var(--status-error)" style={{ flexShrink: 0, marginTop: 2 }} />
           <div>
-            <div style={{ fontWeight: 600, color: '#ef4444', marginBottom: 6 }}>Failed to load commit</div>
+            <div style={{ fontWeight: 600, color: 'var(--status-error)', marginBottom: 6 }}>Failed to load commit</div>
             <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
               {(error as any)?.response?.data?.error || (error as any)?.message || 'Unknown error'}
             </div>
@@ -435,7 +435,7 @@ export default function CommitDetail() {
     border: 'none', cursor: 'pointer', borderRadius: 'var(--radius-md)',
     transition: 'all 0.15s',
     background: activeTab === tab ? 'var(--graph-blue)' : 'transparent',
-    color: activeTab === tab ? '#fff' : 'var(--text-muted)',
+    color: activeTab === tab ? 'var(--on-graph-blue)' : 'var(--text-muted)',
   });
 
   const STARTER_QUESTIONS = [
@@ -515,7 +515,7 @@ export default function CommitDetail() {
                 transition: 'all 0.15s',
               }}
             >
-              {copied ? <Check size={12} color="#4ade80" /> : <Copy size={12} />}
+              {copied ? <Check size={12} color="var(--diff-add)" /> : <Copy size={12} />}
               {commit.shortSha}
             </button>
             <a
@@ -549,12 +549,12 @@ export default function CommitDetail() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
             <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{commit.filesChanged} file{commit.filesChanged !== 1 ? 's' : ''}</span>
             {commit.additions > 0 && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem', color: '#4ade80', display: 'flex', alignItems: 'center', gap: 2 }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem', color: 'var(--diff-add)', display: 'flex', alignItems: 'center', gap: 2 }}>
                 <Plus size={11} />{commit.additions}
               </span>
             )}
             {commit.deletions > 0 && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem', color: '#f87171', display: 'flex', alignItems: 'center', gap: 2 }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem', color: 'var(--diff-del)', display: 'flex', alignItems: 'center', gap: 2 }}>
                 <Minus size={11} />{commit.deletions}
               </span>
             )}
@@ -573,7 +573,7 @@ export default function CommitDetail() {
             display: 'inline-flex', alignItems: 'center', gap: 7,
             padding: '8px 16px', borderRadius: 'var(--radius-md)',
             background: 'var(--graph-blue)', border: 'none',
-            color: '#fff', fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer',
+            color: 'var(--on-graph-blue)', fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer',
             transition: 'all 0.2s', boxShadow: '0 2px 8px rgba(99,102,241,0.2)'
           }}
           onMouseEnter={e => {
@@ -784,7 +784,7 @@ export default function CommitDetail() {
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     cursor: question.trim() && !analyzeMutation.isPending ? 'pointer' : 'default',
                     transition: 'all 0.2s', flexShrink: 0,
-                    color: question.trim() && !analyzeMutation.isPending ? '#fff' : 'var(--text-muted)',
+                    color: question.trim() && !analyzeMutation.isPending ? 'var(--on-graph-blue)' : 'var(--text-muted)',
                   }}
                 >
                   {analyzeMutation.isPending

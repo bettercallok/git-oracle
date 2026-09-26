@@ -76,7 +76,7 @@ function ActiveRepoPill() {
     <NavLink to="/repos" style={{ textDecoration: 'none' }}>
       <div style={{
         margin: '12px 12px 0', padding: '8px 12px', borderRadius: 8,
-        background: 'rgba(99,102,241,0.08)', border: '1px dashed rgba(99,102,241,0.3)',
+        background: 'var(--highlight-bg)', border: '1px dashed var(--highlight-border)',
         fontSize: '0.75rem', color: 'var(--text-muted)', cursor: 'pointer',
         display: 'flex', alignItems: 'center', gap: 6
       }}>
@@ -88,7 +88,7 @@ function ActiveRepoPill() {
     <NavLink to="/repos" style={{ textDecoration: 'none' }}>
       <div style={{
         margin: '12px 12px 0', padding: '8px 12px', borderRadius: 8,
-        background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)',
+        background: 'var(--status-ok-bg)', border: '1px solid var(--status-ok-border)',
         cursor: 'pointer', transition: 'background 0.2s'
       }}>
         <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>
@@ -145,7 +145,7 @@ function App() {
                 <GitMerge size={16} /> Job Feed
               </NavLink>
               <NavLink to="/fix" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                style={({ isActive }) => isActive ? {} : { background: 'linear-gradient(90deg,rgba(99,102,241,0.08),transparent)', borderLeft: '2px solid var(--accent)', paddingLeft: 10 }}
+                style={({ isActive }) => isActive ? {} : { background: 'linear-gradient(90deg,var(--highlight-bg),transparent)', borderLeft: '2px solid var(--accent)', paddingLeft: 10 }}
               >
                 <Wand2 size={16} /> Ask to Fix
               </NavLink>

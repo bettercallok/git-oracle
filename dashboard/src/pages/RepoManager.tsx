@@ -41,10 +41,10 @@ export default function RepoManager() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
           <div style={{
             width: 40, height: 40, borderRadius: 10,
-            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+            background: 'var(--accent)',
             display: 'flex', alignItems: 'center', justifyContent: 'center'
           }}>
-            <GitFork size={20} color="#fff" />
+            <GitFork size={20} color="var(--bg-app)" />
           </div>
           <h1 className="page-title" style={{ marginBottom: 0 }}>My Repos</h1>
         </div>
@@ -123,7 +123,7 @@ export default function RepoManager() {
                   style={{
                     padding: '18px 24px',
                     border: isActive ? '1px solid var(--accent)' : '1px solid var(--border-subtle)',
-                    background: isActive ? 'rgba(99,102,241,0.05)' : undefined,
+                    background: isActive ? 'var(--highlight-bg)' : undefined,
                     display: 'flex', alignItems: 'center', gap: 16
                   }}
                 >
@@ -144,7 +144,7 @@ export default function RepoManager() {
                       {isActive && (
                         <span style={{
                           fontSize: '0.7rem', fontWeight: 600, padding: '2px 8px', borderRadius: 99,
-                          background: 'rgba(99,102,241,0.2)', color: 'var(--accent)', letterSpacing: '0.04em'
+                          background: 'var(--highlight-bg)', border: '1px solid var(--highlight-border)', color: 'var(--text-primary)', letterSpacing: '0.04em'
                         }}>ACTIVE</span>
                       )}
                     </div>
