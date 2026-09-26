@@ -460,7 +460,6 @@ export default function CommitExplorer() {
       )}
 
       {/* Spin keyframe (reused from index.css if available, else inline) */}
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

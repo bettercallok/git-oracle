@@ -447,7 +447,6 @@ export default function CommitDetail() {
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1100, margin: '0 auto' }}>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
       {/* ── Back link ── */}
       <Link

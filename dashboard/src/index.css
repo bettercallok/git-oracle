@@ -29,6 +29,10 @@
   --info: #FFFFFF;
   --info-bg: rgba(255, 255, 255, 0.12);
 
+  /* Filled confirm button (Approve) */
+  --success-solid: #4ADE80;
+  --on-success-solid: #052E16;
+
   /* Fonts */
   --font-display: 'Outfit', sans-serif;
   --font-numbers: 'Space Grotesk', sans-serif;
@@ -69,6 +73,9 @@
   --danger-bg: rgba(0, 0, 0, 0.03);
   --info: #18181B;
   --info-bg: rgba(0, 0, 0, 0.08);
+
+  --success-solid: #15803D;
+  --on-success-solid: #FFFFFF;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -339,6 +346,23 @@ body {
 
 .btn-primary { background: var(--accent); color: var(--bg-app); border-color: var(--accent); }
 .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+/* Referenced by pages but previously undefined, so they rendered as the default .btn */
+.btn-secondary { background: var(--bg-surface-raised); color: var(--text-primary); }
+.btn-outline { background: transparent; color: var(--text-primary); border-color: var(--border-strong); }
+.btn-outline:hover { background: var(--bg-surface-hover); border-color: var(--text-muted); }
+.btn-success { background: var(--success-solid); color: var(--on-success-solid); border-color: var(--success-solid); }
+.btn-success:hover { filter: brightness(1.08); }
+
+.btn:disabled,
+.btn[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; filter: none; }
+
+/* Loading spinners: Loader2 icons use .spinner (or the older .spin) */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner, .spin { animation: spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .spinner, .spin { animation-duration: 3s; }
+}
 
 /* Timeline */
 .timeline {
