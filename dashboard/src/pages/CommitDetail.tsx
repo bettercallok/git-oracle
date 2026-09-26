@@ -766,7 +766,7 @@ export default function CommitDetail() {
                     flex: 1, background: 'var(--bg-surface-raised)',
                     border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)',
                     padding: '9px 13px', color: 'var(--text-primary)', fontSize: '0.85rem',
-                    fontFamily: 'var(--font)', resize: 'none', outline: 'none',
+                    fontFamily: 'var(--font)', resize: 'none', 
                     lineHeight: 1.5, transition: 'border-color 0.2s',
                   }}
                   onFocus={e => (e.target.style.borderColor = 'var(--graph-blue)')}

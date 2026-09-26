@@ -236,7 +236,7 @@ export default function JobDetail() {
               width: '100%', padding: '10px 14px',
               background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
               borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-              boxSizing: 'border-box', outline: 'none', resize: 'vertical',
+              boxSizing: 'border-box', resize: 'vertical',
               fontFamily: 'inherit', lineHeight: 1.6,
               transition: 'border-color 0.2s', marginBottom: 14
             }}

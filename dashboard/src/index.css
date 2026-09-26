@@ -412,6 +412,17 @@ body {
   color: var(--text-secondary);
 }
 
+/* Keyboard focus: one visible ring for every interactive element */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+.form-input:focus-visible { outline-offset: 0; }
+.toggle-switch input:focus-visible + .toggle-slider {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
 /* Base Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -443,7 +454,6 @@ body {
   font-family: var(--mono);
   font-size: 0.85rem;
   transition: all 150ms ease;
-  outline: none;
 }
 
 .form-input:focus {

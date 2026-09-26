@@ -233,7 +233,7 @@ export default function CommitExplorer() {
                 borderRadius: 'var(--radius-md)',
                 padding: '10px 14px 10px 36px',
                 color: 'var(--text-primary)', fontSize: '0.85rem',
-                outline: 'none', transition: 'border-color 0.2s',
+                transition: 'border-color 0.2s',
                 fontFamily: 'var(--font)',
               }}
               onFocus={e => (e.target.style.borderColor = 'var(--graph-blue)')}

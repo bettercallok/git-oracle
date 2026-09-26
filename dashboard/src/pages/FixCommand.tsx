@@ -141,7 +141,7 @@ export default function FixCommand() {
                       width: '100%', padding: '10px 14px',
                       background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
                       borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-                      boxSizing: 'border-box', outline: 'none', cursor: 'pointer'
+                      boxSizing: 'border-box', cursor: 'pointer'
                     }}
                   >
                     <option value="">Select a repository...</option>
@@ -162,7 +162,7 @@ export default function FixCommand() {
                         width: '100%', padding: '10px 14px',
                         background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
                         borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-                        boxSizing: 'border-box', outline: 'none', transition: 'border-color 0.2s'
+                        boxSizing: 'border-box', transition: 'border-color 0.2s'
                       }}
                       onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
                       onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
@@ -190,7 +190,7 @@ export default function FixCommand() {
                     width: '100%', padding: '10px 14px',
                     background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
                     borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-                    boxSizing: 'border-box', outline: 'none', resize: 'vertical',
+                    boxSizing: 'border-box', resize: 'vertical',
                     fontFamily: 'inherit', lineHeight: 1.6,
                     transition: 'border-color 0.2s'
                   }}
@@ -213,7 +213,7 @@ export default function FixCommand() {
                       width: '100%', padding: '10px 14px',
                       background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
                       borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-                      boxSizing: 'border-box', outline: 'none', cursor: 'pointer'
+                      boxSizing: 'border-box', cursor: 'pointer'
                     }}
                   >
                     <option value="">Same as source repo</option>
@@ -232,7 +232,7 @@ export default function FixCommand() {
                       width: '100%', padding: '10px 14px',
                       background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
                       borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-                      boxSizing: 'border-box', outline: 'none', transition: 'border-color 0.2s'
+                      boxSizing: 'border-box', transition: 'border-color 0.2s'
                     }}
                     onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
                     onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
@@ -255,7 +255,7 @@ export default function FixCommand() {
                     width: '100%', padding: '10px 14px',
                     background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
                     borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-                    boxSizing: 'border-box', outline: 'none', transition: 'border-color 0.2s'
+                    boxSizing: 'border-box', transition: 'border-color 0.2s'
                   }}
                   onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
                   onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}

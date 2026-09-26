@@ -81,7 +81,6 @@ export default function Login() {
                   borderRadius: 'var(--radius-md)',
                   color: 'var(--text-primary)',
                   fontSize: '0.95rem',
-                  outline: 'none',
                   transition: 'border-color 0.2s'
                 }}
                 onFocus={(e) => e.target.style.borderColor = 'var(--accent)'}

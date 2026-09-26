@@ -91,8 +91,7 @@ export default function Simulator() {
                 fontFamily: 'monospace',
                 fontSize: '0.9rem',
                 color: 'var(--text)',
-                resize: 'vertical',
-                outline: 'none'
+                resize: 'vertical'
               }}
               value={payload}
               onChange={(e) => setPayload(e.target.value)}

@@ -70,7 +70,7 @@ export default function RepoManager() {
               flex: 1, padding: '10px 14px',
               background: 'var(--bg-lighter)', border: `1px solid ${error ? 'var(--danger)' : 'var(--border-subtle)'}`,
               borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-              outline: 'none', transition: 'border-color 0.2s'
+              transition: 'border-color 0.2s'
             }}
             onFocus={e => { if (!error) e.currentTarget.style.borderColor = 'var(--accent)'; }}
             onBlur={e => { if (!error) e.currentTarget.style.borderColor = 'var(--border-subtle)'; }}
