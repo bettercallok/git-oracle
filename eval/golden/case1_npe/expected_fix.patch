@@ -1,12 +1,12 @@
---- src/main/java/com/example/UserService.java
-+++ src/main/java/com/example/UserService.java
-@@ -10,6 +10,9 @@
+--- a/src/main/java/com/example/UserService.java
++++ b/src/main/java/com/example/UserService.java
+@@ -8,6 +8,9 @@
      }
- 
+
      public void processPayment(User user, PaymentInfo payment) {
 +        if (user == null) {
 +            throw new IllegalArgumentException("User cannot be null");
 +        }
-         // BUG: user can be null if fetched from DB incorrectly
          String userId = user.getId();
          paymentGateway.charge(userId, payment.getAmount());
+     }
