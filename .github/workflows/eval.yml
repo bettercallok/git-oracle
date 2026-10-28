@@ -1,0 +1,213 @@
+name: Golden Dataset Eval
+
+# Drives the golden dataset through the real pipeline (infra + all 6 Java
+# services + 7 Python agents + a real LLM) and fails if patch accuracy drops
+# below the threshold. Too slow and too costly in LLM tokens for every push, so
+# it runs nightly and on demand.
+#
+# Required repository configuration (Settings → Secrets and variables → Actions):
+#   secrets.EVAL_LLM_BASE_URL    full chat-completions URL, e.g.
+#                                https://api.groq.com/openai/v1/chat/completions
+#   secrets.EVAL_LLM_API_KEY     key for that endpoint
+#   secrets.EVAL_LLM_MODEL_NAME  model id served by that endpoint
+#   secrets.EVAL_FIXTURE_TOKEN   fine-grained PAT, Contents: read/write on the
+#                                fixture repo ONLY — it is force-pushed every run
+#   vars.EVAL_FIXTURE_REPO       owner/name of a PUBLIC repo that holds nothing
+#                                but the generated golden repo
+#
+# Why a GitHub fixture repo: /trigger only accepts https://github.com/... URLs
+# (RepoRefValidator), so the old file:///tmp/gitoracle-eval-repo was rejected
+# before anything ran.
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_score:
+        description: 'Minimum patch accuracy (0.0-1.0) to pass'
+        required: false
+        default: '0.75'
+  schedule:
+    - cron: '0 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    name: Golden Dataset Eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MIN_SCORE: ${{ inputs.min_score || '0.75' }}
+      EVAL_FIXTURE_REPO: ${{ vars.EVAL_FIXTURE_REPO }}
+    steps:
+      - name: Check configuration
+        env:
+          LLM_URL: ${{ secrets.EVAL_LLM_BASE_URL }}
+          LLM_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.EVAL_LLM_MODEL_NAME }}
+          FIXTURE_TOKEN: ${{ secrets.EVAL_FIXTURE_TOKEN }}
+        run: |
+          missing=""
+          [ -n "$LLM_URL" ]           || missing="$missing secrets.EVAL_LLM_BASE_URL"
+          [ -n "$LLM_KEY" ]           || missing="$missing secrets.EVAL_LLM_API_KEY"
+          [ -n "$LLM_MODEL" ]         || missing="$missing secrets.EVAL_LLM_MODEL_NAME"
+          [ -n "$FIXTURE_TOKEN" ]     || missing="$missing secrets.EVAL_FIXTURE_TOKEN"
+          [ -n "$EVAL_FIXTURE_REPO" ] || missing="$missing vars.EVAL_FIXTURE_REPO"
+          if [ -n "$missing" ]; then
+            echo "::error::Eval is not configured. Missing:$missing (see the header of .github/workflows/eval.yml)"
+            exit 1
+          fi
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: ai_core/requirements.txt
+
+      # start_local.sh activates ai_core/.venv for the agents.
+      - name: Install Python agent dependencies
+        run: |
+          python -m venv ai_core/.venv
+          ai_core/.venv/bin/pip install --upgrade pip
+          ai_core/.venv/bin/pip install -r ai_core/requirements.txt
+          pip install -r ai_core/requirements.txt
+
+      # Throwaway per-run credentials for everything internal; only the LLM
+      # settings come from secrets. Later lines override .env.example's
+      # placeholders when the file is sourced.
+      - name: Write .env
+        env:
+          LLM_URL: ${{ secrets.EVAL_LLM_BASE_URL }}
+          LLM_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.EVAL_LLM_MODEL_NAME }}
+        run: |
+          rnd() { openssl rand -hex 24; }
+          API_KEY=$(rnd)
+          echo "::add-mask::$API_KEY"
+          cp .env.example .env
+          {
+            echo ""
+            echo "# ── CI overrides ──"
+            echo "GITORACLE_API_KEY=$API_KEY"
+            echo "GITORACLE_LEGACY_API_KEY_ENABLED=true"
+            echo "GITORACLE_INTERNAL_TOKEN=$(rnd)"
+            echo "POSTGRES_PASSWORD=$(rnd)"
+            echo "REDIS_PASSWORD=$(rnd)"
+            echo "QDRANT_API_KEY=$(rnd)"
+            echo "GRAFANA_ADMIN_PASSWORD=$(rnd)"
+            echo "LANGFUSE_NEXTAUTH_SECRET=$(rnd)"
+            echo "LANGFUSE_SALT=$(rnd)"
+            echo "JWT_SECRET=$(rnd)$(rnd)"
+            echo "LLM_BASE_URL=$LLM_URL"
+            echo "LLM_API_KEY=$LLM_KEY"
+            echo "OPENAI_API_KEY=$LLM_KEY"
+            echo "LLM_MODEL=$LLM_MODEL"
+            echo "LLM_MODEL_NAME=$LLM_MODEL"
+          } >> .env
+          echo "GITORACLE_API_KEY=$API_KEY" >> "$GITHUB_ENV"
+
+      # Only what the pipeline needs — prometheus/grafana/langfuse/kafka-ui are
+      # observability and would just eat runner memory.
+      - name: Start infrastructure
+        run: |
+          docker compose -f docker-compose.infra.yml up -d --wait postgres neo4j redis qdrant kafka
+          docker compose -f docker-compose.infra.yml up --no-deps --exit-code-from neo4j-init neo4j-init
+          docker compose -f docker-compose.infra.yml up --no-deps --exit-code-from kafka-init kafka-init
+
+      - name: Build and start services
+        env:
+          SKIP_DASHBOARD: '1'
+        run: ./start_local.sh
+
+      # Readiness by log line, not by curling ports (see CLAUDE.md).
+      - name: Wait for services
+        run: |
+          deadline=$((SECONDS + 300))
+          for svc in api-gateway error-ingestor orchestrator test-runner github-bot git-forensics; do
+            until grep -q "Started .*Application" "java-backend/$svc.log" 2>/dev/null; do
+              if [ $SECONDS -gt $deadline ]; then
+                echo "::error::$svc did not start within 5 minutes"; tail -50 "java-backend/$svc.log"; exit 1
+              fi
+              sleep 3
+            done
+            echo "✅ $svc"
+          done
+          for agent in fixer planner investigator reviewer prompt_registry guardrails commit_analyst; do
+            until grep -q "Uvicorn running" "ai_core/$agent.log" 2>/dev/null; do
+              if [ $SECONDS -gt $deadline ]; then
+                echo "::error::$agent did not start within 5 minutes"; tail -50 "ai_core/$agent.log"; exit 1
+              fi
+              sleep 3
+            done
+            echo "✅ $agent"
+          done
+
+      - name: Build and publish golden repo
+        env:
+          EVAL_FIXTURE_PUSH_URL: https://x-access-token:${{ secrets.EVAL_FIXTURE_TOKEN }}@github.com/${{ vars.EVAL_FIXTURE_REPO }}.git
+        run: python eval/setup_test_repo.py
+
+      - name: Run evals
+        env:
+          EVAL_REPO_URL: https://github.com/${{ vars.EVAL_FIXTURE_REPO }}
+        run: python eval/run_evals.py --output eval_report.json
+
+      - name: Check regression baseline
+        run: python eval/check_regression.py --report eval_report.json --min-score "$MIN_SCORE"
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f eval_report.json ]; then
+            python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          r = json.load(open("eval_report.json"))
+          print("## Golden dataset eval\n")
+          print(f"| metric | value |\n|---|---|")
+          print(f"| patch accuracy (stored) | {r['patch_accuracy']:.0%} |")
+          print(f"| avg patch score | {r['avg_patch_score']:.0%} |")
+          print(f"| cause accuracy (always 0 via /trigger) | {r['cause_accuracy']:.0%} |")
+          print(f"| avg latency | {r['avg_latency_ms']} ms |")
+          print(f"| incomplete / ungraded | {r['cases_incomplete']} / {r['cases_ungraded']} |\n")
+          print("| case | status | score |\n|---|---|---|")
+          for c in r["cases"]:
+              print(f"| {c['case_id']} | {c['status']} | {c['patch_score']:.0%} |")
+          EOF
+          else
+            echo "No eval report was produced — see the step logs." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload report and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-and-logs
+          path: |
+            eval_report.json
+            java-backend/*.log
+            ai_core/*.log
+          if-no-files-found: ignore
+
+      - name: Stop services
+        if: always()
+        run: |
+          ./stop_local.sh || true
+          docker compose -f docker-compose.infra.yml down -v || true

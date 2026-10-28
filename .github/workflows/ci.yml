@@ -5,6 +5,17 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
+
+# Least privilege by default; jobs that need more ask for it themselves.
+permissions:
+  contents: read
+
+# A new push to the same PR/branch makes the previous run's result irrelevant —
+# cancel it instead of letting both burn runner minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # The pre-commit hook (.githooks/pre-commit) runs the same scan locally, but a
@@ -18,6 +29,10 @@ jobs:
   secret-scan:
     name: Secret Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -30,107 +45,151 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   python-lint:
-    name: Python Agent Lint & Typecheck
+    name: Python Lint & Typecheck
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: ai_core/requirements.txt
 
+      # mypy needs the agents' real dependencies installed to resolve their
+      # types (redis, asyncpg, gitpython, ...) — without them every import is
+      # Any and the check proves nothing.
       - name: Install Lint Tools
-        run: pip install ruff mypy
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ai_core/requirements.txt ruff==0.8.6 mypy==1.13.0
 
       - name: Run Ruff Lint
-        run: ruff check ai_core --select E9,F
+        run: ruff check ai_core cli/gitOracle eval --select E9,F
 
+      # Blocking. This was `|| true`, so it could never fail a build; the 17
+      # errors it was hiding have been fixed.
       - name: Run Mypy Typecheck
-        run: mypy ai_core/agents --ignore-missing-imports --no-error-summary || true
+        run: mypy ai_core/agents --ignore-missing-imports
 
-  java-integration-tests:
-    name: Java Services Integration Tests
+  python-agent-tests:
+    name: AI Agent Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: ai_core/requirements.txt
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ai_core/requirements.txt pytest==8.3.4
+
+      # No mock LLM server: no test in ai_core/tests/ calls an LLM, so the
+      # `mock_llm_server.py & sleep 2` that used to run here was dead weight.
+      - name: Run Pytest
+        run: pytest ai_core/tests/ --junitxml=pytest-report.xml
+
+      - name: Upload Test Report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: pytest-report.xml
+
+  java-tests:
+    name: Java Services Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: 'gradle'
 
-      - name: Run Spring Boot Testcontainers Tests
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # --no-daemon matches gradle.properties, which disables the daemon on
+      # purpose (see CLAUDE.md) — don't "optimise" it away here.
+      - name: Run Tests (unit + Testcontainers)
+        working-directory: java-backend
         run: |
-          cd java-backend
           chmod +x gradlew
           ./gradlew test --no-daemon
 
-  python-agent-tests:
-    name: AI Agent Tests (Mock LLM)
+      - name: Upload Test Reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-test-reports
+          path: |
+            java-backend/**/build/reports/tests/
+            java-backend/**/build/test-results/
+
+  # The dashboard was not built in CI at all, which is how it came to sit on
+  # main with TypeScript errors that failed `tsc -b` outright. `npm ci` also
+  # enforces the lockfile: it installs exactly what package-lock.json records
+  # and fails if package.json and the lock disagree.
+  dashboard-build:
+    name: Dashboard Lint & Build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install (locked)
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Lint
+        working-directory: dashboard
+        run: npm run lint
+
+      - name: Build
+        working-directory: dashboard
+        run: npm run build
+
+  cli-check:
+    name: CLI Install Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r ai_core/requirements.txt
-          pip install pytest fastapi uvicorn
-
-      - name: Run Mock LLM Server & Pytest
-        run: |
-          # Start the mock server in the background
-          python ai_core/tests/mock_llm_server.py &
-          
-          # Wait a second for the server to bind
-          sleep 2
-          
-          # Run pytest on the agents
-          pytest ai_core/tests/
-
-  eval-harness:
-    name: Golden Dataset Eval Harness
-    runs-on: ubuntu-latest
-    # Only run the full eval on pushes to main, to save budget/time on PRs
-    if: github.ref == 'refs/heads/main'
-    needs: [java-integration-tests, python-agent-tests]
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Eval Dependencies
-        run: pip install -r ai_core/requirements.txt requests
+      - name: Install CLI
+        run: pip install ./cli
 
-      - name: Run Evals
-        run: |
-          # Note: This step would require a real LLM endpoint (e.g. via secrets) 
-          # For now, it runs the mock script to generate a report
-          python eval/run_evals.py --output eval_report.json || true
+      - name: Run --help
+        run: gitOracle --help
 
-      - name: Check Regression Baseline
-        # Soft-fail: this harness needs a live stack (orchestrator on :8083 etc.)
-        # that CI doesn't stand up, so run_evals.py can't reach it and no report
-        # is ever produced. Surface that as a visible warning instead of failing
-        # every single commit on main for a gap unrelated to the commit's content.
-        continue-on-error: true
-        run: |
-          # Fails the build if the accuracy drops below 0.75
-          python eval/check_regression.py --report eval_report.json --min-score 0.75
+# The golden-dataset eval needs the whole stack and a real LLM, so it lives in
+# eval.yml (manual + nightly) instead of pretending to run here.

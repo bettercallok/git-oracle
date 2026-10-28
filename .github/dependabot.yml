@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # Keeps the workflows off deprecated action runtimes (the Node16-based
+  # setup-python@v4 / setup-java@v3 sat here unnoticed).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /dashboard
+    schedule:
+      interval: monthly
+    groups:
+      dashboard:
+        patterns: ["*"]
+
+  - package-ecosystem: gradle
+    directory: /java-backend
+    schedule:
+      interval: monthly
+    groups:
+      java:
+        patterns: ["*"]

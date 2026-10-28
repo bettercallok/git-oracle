@@ -142,12 +142,16 @@ cd ..
 # LLM inference uses external API (configured via LLM_BASE_URL in .env)
 # No local llama.cpp server needed.
 
-echo "🎨 Starting Dashboard UI..."
-cd dashboard
-npm install > /dev/null 2>&1
-nohup npm run dev </dev/null > dashboard.log 2>&1 &
-echo $! > dashboard.pid
-cd ..
+# SKIP_DASHBOARD=1 for headless runs (the CI eval workflow) — nothing there
+# looks at the UI, and npm install would add minutes for no reason.
+if [ "${SKIP_DASHBOARD:-0}" != "1" ]; then
+  echo "🎨 Starting Dashboard UI..."
+  cd dashboard
+  npm install > /dev/null 2>&1
+  nohup npm run dev </dev/null > dashboard.log 2>&1 &
+  echo $! > dashboard.pid
+  cd ..
+fi
 
 echo "✅ All services have been launched in the background!"
 echo "You can view the dashboard at: http://localhost:5173"

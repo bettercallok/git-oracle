@@ -6,9 +6,6 @@ from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
 from rich.panel import Panel
-from rich.align import Align
-from rich.text import Text
-from rich import print as rprint
 
 console = Console()
 API_URL = "http://localhost:8080/api/v1"
