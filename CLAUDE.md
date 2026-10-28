@@ -60,7 +60,9 @@ python eval/setup_test_repo.py --push <https-remote-with-token>   # builds /tmp/
 python eval/run_evals.py --repo-url https://github.com/<owner>/<fixture> --output eval_report.json   # needs services running; talks to the gateway with GITORACLE_API_KEY
 python eval/check_regression.py --report eval_report.json --min-score 0.75
 ```
-The golden repo must be on GitHub: `/trigger` rejects anything but `https://github.com/...` (`RepoRefValidator`), so a `file://` repo 400s. In CI this runs as `.github/workflows/eval.yml` (nightly + manual dispatch), configured by the `EVAL_LLM_*` / `EVAL_FIXTURE_TOKEN` secrets and the `EVAL_FIXTURE_REPO` variable listed in its header. `ci.yml` is the per-PR gate and does not run evals.
+The golden repo must be on GitHub: `/trigger` rejects anything but `https://github.com/...` (`RepoRefValidator`), so a `file://` repo 400s. In CI this runs as `.github/workflows/eval.yml` (nightly + manual dispatch), configured by the `EVAL_LLM_*` / `GITORACLE_APP_ID` / `GITORACLE_APP_PRIVATE_KEY` secrets and the `EVAL_FIXTURE_REPO` variable listed in its header. It authenticates as the GitOracle GitHub App (installed on the fixture repo) both to push the golden repo and inside the pipeline, so jobs can reach `PR_OPENED` there.
+
+GitHub App credentials are read from `java-backend/github-bot/.env`, not the root `.env`, by both github-bot (relative to its cwd) and the orchestrator's `GitHubClientService` (`$GITHUB_BOT_ENV_FILE`, else `<cwd>/github-bot/.env`, with cwd being `java-backend/` under `start_local.sh`). `ci.yml` is the per-PR gate and does not run evals.
 Note: `run_evals.py` drives cases through `POST /trigger` (the direct-fix shortcut), which never exercises the Investigator — so `rootCommit` is structurally never populated and `cause_accuracy` is reported but not folded into the stored `accuracy` metric. Exercising root-cause attribution requires driving the real webhook entry point instead (see "two entry points" below).
 
 ## Architecture

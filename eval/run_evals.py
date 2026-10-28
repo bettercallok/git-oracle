@@ -173,12 +173,12 @@ class EvalHarness:
         print(f"\n[{case_id}] Job finished with status {status} in {latency_ms}ms")
 
         # Grade whatever the pipeline actually produced, regardless of terminal
-        # state. The golden repo is a local file:// checkout, so the final PR step
-        # ALWAYS fails ("Repository name must be in format owner/repo") and the job
-        # ALWAYS lands on ESCALATED — even when the fix was generated and the tests
-        # passed. Gating on PR_OPENED therefore threw away every valid patch and
-        # scored a perfect run 0. Opening a GitHub PR is not what this harness
-        # measures; the quality of the patch is.
+        # state. Whether the final PR step succeeds depends on the GitHub App being
+        # configured for the fixture repo (eval.yml does this; a bare local run
+        # usually doesn't), and without it a job with a valid, test-passing patch
+        # lands on ESCALATED. Gating on PR_OPENED would throw that patch away and
+        # score it 0. Opening a PR is not what this harness measures; the quality
+        # of the patch is.
         agent_root_commit = data.get("rootCommit") or ""
         agent_patch = data.get("fixPatch") or ""
             

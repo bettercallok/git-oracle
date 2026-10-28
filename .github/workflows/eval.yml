@@ -10,14 +10,22 @@ name: Golden Dataset Eval
 #                                https://api.groq.com/openai/v1/chat/completions
 #   secrets.EVAL_LLM_API_KEY     key for that endpoint
 #   secrets.EVAL_LLM_MODEL_NAME  model id served by that endpoint
-#   secrets.EVAL_FIXTURE_TOKEN   fine-grained PAT, Contents: read/write on the
-#                                fixture repo ONLY — it is force-pushed every run
+#   secrets.GITORACLE_APP_ID     the GitOracle GitHub App's numeric App ID
+#   secrets.GITORACLE_APP_PRIVATE_KEY
+#                                the App's private key, exactly as GitHub gave
+#                                it (PKCS#1 is fine — converted here for Java)
 #   vars.EVAL_FIXTURE_REPO       owner/name of a PUBLIC repo that holds nothing
-#                                but the generated golden repo
+#                                but the generated golden repo, with the
+#                                GitOracle App installed on it
 #
 # Why a GitHub fixture repo: /trigger only accepts https://github.com/... URLs
 # (RepoRefValidator), so the old file:///tmp/gitoracle-eval-repo was rejected
 # before anything ran.
+#
+# The App is used for everything GitHub-side: a short-lived installation token
+# force-pushes the golden repo, and the same App credentials go to github-bot
+# and the orchestrator, so the pipeline really opens its PR on the fixture repo
+# and the eval exercises the full path through PR_OPENED. No personal token.
 
 on:
   workflow_dispatch:
@@ -50,18 +58,37 @@ jobs:
           LLM_URL: ${{ secrets.EVAL_LLM_BASE_URL }}
           LLM_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
           LLM_MODEL: ${{ secrets.EVAL_LLM_MODEL_NAME }}
-          FIXTURE_TOKEN: ${{ secrets.EVAL_FIXTURE_TOKEN }}
+          APP_ID: ${{ secrets.GITORACLE_APP_ID }}
+          APP_KEY: ${{ secrets.GITORACLE_APP_PRIVATE_KEY }}
         run: |
           missing=""
           [ -n "$LLM_URL" ]           || missing="$missing secrets.EVAL_LLM_BASE_URL"
           [ -n "$LLM_KEY" ]           || missing="$missing secrets.EVAL_LLM_API_KEY"
           [ -n "$LLM_MODEL" ]         || missing="$missing secrets.EVAL_LLM_MODEL_NAME"
-          [ -n "$FIXTURE_TOKEN" ]     || missing="$missing secrets.EVAL_FIXTURE_TOKEN"
+          [ -n "$APP_ID" ]            || missing="$missing secrets.GITORACLE_APP_ID"
+          [ -n "$APP_KEY" ]           || missing="$missing secrets.GITORACLE_APP_PRIVATE_KEY"
           [ -n "$EVAL_FIXTURE_REPO" ] || missing="$missing vars.EVAL_FIXTURE_REPO"
           if [ -n "$missing" ]; then
             echo "::error::Eval is not configured. Missing:$missing (see the header of .github/workflows/eval.yml)"
             exit 1
           fi
+          case "$EVAL_FIXTURE_REPO" in
+            */*) ;;
+            *) echo "::error::vars.EVAL_FIXTURE_REPO must be owner/name, got '$EVAL_FIXTURE_REPO'"; exit 1 ;;
+          esac
+          echo "FIXTURE_OWNER=${EVAL_FIXTURE_REPO%%/*}" >> "$GITHUB_ENV"
+          echo "FIXTURE_NAME=${EVAL_FIXTURE_REPO#*/}" >> "$GITHUB_ENV"
+
+      # Installation token scoped to the fixture repo only; revoked automatically
+      # when the job ends. Fails here if the App isn't installed on that repo.
+      - name: Get GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GITORACLE_APP_ID }}
+          private-key: ${{ secrets.GITORACLE_APP_PRIVATE_KEY }}
+          owner: ${{ env.FIXTURE_OWNER }}
+          repositories: ${{ env.FIXTURE_NAME }}
 
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -124,6 +151,26 @@ jobs:
           } >> .env
           echo "GITORACLE_API_KEY=$API_KEY" >> "$GITHUB_ENV"
 
+      # github-bot and the orchestrator read App credentials from
+      # java-backend/github-bot/.env (deliberately not the root .env — see
+      # GitHubClient.java). The Java loader needs PKCS#8; GitHub issues PKCS#1.
+      - name: Write GitHub App credentials
+        env:
+          APP_ID: ${{ secrets.GITORACLE_APP_ID }}
+          APP_KEY: ${{ secrets.GITORACLE_APP_PRIVATE_KEY }}
+          INSTALLATION_ID: ${{ steps.app-token.outputs.installation-id }}
+        run: |
+          umask 077
+          KEY="$RUNNER_TEMP/github-app.pem"
+          printf '%s\n' "$APP_KEY" > "$RUNNER_TEMP/github-app.original.pem"
+          openssl pkcs8 -topk8 -nocrypt -in "$RUNNER_TEMP/github-app.original.pem" -out "$KEY"
+          rm -f "$RUNNER_TEMP/github-app.original.pem"
+          {
+            echo "GITHUB_APP_ID=$APP_ID"
+            echo "GITHUB_INSTALLATION_ID=$INSTALLATION_ID"
+            echo "GITHUB_PRIVATE_KEY_PATH=$KEY"
+          } > java-backend/github-bot/.env
+
       # Only what the pipeline needs — prometheus/grafana/langfuse/kafka-ui are
       # observability and would just eat runner memory.
       - name: Start infrastructure
@@ -160,9 +207,22 @@ jobs:
             echo "✅ $agent"
           done
 
+      # Previous runs leave open PRs behind (their branches point at a history
+      # this run is about to force-push away), so close them first.
+      - name: Close stale fixture PRs
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          api="https://api.github.com/repos/$EVAL_FIXTURE_REPO"
+          for n in $(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$api/pulls?state=open&per_page=100" \
+                     | python -c 'import json,sys; print(" ".join(str(p["number"]) for p in json.load(sys.stdin)))'); do
+            curl -fsS -X PATCH -H "Authorization: Bearer $GH_TOKEN" "$api/pulls/$n" -d '{"state":"closed"}' >/dev/null
+            echo "closed #$n"
+          done
+
       - name: Build and publish golden repo
         env:
-          EVAL_FIXTURE_PUSH_URL: https://x-access-token:${{ secrets.EVAL_FIXTURE_TOKEN }}@github.com/${{ vars.EVAL_FIXTURE_REPO }}.git
+          EVAL_FIXTURE_PUSH_URL: https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/${{ vars.EVAL_FIXTURE_REPO }}.git
         run: python eval/setup_test_repo.py
 
       - name: Run evals
