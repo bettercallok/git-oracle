@@ -39,9 +39,8 @@ cd java-backend
 cd ai_core && source .venv/bin/activate
 pip install -r requirements.txt
 ruff check ai_core --select E9,F                    # lint (CI gate)
-mypy ai_core/agents --ignore-missing-imports         # typecheck (CI: non-blocking, `|| true`)
-python ai_core/tests/mock_llm_server.py &            # CI starts this first; several tests hit it
-pytest ai_core/tests/                                # full suite
+mypy ai_core/agents --ignore-missing-imports         # typecheck (CI gate, blocking)
+pytest ai_core/tests/                                # full suite (no test calls an LLM; mock_llm_server.py is not needed)
 pytest ai_core/tests/test_build_unified_diff.py -v   # single file
 pytest ai_core/tests/test_build_unified_diff.py::test_name -v
 ```
@@ -57,10 +56,11 @@ npm run lint      # oxlint
 
 ### Eval harness (root-cause + patch-quality regression measurement)
 ```bash
-python eval/setup_test_repo.py     # builds a throwaway local repo (/tmp/gitoracle-eval-repo) with 2 seeded bugs
-python eval/run_evals.py           # drives the golden dataset through the live pipeline, needs services running
+python eval/setup_test_repo.py --push <https-remote-with-token>   # builds /tmp/gitoracle-eval-repo (2 seeded bugs) + golden/, force-pushes it to a GitHub fixture repo
+python eval/run_evals.py --repo-url https://github.com/<owner>/<fixture> --output eval_report.json   # needs services running; talks to the gateway with GITORACLE_API_KEY
 python eval/check_regression.py --report eval_report.json --min-score 0.75
 ```
+The golden repo must be on GitHub: `/trigger` rejects anything but `https://github.com/...` (`RepoRefValidator`), so a `file://` repo 400s. In CI this runs as `.github/workflows/eval.yml` (nightly + manual dispatch), configured by the `EVAL_LLM_*` / `EVAL_FIXTURE_TOKEN` secrets and the `EVAL_FIXTURE_REPO` variable listed in its header. `ci.yml` is the per-PR gate and does not run evals.
 Note: `run_evals.py` drives cases through `POST /trigger` (the direct-fix shortcut), which never exercises the Investigator — so `rootCommit` is structurally never populated and `cause_accuracy` is reported but not folded into the stored `accuracy` metric. Exercising root-cause attribution requires driving the real webhook entry point instead (see "two entry points" below).
 
 ## Architecture

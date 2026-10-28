@@ -1,7 +1,7 @@
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Any, List, Optional
 import os
 import logging
 import re
@@ -173,7 +173,7 @@ async def execute_fix(request: FixerRequest):
     # git.Repo.clone_from's branch kwarg must be omitted (not passed as None) to
     # get the repo's default branch — passing branch=None explicitly is not the
     # same as not passing it.
-    clone_kwargs = {"branch": request.branch} if request.branch else {}
+    clone_kwargs: dict[str, Any] = {"branch": request.branch} if request.branch else {}
     if request.repo_url:
         fixer_src_path = request.repo_path.rstrip("/") + "-fixer-src"
         try:

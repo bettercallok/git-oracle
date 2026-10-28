@@ -1,5 +1,7 @@
+import argparse
 import json
 import os
+import sys
 import time
 import requests
 from pathlib import Path
@@ -10,7 +12,16 @@ from dotenv import load_dotenv
 # Load env variables from project root
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-API_URL = "http://localhost:8083/api/v1"
+# Through the gateway, not the orchestrator's own port: the orchestrator rejects
+# every request without X-Internal-Token, and TenantContext needs the tenant the
+# gateway resolves from X-API-Key. Hitting :8083 directly 401'd on the first call.
+API_URL = os.environ.get("EVAL_API_URL", "http://localhost:8080/api/v1").rstrip("/")
+API_HEADERS = {"X-API-Key": os.environ.get("GITORACLE_API_KEY", "")}
+
+# RepoRefValidator only accepts https://github.com/... — a file:// URL is
+# rejected with a 400 at /trigger. The golden repo has to live on GitHub;
+# setup_test_repo.py --push publishes it there.
+EVAL_REPO_URL = os.environ.get("EVAL_REPO_URL", "")
 
 # .env's LLM_BASE_URL is a full chat-completions endpoint (it is consumed that way
 # by ai_core/shared/structured_output.py), e.g.
@@ -43,16 +54,24 @@ POLL_TIMEOUT_SECONDS = int(os.environ.get("EVAL_POLL_TIMEOUT", "600"))
 
 class EvalResult(BaseModel):
     case_id: str
+    status: str
     cause_correct: bool
     patch_score: float
     latency_ms: int
+    graded: bool
 
 class EvalHarness:
-    def __init__(self, golden_dir: str = "golden"):
+    def __init__(self, repo_url: str, golden_dir: str = "golden"):
         self.golden_dir = Path(__file__).parent / golden_dir
-        self.repo_url = "file:///tmp/gitoracle-eval-repo"
+        self.repo_url = repo_url
 
-    def grade_patch(self, expected: str, actual: str) -> int:
+    def grade_patch(self, expected: str, actual: str) -> int | None:
+        """Judge score 0-10, or None if the judge call itself failed.
+
+        A failed grading call used to return 0, indistinguishable from "the agent
+        wrote a bad patch" — a misconfigured LLM key scored every run 0% with no
+        sign anything was wrong. None is counted separately in the report.
+        """
         if not expected and not actual: return 10
         if not actual: return 0
         
@@ -92,7 +111,7 @@ class EvalHarness:
             return min(max(int(digits), 0), 10) if digits else 0
         except Exception as e:
             print(f"Error grading patch: {e}")
-            return 0
+            return None
 
     async def run_case(self, case_id: str) -> EvalResult:
         print(f"\n[{case_id}] Starting eval run...")
@@ -111,11 +130,18 @@ class EvalHarness:
         
         # Trigger the pipeline
         print(f"[{case_id}] Triggering GitOracle pipeline...")
-        resp = requests.post(f"{API_URL}/trigger", json={
-            "repoUrl": self.repo_url,
-            "issueDescription": issue_description
-        })
-        resp.raise_for_status()
+        try:
+            resp = requests.post(f"{API_URL}/trigger", headers=API_HEADERS, timeout=30, json={
+                "repoUrl": self.repo_url,
+                "issueDescription": issue_description
+            })
+            error = None if resp.ok else f"HTTP {resp.status_code} {resp.text[:300]}"
+        except requests.RequestException as e:
+            error = str(e)
+        if error:
+            print(f"[{case_id}] Trigger failed: {error}")
+            return EvalResult(case_id=case_id, status="TRIGGER_FAILED", cause_correct=False,
+                              patch_score=0.0, latency_ms=0, graded=False)
         job_id = resp.json().get("jobId")
         
         # Poll for completion
@@ -135,7 +161,7 @@ class EvalHarness:
                 break
             time.sleep(2)
             try:
-                job_resp = requests.get(f"{API_URL}/jobs/{job_id}")
+                job_resp = requests.get(f"{API_URL}/jobs/{job_id}", headers=API_HEADERS, timeout=10)
                 job_resp.raise_for_status()
                 data = job_resp.json()
                 status = data.get("state", "UNKNOWN")
@@ -164,18 +190,20 @@ class EvalHarness:
         
         return EvalResult(
             case_id=case_id,
+            status=status,
             cause_correct=cause_correct,
-            patch_score=score / 10.0,
-            latency_ms=latency_ms
+            patch_score=(score or 0) / 10.0,
+            latency_ms=latency_ms,
+            graded=score is not None,
         )
 
-    async def run_all(self):
+    async def run_all(self) -> dict | None:
         print("Starting GitOracle Automated Evaluation...")
         cases = sorted([d.name for d in self.golden_dir.iterdir() if d.is_dir()])
         
         if not cases:
             print("No test cases found in golden dataset.")
-            return
+            return None
             
         results = []
         for case in cases:
@@ -211,16 +239,55 @@ class EvalHarness:
         
         print("Saving results to database...")
         try:
-            requests.post(f"{API_URL}/evals", json={
+            save = requests.post(f"{API_URL}/evals", headers=API_HEADERS, timeout=10, json={
                 "goldenDatasetVersion": "v1.0",
                 "accuracy": float(accuracy),
                 "casesTotal": len(results),
                 "avgLatencyMs": int(avg_latency)
             })
+            save.raise_for_status()
             print("Results saved successfully.")
         except Exception as e:
             print(f"Failed to save results: {e}")
 
+        # check_regression.py reads "accuracy" from this.
+        return {
+            "accuracy": accuracy,
+            "patch_accuracy": patch_accuracy,
+            "cause_accuracy": cause_accuracy,
+            "avg_patch_score": avg_score,
+            "avg_latency_ms": avg_latency,
+            "cases_total": len(results),
+            "cases_incomplete": sum(1 for r in results if r.status not in TERMINAL_STATES),
+            "cases_ungraded": sum(1 for r in results if not r.graded),
+            "cases": [r.model_dump() for r in results],
+        }
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run the golden dataset through the live pipeline")
+    parser.add_argument("--output", help="Write the JSON report here (read by check_regression.py)")
+    parser.add_argument("--repo-url", default=EVAL_REPO_URL,
+                        help="https://github.com/... URL of the golden repo (default: $EVAL_REPO_URL)")
+    args = parser.parse_args()
+
+    if not args.repo_url:
+        print("No golden repo URL: pass --repo-url or set EVAL_REPO_URL (see setup_test_repo.py --push).")
+        return 2
+
+    report = asyncio.run(EvalHarness(args.repo_url).run_all())
+    if report is None:
+        return 1
+    if args.output:
+        Path(args.output).write_text(json.dumps(report, indent=2))
+        print(f"Report written to {args.output}")
+
+    # A case that never finished, or a judge that never answered, is a broken
+    # run, not a low score — fail loudly instead of letting it pass as a number.
+    if report["cases_incomplete"] or report["cases_ungraded"]:
+        print(f"FAILURE: {report['cases_incomplete']} case(s) did not finish, "
+              f"{report['cases_ungraded']} could not be graded")
+        return 1
+    return 0
+
 if __name__ == "__main__":
-    harness = EvalHarness()
-    asyncio.run(harness.run_all())
+    sys.exit(main())

@@ -34,9 +34,21 @@ def _default_redis_url() -> str:
 DATABASE_URL = os.getenv("DATABASE_URL") or _default_database_url()
 REDIS_URL = os.getenv("REDIS_URL") or _default_redis_url()
 
-# Global state
-db_pool = None
-redis_client = None
+# Global state, set by lifespan(). Read through _db()/_redis() so a request that
+# somehow arrives before startup fails with a clear error instead of an
+# AttributeError on None.
+db_pool: asyncpg.Pool | None = None
+redis_client: redis.Redis | None = None
+
+def _db() -> asyncpg.Pool:
+    if db_pool is None:
+        raise RuntimeError("prompt_registry: database pool not initialised")
+    return db_pool
+
+def _redis() -> redis.Redis:
+    if redis_client is None:
+        raise RuntimeError("prompt_registry: redis client not initialised")
+    return redis_client
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -82,14 +94,16 @@ async def get_active_prompt(agent: str, key: str) -> dict:
 
 async def _resolve_active_prompt(agent: str, key: str) -> tuple[str, int | None]:
     cache_key = f"prompt:{agent}:{key}"
-    cached = await redis_client.get(cache_key)
+    cached = await _redis().get(cache_key)
     if cached:
         # Cache the version alongside the content so a cache hit can still
         # attribute usage; older cache entries without it simply miss on version.
-        cached_version = await redis_client.get(f"{cache_key}:version")
-        return cached.decode("utf-8"), int(cached_version) if cached_version else None
+        cached_version = await _redis().get(f"{cache_key}:version")
+        # decode_responses is off, so redis returns bytes.
+        text = cached.decode("utf-8") if isinstance(cached, bytes) else cached
+        return text, int(cached_version) if cached_version else None
 
-    async with db_pool.acquire() as conn:
+    async with _db().acquire() as conn:
         row = await conn.fetchrow(
             "SELECT content, version FROM prompt_version "
             "WHERE agent_name=$1 AND prompt_key=$2 AND is_active=true",
@@ -99,13 +113,13 @@ async def _resolve_active_prompt(agent: str, key: str) -> tuple[str, int | None]
             raise HTTPException(status_code=404, detail="Active prompt not found")
 
         content, version = row["content"], row["version"]
-        await redis_client.set(cache_key, content, ex=300)  # 5 min cache
-        await redis_client.set(f"{cache_key}:version", str(version), ex=300)
+        await _redis().set(cache_key, content, ex=300)  # 5 min cache
+        await _redis().set(f"{cache_key}:version", str(version), ex=300)
         return content, version
 
 @app.post("/prompts/{agent}/{key}/version")
 async def create_version(agent: str, key: str, prompt: PromptVersion):
-    async with db_pool.acquire() as conn:
+    async with _db().acquire() as conn:
         # Get next version number
         row = await conn.fetchrow(
             "SELECT COALESCE(MAX(version), 0) + 1 as next_v FROM prompt_version WHERE agent_name=$1 AND prompt_key=$2",
@@ -121,7 +135,7 @@ async def create_version(agent: str, key: str, prompt: PromptVersion):
 
 @app.put("/prompts/{agent}/{key}/activate/{version}")
 async def activate_version(agent: str, key: str, version: int):
-    async with db_pool.acquire() as conn:
+    async with _db().acquire() as conn:
         # Deactivate current
         await conn.execute(
             "UPDATE prompt_version SET is_active=false WHERE agent_name=$1 AND prompt_key=$2",
@@ -138,7 +152,7 @@ async def activate_version(agent: str, key: str, version: int):
         # Hot-reload: invalidate cache. Must drop the version key too, or callers
         # keep attributing their work to the previously active version.
         cache_key = f"prompt:{agent}:{key}"
-        await redis_client.delete(cache_key, f"{cache_key}:version")
+        await _redis().delete(cache_key, f"{cache_key}:version")
         
     return {"status": "activated", "version": version}
 

@@ -1,7 +1,7 @@
+import argparse
 import os
 import shutil
 import subprocess
-import json
 from pathlib import Path
 
 REPO_PATH = "/tmp/gitoracle-eval-repo"
@@ -15,7 +15,9 @@ def setup_repo():
         shutil.rmtree(REPO_PATH)
     
     os.makedirs(REPO_PATH)
-    run_git("init")
+    # Pin the branch name: git's default (master vs main) depends on the
+    # machine's init.defaultBranch, and --push publishes "main".
+    run_git("init", "-b", "main")
     # Setup dummy user
     run_git("config", "user.email", "test@gitoracle.ai")
     run_git("config", "user.name", "Test User")
@@ -232,5 +234,29 @@ public class BatchProcessor {
 
     print(f"Setup complete. Repo at {REPO_PATH}, Golden dataset at {GOLDEN_DIR}")
 
+def push_repo(remote_url: str):
+    """Force-push the freshly built repo to a GitHub fixture repo.
+
+    The pipeline only clones https://github.com/... URLs (RepoRefValidator), so
+    a local file:// repo can't be evaluated. Every run rebuilds history from
+    scratch, so the push has to be --force; the expected_root_commit SHAs just
+    written are the ones being pushed. remote_url may carry a token, so the
+    CalledProcessError (whose message repeats the full command line) is never
+    allowed to propagate as-is.
+    """
+    try:
+        run_git("push", "--force", remote_url, "main")
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or b"").decode(errors="replace").replace(remote_url, "<fixture remote>")
+        raise SystemExit(f"git push to the fixture remote failed (exit {e.returncode}):\n{stderr}") from None
+    print("Pushed golden repo to the fixture remote.")
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Build the golden eval repo and dataset")
+    parser.add_argument("--push", metavar="REMOTE_URL", default=os.environ.get("EVAL_FIXTURE_PUSH_URL"),
+                        help="Force-push the repo here, e.g. https://x-access-token:TOKEN@github.com/owner/repo.git "
+                             "(default: $EVAL_FIXTURE_PUSH_URL)")
+    args = parser.parse_args()
     setup_repo()
+    if args.push:
+        push_repo(args.push)
