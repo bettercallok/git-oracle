@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
 from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 from shared.internal_auth import require_internal_token
+from shared.job_events import report_event
 from shared.body_limit import BodySizeLimitMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -173,8 +174,15 @@ async def handle_investigate_job(payload: dict):
     
     try:
         # 1. Execute AI Investigation
+        await report_event(job_id, "investigator", "Ranking recent commits as candidate causes")
         investigation_result = await investigate(request)
         logger.info(f"Investigation Complete for job {job_id}")
+        await report_event(
+            job_id, "investigator",
+            f"Ranked {len(investigation_result.ranked_causes)} candidate cause(s), "
+            f"confidence {investigation_result.confidence_score:.2f}",
+            details={"affected_files": investigation_result.affected_files[:20]},
+        )
         
         # 2. Publish to Planner Agent
         producer = KafkaEventProducer()

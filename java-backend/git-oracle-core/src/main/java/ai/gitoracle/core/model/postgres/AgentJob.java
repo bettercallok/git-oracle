@@ -2,7 +2,9 @@ package ai.gitoracle.core.model.postgres;
 
 import jakarta.persistence.*;
 import lombok.Data;
+import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.UpdateTimestamp;
 import org.hibernate.type.SqlTypes;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -45,11 +47,31 @@ public class AgentJob {
     @Column(nullable = false)
     private String repo;
 
+    /**
+     * The commit the Investigator ranked as the cause. Null until it answers.
+     *
+     * <p>This used to be pre-filled with the clone's HEAD as a placeholder, so a
+     * job whose Investigator never responded still showed a "root cause" nobody
+     * had found — and the eval scored it correct whenever the bug commit happened
+     * to be HEAD. HEAD now lives in {@link #baseCommit}.
+     */
+    @Column(name = "root_commit")
+    private String rootCommit;
+
+    /** HEAD of the clone the pipeline worked from (what the patch applies to). */
+    @Column(name = "base_commit")
+    private String baseCommit;
+
     @Column(nullable = false)
     private String state;
 
-    @Column(name = "root_commit")
-    private String rootCommit;
+    /** Why the job is in its current state, e.g. the escalation or failure reason. */
+    @Column(name = "state_reason", columnDefinition = "TEXT")
+    private String stateReason;
+
+    /** When {@link #state} last changed — what the stalled-job watchdog reads. */
+    @Column(name = "state_changed_at")
+    private OffsetDateTime stateChangedAt;
 
     // TEXT, not the default varchar(255): this holds a full unified diff, which
     // exceeds 255 chars for all but the most trivial patch. Persisting it against
@@ -105,9 +127,16 @@ public class AgentJob {
     @Column(name = "agent_version")
     private String agentVersion;
 
-    @Column(name = "created_at", insertable = false, updatable = false)
+    // Both were insertable=false/updatable=false with no DB default, so on a schema
+    // Hibernate created, every row had NULL timestamps: the job list's ORDER BY
+    // created_at was meaningless and nothing could tell how long a job had been
+    // stuck. Hibernate now writes them (the DEFAULT covers rows inserted by SQL).
+    @CreationTimestamp
+    @Column(name = "created_at", updatable = false,
+            columnDefinition = "timestamptz DEFAULT CURRENT_TIMESTAMP")
     private OffsetDateTime createdAt;
 
-    @Column(name = "updated_at", insertable = false, updatable = false)
+    @UpdateTimestamp
+    @Column(name = "updated_at", columnDefinition = "timestamptz DEFAULT CURRENT_TIMESTAMP")
     private OffsetDateTime updatedAt;
 }

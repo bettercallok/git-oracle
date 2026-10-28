@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import { stateMeta, isRunning, isSucceeded, needsAttention } from '../utils/jobState';
 
 const formatTime = (raw: string | null | undefined): string => {
   if (!raw) return '—';
@@ -39,7 +40,7 @@ interface Job {
   repo: string;
   commitHash: string;
   errorMessage: string;
-  state: string; // QUEUED, RUNNING, INVESTIGATING, FIXING, TESTING, REGENERATING, PR_OPENED, SUCCESS, FAILED, ESCALATED
+  state: string; // see utils/jobState.ts
   createdAt: string;
   tokensUsed: number;
 }
@@ -52,19 +53,8 @@ const fetchJobs = async (): Promise<Job[]> => {
 const SPARKLINE = [2, 4, 3, 7, 5, 8, 4, 6, 9, 5, 8, 7];
 
 const statusBadge = (state: string) => {
-  const map: Record<string, string> = { 
-    SUCCESS: 'badge-success', 
-    PR_OPENED: 'badge-success',
-    RUNNING: 'badge-warning', 
-    INVESTIGATING: 'badge-warning',
-    FIXING: 'badge-warning',
-    TESTING: 'badge-warning',
-    REGENERATING: 'badge-warning',
-    QUEUED: 'badge-info',
-    FAILED: 'badge-danger', 
-    ESCALATED: 'badge-danger' 
-  };
-  return <span className={`badge ${map[state] || 'badge-info'}`}>{state || 'UNKNOWN'}</span>;
+  const meta = stateMeta(state);
+  return <span className={`badge ${meta.badge}`}>{state || 'UNKNOWN'}</span>;
 };
 
 // --- Animations ---
@@ -86,9 +76,9 @@ export default function JobFeed() {
   });
 
   const total = useNumberTicker(jobs.length, 1000);
-  const success = useNumberTicker(jobs.filter(j => ['SUCCESS', 'PR_OPENED'].includes(j.state)).length, 1000);
-  const running = useNumberTicker(jobs.filter(j => ['RUNNING', 'INVESTIGATING', 'TESTING', 'REGENERATING'].includes(j.state)).length, 1000);
-  const failed = useNumberTicker(jobs.filter(j => ['FAILED', 'ESCALATED'].includes(j.state)).length, 1000);
+  const success = useNumberTicker(jobs.filter(j => isSucceeded(j.state)).length, 1000);
+  const running = useNumberTicker(jobs.filter(j => isRunning(j.state)).length, 1000);
+  const failed = useNumberTicker(jobs.filter(j => needsAttention(j.state)).length, 1000);
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">

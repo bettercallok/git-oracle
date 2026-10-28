@@ -17,6 +17,7 @@ from shared.structured_output import llm_structured
 from shared.memory import AgentMemory
 from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 from shared.internal_auth import require_internal_token
+from shared.job_events import report_event, ERROR
 from shared.body_limit import BodySizeLimitMiddleware
 from shared.safe_paths import UnsafePathError, partition_safe, resolve_within, safe_read_text
 
@@ -276,6 +277,8 @@ async def execute_fix(request: FixerRequest):
     # ReAct Loop (Up to 3 attempts to save time during testing, normally 5)
     for attempt in range(3):
         logger.info(f"Fixer Attempt {attempt + 1}")
+        await report_event(request.job_id, "fixer", f"Attempt {attempt + 1} of 3 started",
+                           details={"attempt": attempt + 1})
         
         # 2. Retrieve Episodic Memory
         try:
@@ -343,11 +346,17 @@ Do not write a diff yourself — the unified diff is computed automatically from
             )
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
+            await report_event(request.job_id, "fixer", f"Attempt {attempt + 1}: LLM call failed: {e}",
+                               type=ERROR, details={"attempt": attempt + 1})
             continue
 
         diff_text = build_unified_diff(local_src_path, edit.file_path, edit.search, edit.replace)
         if diff_text is None:
             logger.warning(f"Rejected edit to {edit.file_path} — asking the model to retry")
+            await report_event(request.job_id, "fixer",
+                               f"Attempt {attempt + 1}: edit to {edit.file_path} rejected — search text not "
+                               "found verbatim, or unbalanced braces",
+                               details={"attempt": attempt + 1, "file": edit.file_path})
             hint = (
                 f"WARNING: Your previous edit to {edit.file_path} was rejected — either the 'search' text didn't "
                 "match exactly (copy it verbatim, including whitespace/indentation, from the source context above), "
@@ -373,6 +382,9 @@ Do not write a diff yourself — the unified diff is computed automatically from
         patch_hash = hashlib.sha256(patch.diff.encode('utf-8')).hexdigest()
         if patch_hash in seen_patches:
             logger.warning("Loop detected! Agent generated the exact same patch.")
+            await report_event(request.job_id, "fixer",
+                               f"Attempt {attempt + 1}: produced the same patch as before — retrying",
+                               details={"attempt": attempt + 1})
             hint = "WARNING: Your previous patch failed the tests. You MUST try a fundamentally different approach. Do not output the same diff."
             continue
         
@@ -417,6 +429,10 @@ Do not write a diff yourself — the unified diff is computed automatically from
                 request.branch or ""
             )
         
+        await report_event(request.job_id, "fixer",
+                           f"Attempt {attempt + 1}: self-test {'passed' if tests_passed else 'failed'} "
+                           f"({edit.file_path})",
+                           details={"attempt": attempt + 1, "file": edit.file_path, "passed": bool(tests_passed)})
         if tests_passed:
             # 7. Store successful fix in episodic memory
             try:
