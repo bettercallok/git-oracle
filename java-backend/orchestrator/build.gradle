@@ -4,9 +4,9 @@ plugins {
 
 dependencies {
     implementation project(':git-oracle-core')
-    implementation 'org.kohsuke:github-api:1.318'
-    implementation 'io.github.cdimascio:dotenv-java:3.0.0'
-    implementation 'org.eclipse.jgit:org.eclipse.jgit:6.9.0.202403050737-r'
+    implementation 'org.kohsuke:github-api:1.330'
+    implementation 'io.github.cdimascio:dotenv-java:3.2.0'
+    implementation 'org.eclipse.jgit:org.eclipse.jgit:7.8.0.202609011348-r'
     implementation 'org.springframework.boot:spring-boot-starter-web'
     // Bean Validation. Every request body in this module was a raw
     // Map<String,Object> read with getOrDefault, so a missing field became a
