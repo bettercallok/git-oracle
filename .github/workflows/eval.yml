@@ -51,6 +51,11 @@ jobs:
     timeout-minutes: 60
     env:
       MIN_SCORE: ${{ inputs.min_score || '0.75' }}
+      # Per case. /trigger runs the full pipeline (investigate → plan → up to 3
+      # fix attempts → Maven tests in Docker, cold cache on a fresh runner), which
+      # can outrun the script's 10-minute default. 2 cases × 15 min + ~5 min
+      # setup stays well inside the job's 60-minute timeout.
+      EVAL_POLL_TIMEOUT: '900'
       EVAL_FIXTURE_REPO: ${{ vars.EVAL_FIXTURE_REPO }}
     steps:
       - name: Check configuration
@@ -244,7 +249,7 @@ jobs:
           print(f"| metric | value |\n|---|---|")
           print(f"| patch accuracy (stored) | {r['patch_accuracy']:.0%} |")
           print(f"| avg patch score | {r['avg_patch_score']:.0%} |")
-          print(f"| cause accuracy (always 0 via /trigger) | {r['cause_accuracy']:.0%} |")
+          print(f"| cause accuracy (not stored; see run_evals.py) | {r['cause_accuracy']:.0%} |")
           print(f"| avg latency | {r['avg_latency_ms']} ms |")
           print(f"| incomplete / ungraded | {r['cases_incomplete']} / {r['cases_ungraded']} |\n")
           print("| case | status | score |\n|---|---|---|")

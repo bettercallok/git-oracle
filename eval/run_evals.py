@@ -219,13 +219,14 @@ class EvalHarness:
         # patch_accuracy is what gets stored and shown on the dashboard: did the
         # agent produce a fix the LLM judge grades >= 7/10 against the golden fix.
         #
-        # cause_accuracy is reported but NOT folded into the stored number, because
-        # this harness drives the pipeline through POST /trigger, which publishes
-        # straight to job.events.fix and never runs the Investigator — so rootCommit
-        # is never populated and cause_accuracy is structurally 0. The old combined
-        # metric ANDed the two together, which meant the stored accuracy could never
-        # exceed 0 no matter how good the patches were. Exercising root-cause
-        # attribution requires driving the webhook entry point instead.
+        # cause_accuracy is reported but NOT folded into the stored number. /trigger
+        # defaults to investigateFirst=true, so the Investigator does run and its
+        # top-ranked cause overwrites rootCommit. But the orchestrator first sets
+        # rootCommit to the clone's HEAD as a placeholder, and case2's bug commit
+        # IS HEAD, so case2 scores "correct" even if the Investigator never answers.
+        # Until the dataset has cases whose cause is not HEAD, the number is too
+        # easy to trust. (The old combined metric ANDed the two together, which
+        # also capped stored accuracy at whatever this flawed signal allowed.)
         patch_accuracy = sum(1 for r in results if r.patch_score >= 0.7) / len(results)
         cause_accuracy = sum(1 for r in results if r.cause_correct) / len(results)
 
@@ -233,7 +234,7 @@ class EvalHarness:
         print(f"Average Patch Score: {avg_score * 100:.1f}%")
         print(f"Patch Accuracy (score >= 7/10): {patch_accuracy * 100:.1f}%   <- stored as 'accuracy'")
         print(f"Cause Accuracy (correct root commit): {cause_accuracy * 100:.1f}%"
-              f"   (always 0 via /trigger — Investigator is bypassed)")
+              f"   (not stored: case2's cause is HEAD, which the placeholder matches)")
         print(f"Average Latency: {avg_latency}ms")
         accuracy = patch_accuracy
         
