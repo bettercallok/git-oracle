@@ -42,7 +42,14 @@ public class GitHubClientService {
         // were always winning over github-bot/.env's real ones, regardless of which
         // .directory() this pointed at — confirmed live via the Commit Explorer failing
         // with "GitHub API error: ./secrets/github-app.pem".
-        java.util.Map<String, String> botEnv = readEnvFile("/Users/omkhatri/Git Oracle/java-backend/github-bot/.env");
+        //
+        // The path was hardcoded to one developer's checkout, so on any other machine
+        // (CI included) the file was never found and every GitHub call failed.
+        // start_local.sh launches this service from java-backend/, so the default
+        // resolves to java-backend/github-bot/.env; GITHUB_BOT_ENV_FILE overrides it.
+        String botEnvFile = System.getenv().getOrDefault("GITHUB_BOT_ENV_FILE",
+            System.getProperty("user.dir") + "/github-bot/.env");
+        java.util.Map<String, String> botEnv = readEnvFile(botEnvFile);
         this.appId           = botEnv.get("GITHUB_APP_ID");
         this.installationId  = botEnv.get("GITHUB_INSTALLATION_ID");
         this.privateKeyPath  = botEnv.get("GITHUB_PRIVATE_KEY_PATH");
