@@ -130,6 +130,7 @@ Constrain the Fixer Agent by setting 'max_lines_to_change' to the absolute minim
 # ==========================================
 import asyncio
 from shared.kafka_consumer import KafkaEventConsumer
+from shared import topics
 from shared.kafka_producer import get_producer, close_producer
 from shared.health import add_health_route
 
@@ -205,14 +206,14 @@ async def handle_planner_job(payload: dict):
             "target_repo": target_repo,
             "branch": branch,
         }
-        await producer.publish("job.events.fix", fix_payload)
+        await producer.publish(topics.JOB_FIX, fix_payload)
         logger.info(f"Published job.events.fix for job {job_id}")
     except Exception as e:
         # Same gap as the investigator: a job sits in TESTING/INVESTIGATING forever
         # if planning throws, because nothing downstream ever runs to move it on.
         logger.error(f"Planning failed for job {job_id}: {e}")
         try:
-            await get_producer().publish("job-escalated", {
+            await get_producer().publish(topics.JOB_ESCALATED, {
                 "jobId": job_id,
                 "reason": f"Planner Agent failed: {e}",
                 "confidenceScore": float(getattr(investigation, "confidence_score", 0.0) or 0.0),
@@ -224,7 +225,7 @@ async def handle_planner_job(payload: dict):
 # Created at import so /health can report on it. The task is kept on app.state:
 # asyncio holds only a weak reference to tasks, and this one used to be
 # fire-and-forget.
-_consumer = KafkaEventConsumer(topic="job.events.plan", group_id="planner-agent-group")
+_consumer = KafkaEventConsumer(topic=topics.JOB_PLAN, group_id="planner-agent-group")
 add_health_route(app, "planner", _consumer)
 
 @app.on_event("startup")
@@ -237,5 +238,7 @@ async def shutdown_event():
     await close_producer()
 
 if __name__ == "__main__":
+    from shared.config import check_startup_config
+    check_startup_config("planner", needs_llm=True)
     import uvicorn
     uvicorn.run(app, host=os.getenv("BIND_HOST", "127.0.0.1"), port=9007)

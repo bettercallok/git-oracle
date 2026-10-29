@@ -140,7 +140,7 @@ pg-shell:
 neo4j-init:
 	@echo "🔄 Re-running Neo4j schema init..."
 	@source .env && docker exec git-oracle-neo4j \
-		cypher-shell -u neo4j -p $${POSTGRES_PASSWORD} \
+		cypher-shell -u neo4j -p $${NEO4J_PASSWORD} \
 		-a bolt://localhost:7687 \
 		--file /neo4j-init/init.cypher
 	@echo "✅ Neo4j schema applied."

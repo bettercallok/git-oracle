@@ -270,7 +270,12 @@ every override a job can carry — `human_instructions`, `target_repo`, `branch`
    ```bash
    cp .env.example .env
    ```
-   fill in `LLM_BASE_URL` / `LLM_MODEL_NAME` / `OPENAI_API_KEY` for your chosen inference provider, `GITORACLE_API_KEY` (the dashboard's login key), and github app credentials if you want real PR creation.
+   fill in, all in this one root `.env`:
+   - `LLM_BASE_URL` (the **full** chat-completions URL, e.g. `https://api.groq.com/openai/v1/chat/completions`), `LLM_MODEL_NAME`, `OPENAI_API_KEY`
+   - `GITORACLE_API_KEY` (the dashboard's login key) and `GITORACLE_INTERNAL_TOKEN` (any long random string — services refuse to start without it)
+   - for real PR creation, your GitHub App: `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, and `GITHUB_PRIVATE_KEY_PATH`. Put the key in `secrets/` (gitignored) in **PKCS#8** form — GitHub gives you PKCS#1, convert once with `openssl pkcs8 -topk8 -nocrypt -in downloaded.pem -out secrets/github-app.pem`. A relative path is resolved from the repo root.
+
+   (`java-backend/github-bot/.env` used to hold the GitHub App settings; it still works, with a deprecation warning, but the root `.env` takes priority.)
 
 3. **launch infrastructure**
    ```bash

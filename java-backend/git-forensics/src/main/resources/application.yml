@@ -15,7 +15,7 @@ spring:
       # credential.
       password: ${NEO4J_PASSWORD}
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_HOST:127.0.0.1}:${KAFKA_PORT:9092}   # same vars as every other service
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer

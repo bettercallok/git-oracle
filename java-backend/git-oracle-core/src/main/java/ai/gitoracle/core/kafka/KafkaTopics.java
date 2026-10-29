@@ -22,6 +22,19 @@ public final class KafkaTopics {
      *  produced by the Error Ingestor's GitHub webhook handler. */
     public static final String GITHUB_PR_EVENTS = "github-pr-events";
 
+    // ── Agent dispatch (Java <-> Python agents) ──────────────────────────
+    // Dot-named, unlike the topics above, and until now only raw string
+    // literals copied across OrchestratorService, DashboardController and
+    // WebhookController. The Python side lists the same names in
+    // ai_core/shared/topics.py; tests/test_topics_match_java.py fails if the
+    // two drift apart.
+    public static final String JOB_INVESTIGATE = "job.events.investigate";
+    public static final String JOB_PLAN = "job.events.plan";
+    public static final String JOB_FIX = "job.events.fix";
+    public static final String JOB_REVIEW_RECEIVED = "job.events.review.received";
+    /** Messages an agent could not process, with the error (ai_core/shared/kafka_consumer.py). */
+    public static final String JOB_DLQ = "job.events.dlq";
+
     public static final String JOB_ESCALATED = "job-escalated";
     public static final String FEEDBACK_RECEIVED = "feedback-received";
     public static final String AUDIT_EVENT = "audit-event";

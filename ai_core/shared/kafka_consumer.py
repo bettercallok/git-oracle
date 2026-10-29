@@ -24,12 +24,13 @@ from typing import Any, Awaitable, Callable, Optional
 
 from aiokafka import AIOKafkaConsumer
 
+from shared import topics
 from shared.kafka_producer import get_producer
 
 logger = logging.getLogger(__name__)
 
-DLQ_TOPIC = "job.events.dlq"
-ESCALATION_TOPIC = "job-escalated"
+DLQ_TOPIC = topics.JOB_DLQ
+ESCALATION_TOPIC = topics.JOB_ESCALATED
 
 Handler = Callable[[dict], Awaitable[Any]]
 

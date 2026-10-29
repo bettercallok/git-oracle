@@ -169,6 +169,8 @@ async def analyze(request: AnalyzeRequest):
 # ─── Entry Point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    from shared.config import check_startup_config
+    check_startup_config("commit_analyst", needs_llm=True)
     import uvicorn
     port = int(os.environ.get("PORT", 9004))
     logger.info("Starting Commit Analyst agent on port %d", port)
