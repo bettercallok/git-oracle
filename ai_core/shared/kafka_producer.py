@@ -1,6 +1,8 @@
 import os
 import json
 import logging
+from typing import Optional
+
 from aiokafka import AIOKafkaProducer
 
 logger = logging.getLogger(__name__)
@@ -11,7 +13,7 @@ class KafkaEventProducer:
         kafka_port = os.getenv("KAFKA_PORT", "9092")
         self.bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", f"{kafka_host}:{kafka_port}")
         self.producer = None
-        
+
     async def _get_producer(self):
         if self.producer is None:
             self.producer = AIOKafkaProducer(
@@ -26,9 +28,30 @@ class KafkaEventProducer:
         producer = await self._get_producer()
         await producer.send_and_wait(topic, payload, headers=[("__TypeId__", b"java.util.Map"), ("__KeyTypeId__", b"java.lang.String"), ("__ContentTypeId__", b"java.lang.String")])
         logger.debug(f"Published event to {topic}: {payload}")
-        
+
     async def stop(self):
         """Stops the producer."""
         if self.producer:
             await self.producer.stop()
             self.producer = None
+
+
+# One producer per process. Handlers used to construct a fresh KafkaEventProducer
+# per message and never stop it, leaking a broker connection each time — the
+# "Unclosed AIOKafkaProducer" errors in every agent log of the CI eval runs.
+_shared: Optional[KafkaEventProducer] = None
+
+
+def get_producer() -> KafkaEventProducer:
+    global _shared
+    if _shared is None:
+        _shared = KafkaEventProducer()
+    return _shared
+
+
+async def close_producer() -> None:
+    """Call on shutdown."""
+    global _shared
+    if _shared is not None:
+        await _shared.stop()
+        _shared = None

@@ -71,3 +71,6 @@ id_ed25519
 *.log
 *.log*
 *.gz
+
+# start_local.sh restart loops: present while stop_local.sh is stopping them
+.gitoracle-stopping

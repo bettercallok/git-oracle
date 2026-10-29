@@ -132,7 +132,8 @@ Rank them and provide a causal_effect_score (0.0 to 1.0) and reasoning for each.
 # ==========================================
 import asyncio
 from shared.kafka_consumer import KafkaEventConsumer
-from shared.kafka_producer import KafkaEventProducer
+from shared.kafka_producer import get_producer, close_producer
+from shared.health import add_health_route
 
 async def handle_investigate_job(payload: dict):
     logger.info(f"Received Kafka event for investigation: {payload}")
@@ -185,7 +186,7 @@ async def handle_investigate_job(payload: dict):
         )
         
         # 2. Publish to Planner Agent
-        producer = KafkaEventProducer()
+        producer = get_producer()
         plan_payload = {
             "job_id": job_id,
             "repo_url": payload.get("repo_url", ""),
@@ -208,7 +209,7 @@ async def handle_investigate_job(payload: dict):
         # quota was exhausted, with no indication anywhere in the UI that they were dead.
         logger.error(f"Investigation event failed for job {job_id}: {e}")
         try:
-            await KafkaEventProducer().publish("job-escalated", {
+            await get_producer().publish("job-escalated", {
                 "jobId": job_id,
                 "reason": f"Investigator Agent failed: {e}",
                 "confidenceScore": 0.0,
@@ -217,11 +218,20 @@ async def handle_investigate_job(payload: dict):
         except Exception as publish_error:
             logger.error(f"Could not escalate job {job_id}: {publish_error}")
 
+# Created at import so /health can report on it. The task is kept on app.state:
+# asyncio holds only a weak reference to tasks, and this one used to be
+# fire-and-forget.
+_consumer = KafkaEventConsumer(topic="job.events.investigate", group_id="investigator-agent-group")
+add_health_route(app, "investigator", _consumer)
+
 @app.on_event("startup")
 async def startup_event():
-    # Start the Kafka consumer in a background task
-    consumer = KafkaEventConsumer(topic="job.events.investigate", group_id="investigator-agent-group")
-    asyncio.create_task(consumer.consume(handle_investigate_job))
+    app.state.consumer_task = asyncio.create_task(_consumer.consume(handle_investigate_job))
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    app.state.consumer_task.cancel()
+    await close_producer()
 
 if __name__ == "__main__":
     import uvicorn
