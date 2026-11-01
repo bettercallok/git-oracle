@@ -47,10 +47,15 @@ try:
     _lf = Langfuse(
         public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
         secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-        host=f"http://localhost:{os.environ.get('LANGFUSE_PORT', '3002')}",
+        # LANGFUSE_HOST when it's a full URL (a Langfuse elsewhere: a container
+        # network, a hosted instance). .env.example has always set it to the bare
+        # hostname "localhost" for other uses, so a value without a scheme keeps
+        # the old http://localhost:<LANGFUSE_PORT> instead of breaking tracing.
+        host=(os.environ.get("LANGFUSE_HOST", "") if os.environ.get("LANGFUSE_HOST", "").startswith(("http://", "https://"))
+              else f"http://localhost:{os.environ.get('LANGFUSE_PORT', '3002')}"),
     )
     logger.info("Langfuse observability initialised ✓")
-except Exception as _e:
+except Exception as _e:  # noqa: BLE001 — tracing is optional; any init failure disables it
     _lf = None
     logger.warning(f"Langfuse not available — tracing disabled: {_e}")
 
@@ -71,7 +76,7 @@ async def _report_tokens(job_id: str, tokens_used: int, agent_name: str) -> None
                 json={"tokensUsed": tokens_used, "agentName": agent_name},
                 headers={"X-Internal-Token": os.environ.get("GITORACLE_INTERNAL_TOKEN", "")}
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — token reporting is best-effort
         logger.warning(f"Failed to report tokens to Orchestrator: {e}")
 
 
@@ -107,7 +112,7 @@ def _trace_to_langfuse(
             end_time=end_time,
         )
         _lf.flush()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — tracing must never fail an LLM call
         logger.warning(f"Langfuse tracing error (non-fatal): {e}")
 
 

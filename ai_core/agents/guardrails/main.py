@@ -2,7 +2,6 @@ import logging
 import os
 import sys
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 from injection_detector import detect_injection
@@ -17,13 +16,9 @@ from shared.body_limit import BodySizeLimitMiddleware
 app = FastAPI(title="GitOracle Guardrails Engine", dependencies=[Depends(require_internal_token)])
 app.add_middleware(BodySizeLimitMiddleware)
 add_health_route(app, "guardrails")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORS middleware: agents are called server-to-server only (orchestrator,
+# other agents), never from a browser. allow_origins=["*"] with
+# allow_credentials=True let any web page a developer visited call them.
 
 class TextPayload(BaseModel):
     text: str

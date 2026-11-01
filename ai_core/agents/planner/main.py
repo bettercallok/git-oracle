@@ -1,6 +1,5 @@
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing import List
 from enum import Enum
 import os
@@ -21,13 +20,9 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="GitOracle Planner Agent", version="1.0", dependencies=[Depends(require_internal_token)])
 app.add_middleware(BodySizeLimitMiddleware)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORS middleware: agents are called server-to-server only (orchestrator,
+# other agents), never from a browser. allow_origins=["*"] with
+# allow_credentials=True let any web page a developer visited call them.
 
 class FixStrategy(str, Enum):
     REWRITE_FUNCTION   = "rewrite_function"
@@ -76,7 +71,7 @@ async def create_plan(request: PlannerRequest):
     try:
         facts = await memory.retrieve_facts(request.repo_path, query_text, top_k=3)
         architectural_rules = "\n".join([f"- {f['fact']} (Confidence: {f['confidence']})" for f in facts])
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — memory is optional context; it must not block planning
         logger.warning(f"Could not retrieve semantic memory: {e}")
         architectural_rules = "No specific architectural rules found."
 
@@ -121,17 +116,17 @@ Constrain the Fixer Agent by setting 'max_lines_to_change' to the absolute minim
             agent_name="planner_agent"
         )
         return result
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — HTTP boundary: logged and returned as a 500
         logger.error(f"Planning failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ==========================================
 # Phase 3: Real Kafka Event Integration
 # ==========================================
-import asyncio
 from shared.kafka_consumer import KafkaEventConsumer
 from shared import topics
-from shared.kafka_producer import get_producer, close_producer
+from shared.kafka_producer import get_producer
+from shared.consumer_lifespan import run_consumer_with_app
 from shared.health import add_health_route
 
 async def handle_planner_job(payload: dict):
@@ -149,7 +144,7 @@ async def handle_planner_job(payload: dict):
     investigation_dict = payload.get("investigation_result", {})
     try:
         investigation = InvestigationResult(**investigation_dict)
-    except Exception as e:
+    except (ValidationError, TypeError) as e:
         logger.error(f"Failed to parse investigation_result: {e}")
         # Fallback to a mock if the pipeline is incomplete or data is missing
         investigation = InvestigationResult(
@@ -208,7 +203,7 @@ async def handle_planner_job(payload: dict):
         }
         await producer.publish(topics.JOB_FIX, fix_payload)
         logger.info(f"Published job.events.fix for job {job_id}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — any planning failure escalates the job (below)
         # Same gap as the investigator: a job sits in TESTING/INVESTIGATING forever
         # if planning throws, because nothing downstream ever runs to move it on.
         logger.error(f"Planning failed for job {job_id}: {e}")
@@ -219,23 +214,13 @@ async def handle_planner_job(payload: dict):
                 "confidenceScore": float(getattr(investigation, "confidence_score", 0.0) or 0.0),
             })
             logger.info(f"Published job-escalated for job {job_id}")
-        except Exception as publish_error:
+        except Exception as publish_error:  # noqa: BLE001 — escalation publish failed; JobWatchdog still escalates the stalled job
             logger.error(f"Could not escalate job {job_id}: {publish_error}")
 
-# Created at import so /health can report on it. The task is kept on app.state:
-# asyncio holds only a weak reference to tasks, and this one used to be
-# fire-and-forget.
+# Created at import so /health can report on it; runs for the app's lifetime.
 _consumer = KafkaEventConsumer(topic=topics.JOB_PLAN, group_id="planner-agent-group")
 add_health_route(app, "planner", _consumer)
-
-@app.on_event("startup")
-async def startup_event():
-    app.state.consumer_task = asyncio.create_task(_consumer.consume(handle_planner_job))
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    app.state.consumer_task.cancel()
-    await close_producer()
+run_consumer_with_app(app, _consumer, handle_planner_job)
 
 if __name__ == "__main__":
     from shared.config import check_startup_config

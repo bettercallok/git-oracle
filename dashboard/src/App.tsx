@@ -1,22 +1,26 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, ShieldAlert, GitMerge, FileWarning, BarChart2, BrainCircuit, Settings, TerminalSquare, Wand2, GitFork, GitCommit, Sun, Moon } from 'lucide-react';
-import JobFeed from './pages/JobFeed';
-import JobDetail from './pages/JobDetail';
-import EscalationQueue from './pages/EscalationQueue';
-import RiskHeatmap from './pages/RiskHeatmap';
-import EvalDashboard from './pages/EvalDashboard';
-import LangfuseEmbed from './pages/LangfuseEmbed';
-import AdminSettings from './pages/AdminSettings';
-import Simulator from './pages/Simulator';
-import FixCommand from './pages/FixCommand';
-import RepoManager from './pages/RepoManager';
-import CommitExplorer from './pages/CommitExplorer';
-import CommitDetail from './pages/CommitDetail';
 import Login from './pages/Login';
 import { RepoProvider, useRepos } from './context/RepoContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
+
+// Pages load on first visit instead of all up front: every page used to be in
+// one 548 KB bundle. Login stays eager — the auth guard renders it immediately.
+const JobFeed = lazy(() => import('./pages/JobFeed'));
+const JobDetail = lazy(() => import('./pages/JobDetail'));
+const EscalationQueue = lazy(() => import('./pages/EscalationQueue'));
+const RiskHeatmap = lazy(() => import('./pages/RiskHeatmap'));
+const EvalDashboard = lazy(() => import('./pages/EvalDashboard'));
+const LangfuseEmbed = lazy(() => import('./pages/LangfuseEmbed'));
+const AdminSettings = lazy(() => import('./pages/AdminSettings'));
+const Simulator = lazy(() => import('./pages/Simulator'));
+const FixCommand = lazy(() => import('./pages/FixCommand'));
+const RepoManager = lazy(() => import('./pages/RepoManager'));
+const CommitExplorer = lazy(() => import('./pages/CommitExplorer'));
+const CommitDetail = lazy(() => import('./pages/CommitDetail'));
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
@@ -42,7 +46,9 @@ function PageWrapper({ children }: { children: React.ReactNode }) {
       exit={{ opacity: 0, y: -10 }}
       transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
     >
-      {children}
+      <Suspense fallback={<div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</div>}>
+        {children}
+      </Suspense>
     </motion.div>
   );
 }
