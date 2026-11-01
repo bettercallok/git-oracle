@@ -1,0 +1,10 @@
+--- a/src/main/java/com/example/RateLimiter.java
++++ b/src/main/java/com/example/RateLimiter.java
+@@ -9,6 +9,6 @@
+ 
+     /** True if one more request is allowed after {@code requestsSoFar}. */
+     public boolean allow(int requestsSoFar) {
+-        return requestsSoFar <= limit;
++        return requestsSoFar < limit;
+     }
+ }

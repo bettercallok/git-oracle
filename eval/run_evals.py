@@ -224,9 +224,10 @@ class EvalHarness:
             graded=score is not None,
         )
 
-    async def run_all(self) -> dict | None:
+    async def run_all(self, only: set[str] | None = None) -> dict | None:
         print("Starting GitOracle Automated Evaluation...")
-        cases = sorted([d.name for d in self.golden_dir.iterdir() if d.is_dir()])
+        cases = sorted(d.name for d in self.golden_dir.iterdir()
+                       if d.is_dir() and (not only or d.name in only))
         
         if not cases:
             print("No test cases found in golden dataset.")
@@ -246,13 +247,13 @@ class EvalHarness:
         # patch_accuracy is what gets stored and shown on the dashboard: did the
         # agent produce a fix the LLM judge grades >= 7/10 against the golden fix.
         #
-        # cause_accuracy is reported but NOT folded into the stored number yet.
-        # /trigger defaults to investigateFirst=true, so the Investigator runs and
-        # rootCommit is its top-ranked cause — or null if it never answered (it
-        # used to be pre-filled with HEAD, which made case2, whose bug commit IS
-        # HEAD, score "correct" for free). With two cases and one of them HEAD, the
-        # signal is still too thin to gate on. (The old combined metric ANDed the
-        # two together, which also capped stored accuracy at this weak signal.)
+        # cause_accuracy: did the Investigator's top-ranked commit match the commit
+        # that introduced the bug. It's now a real signal and gated separately
+        # (check_regression.py --min-cause-score): rootCommit is no longer
+        # pre-filled with HEAD (it used to score a bug-at-HEAD case "correct" even
+        # when the Investigator never answered), and no golden case's bug commit
+        # is HEAD any more. Kept out of the stored "accuracy" so the dashboard's
+        # history stays comparable.
         patch_accuracy = sum(1 for r in results if r.patch_score >= 0.7) / len(results)
         cause_accuracy = sum(1 for r in results if r.cause_correct) / len(results)
 
@@ -260,7 +261,7 @@ class EvalHarness:
         print(f"Average Patch Score: {avg_score * 100:.1f}%")
         print(f"Patch Accuracy (score >= 7/10): {patch_accuracy * 100:.1f}%   <- stored as 'accuracy'")
         print(f"Cause Accuracy (correct root commit): {cause_accuracy * 100:.1f}%"
-              f"   (not stored yet: too few cases)")
+              f"   (gated separately)")
         print(f"Average Latency: {avg_latency}ms")
         accuracy = patch_accuracy
         
@@ -293,6 +294,7 @@ class EvalHarness:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the golden dataset through the live pipeline")
     parser.add_argument("--output", help="Write the JSON report here (read by check_regression.py)")
+    parser.add_argument("--cases", help="Comma-separated case ids to run (default: all), e.g. case1_npe,case3_string_eq")
     parser.add_argument("--repo-url", default=EVAL_REPO_URL,
                         help="https://github.com/... URL of the golden repo (default: $EVAL_REPO_URL)")
     args = parser.parse_args()
@@ -301,7 +303,8 @@ def main() -> int:
         print("No golden repo URL: pass --repo-url or set EVAL_REPO_URL (see setup_test_repo.py --push).")
         return 2
 
-    report = asyncio.run(EvalHarness(args.repo_url).run_all())
+    only = {c.strip() for c in args.cases.split(",")} if args.cases else None
+    report = asyncio.run(EvalHarness(args.repo_url).run_all(only))
     if report is None:
         return 1
     if args.output:

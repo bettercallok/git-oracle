@@ -42,7 +42,7 @@ cd ai_core && source .venv/bin/activate
 pip install -r requirements.txt
 ruff check ai_core --select E9,F                    # lint (CI gate)
 mypy ai_core/agents --ignore-missing-imports         # typecheck (CI gate, blocking)
-pytest ai_core/tests/                                # full suite (no test calls an LLM; mock_llm_server.py is not needed)
+pytest ai_core/tests/                                # full suite; no test calls a real LLM (test_agents_pipeline.py runs investigate→plan→fix in-process with mock_llm_server.py's answers)
 pytest ai_core/tests/test_build_unified_diff.py -v   # single file
 pytest ai_core/tests/test_build_unified_diff.py::test_name -v
 ```
@@ -58,18 +58,20 @@ npm run lint      # oxlint
 
 ### Eval harness (root-cause + patch-quality regression measurement)
 ```bash
-python eval/setup_test_repo.py --push <https-remote-with-token>   # builds /tmp/gitoracle-eval-repo + golden/, force-pushes main and one case/<id> branch per bug to a GitHub fixture repo
-python eval/run_evals.py --repo-url https://github.com/<owner>/<fixture> --output eval_report.json   # needs services running; talks to the gateway with GITORACLE_API_KEY
-python eval/check_regression.py --report eval_report.json --min-score 0.75
+python eval/setup_test_repo.py --push <https-remote-with-token>   # builds /tmp/gitoracle-eval-repo + golden/ (6 cases), force-pushes main and one case/<id> branch per bug to a GitHub fixture repo
+python eval/run_evals.py --repo-url https://github.com/<owner>/<fixture> --output eval_report.json [--cases case1_npe,...]   # needs services running; talks to the gateway with GITORACLE_API_KEY
+python eval/check_regression.py --report eval_report.json --min-score 0.75 --min-cause-score 0.5
 ```
 Each case is on its own branch (`main` = correct code, all tests pass → bug commit → unrelated follow-up commit), because the test runner runs the whole suite: with every bug on one branch, no single fix could pass. The judge needs a large `max_tokens` — reasoning models return an empty reply at small limits. The golden repo must be on GitHub: `/trigger` rejects anything but `https://github.com/...` (`RepoRefValidator`), so a `file://` repo 400s. In CI this runs as `.github/workflows/eval.yml` (nightly + manual dispatch), configured by the `EVAL_LLM_*` / `GITORACLE_APP_ID` / `GITORACLE_APP_PRIVATE_KEY` secrets and the `EVAL_FIXTURE_REPO` variable listed in its header. It authenticates as the GitOracle GitHub App (installed on the fixture repo) both to push the golden repo and inside the pipeline, so jobs can reach `PR_OPENED` there.
 
 GitHub App credentials (`GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_PRIVATE_KEY_PATH`) live in the root `.env`. `GitHubAppCredentials` (one copy in orchestrator, one in github-bot — github-bot can't depend on core; change both) takes all three from the environment when `GITHUB_APP_ID` is a real value (blank and `your_*` placeholders don't count), else from the deprecated `java-backend/github-bot/.env`, never mixing the two. `start_local.sh` makes a relative key path absolute (services run from `java-backend/`). `GITORACLE_REQUIRE_GITHUB_APP=true` turns missing credentials into a startup failure (the CI eval sets it).
 
 Startup fails fast on missing config: every Java service refuses to boot without `GITORACLE_INTERNAL_TOKEN` (a `@PostConstruct` in each `InternalAuthFilter` / the gateway's `TenantContextFilter`; `@SpringBootTest`s set `gitoracle.internal-token` in their `properties`), and every Python agent's `__main__` calls `shared/config.check_startup_config` (internal token; `LLM_BASE_URL` must be the full `/chat/completions` URL). `ci.yml` is the per-PR gate and does not run evals.
-Note: `run_evals.py` drives cases through `POST /trigger`, which **defaults to `investigateFirst=true`** — so evals run the full investigate → plan → fix pipeline, not the direct-fix shortcut (pass `"investigateFirst": false` for that). `cause_accuracy` is reported but not yet folded into the stored `accuracy` (two cases, one of whose bug commit is HEAD, is too thin a signal to gate on).
+Note: `run_evals.py` drives cases through `POST /trigger`, which **defaults to `investigateFirst=true`** — so evals run the full investigate → plan → fix pipeline, not the direct-fix shortcut (pass `"investigateFirst": false` for that). Two gates: patch accuracy (LLM judge ≥7/10 vs the golden patch; stored as `accuracy`) and cause accuracy (the investigator's top commit == the bug commit; `--min-cause-score`). Cases are defined in `setup_test_repo.py`'s `CASES`: each bug is an edit of correct code (`_edit`), so the golden patch is generated (bug → correct) rather than hand-written, and `followups` keep the bug commit below HEAD.
 
-The Kafka broker stores every topic **lz4-compressed** (`KAFKA_COMPRESSION_TYPE`, `create-topics.sh`) regardless of producer settings, so Python consumers need `aiokafka[lz4]` (cramjam on aiokafka ≥0.14 — a bare `lz4` package does nothing). Without it an agent's consumer task dies on its first message and jobs sit in `INVESTIGATING` until timeout; `tests/test_kafka_codecs.py` guards this. Note the job state also stays `INVESTIGATING` through planning and fixing — the orchestrator only advances it at `TESTING`.
+`ci.yml`'s `pipeline-e2e` job runs eval case1 through the real stack with the LLM replaced by `ai_core/tests/mock_llm_server.py` (port 18089; it answers by the schema `title` that `llm_structured` puts in the system message) and asserts the timeline and patch (`scripts/ci/e2e_check.py`). It needs the fixture repo's `case/npe` branch, which the Golden Dataset Eval publishes. Both workflows share `scripts/ci/write_env.sh` and `scripts/ci/start_stack.sh`.
+
+The Kafka broker stores every topic **lz4-compressed** (`KAFKA_COMPRESSION_TYPE`, `create-topics.sh`) regardless of producer settings, so Python consumers need `aiokafka[lz4]` (cramjam on aiokafka ≥0.14 — a bare `lz4` package does nothing). Without it an agent's consumer can't decode a single message; `tests/test_kafka_codecs.py` guards this.
 
 ## Architecture
 
@@ -81,11 +83,12 @@ The **Java→Python agent dispatch hops** (`job.events.investigate`, `job.events
 ### Two entry points into the pipeline, both real
 1. **`error-ingested` → investigator → planner → fixer** (the "full pipeline"). Triggered by a github webhook, a sentry-style report, or the dashboard's "ask to fix" with the investigate toggle on. `OrchestratorService.handleErrorIngested` clones the repo (at a specific branch if requested), records HEAD as `baseCommit`, and dispatches to the investigator — whose top-ranked cause becomes `rootCommit`. `rootCommit` stays null until then; it is never pre-filled with HEAD.
 
-### Job state goes through `JobStateService`, and every change is on the timeline
-Never call `job.setState(...)` directly. `JobStateService.transition` (or `transitionFrom`, for listeners that may see events out of order) refuses to move a job out of `PR_OPENED`/`FAILED` except to `REGENERATING`, stamps `stateChangedAt`, stores the reason in `stateReason`, and appends a `JobEvent` (table `job_event`). The normal path is QUEUED → INVESTIGATING → PLANNING (plan-snoop listener) → FIXING (fix-snoop listener) → TESTING → PR_OPENED, with FAILED/ESCALATED carrying a reason. Agents add progress notes with `ai_core/shared/job_events.py: report_event(...)` → `POST /api/v1/jobs/{id}/events`; the dashboard reads `GET /api/v1/jobs/{id}/events`. State labels/colours for the UI live in one place: `dashboard/src/utils/jobState.ts`.
 2. **`job.events.fix` directly** (the "direct-fix" shortcut, `POST /api/v1/trigger` with `"investigateFirst": false`). Skips investigation with a synthesized plan — ~5x cheaper/faster, correct when a human already knows the fix, but no root-cause data and no file context beyond what's parsed from the instruction text. `/trigger` without that flag takes entry point 1 instead (that's what the eval harness does).
 
 Every per-request override a job can carry — `human_instructions`, `target_repo`, `branch` — is threaded explicitly through every Kafka hop end-to-end rather than looked up from the DB, since these are per-request overrides, not part of a job's durable identity. If you add a new override, thread it the same way (event payload field → every downstream consumer reads it with a default) rather than persisting it on `AgentJob`.
+
+### Job state goes through `JobStateService`, and every change is on the timeline
+Never call `job.setState(...)` directly. `JobStateService.transition` (or `transitionFrom`, for listeners that may see events out of order) refuses to move a job out of `PR_OPENED`/`FAILED` except to `REGENERATING`, stamps `stateChangedAt`, stores the reason in `stateReason`, and appends a `JobEvent` (table `job_event`). The normal path is QUEUED → INVESTIGATING → PLANNING (plan-snoop listener) → FIXING (fix-snoop listener) → TESTING → PR_OPENED, with FAILED/ESCALATED carrying a reason. Agents add progress notes with `ai_core/shared/job_events.py: report_event(...)` → `POST /api/v1/jobs/{id}/events`; the dashboard reads `GET /api/v1/jobs/{id}/events`. State labels/colours for the UI live in one place: `dashboard/src/utils/jobState.ts`.
 
 ### Python agents are dual-mode: FastAPI server + Kafka consumer in one process
 The investigator, planner and fixer each start a Kafka consumer task in their `@app.on_event("startup")` hook (topic name hardcoded per-agent, e.g. fixer listens on `job.events.fix`), via `shared/kafka_consumer.py`. That loop never exits silently: a message whose handler raises is copied to `job.events.dlq` with the error and its job is escalated (`job-escalated`, `source` = agent), then the loop moves on; if the consumer itself dies it is rebuilt with backoff. Every agent serves `GET /health` (no token needed; 503 when its consumer is down). Use `shared/kafka_producer.get_producer()` — one producer per process — never a fresh `KafkaEventProducer()` per message.

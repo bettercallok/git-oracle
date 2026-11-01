@@ -1,0 +1,10 @@
+--- a/src/main/java/com/example/AuthService.java
++++ b/src/main/java/com/example/AuthService.java
+@@ -2,6 +2,6 @@
+ 
+ public class AuthService {
+     public boolean isAdmin(String role) {
+-        return role == "admin";
++        return "admin".equals(role);
+     }
+ }
