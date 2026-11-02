@@ -147,6 +147,10 @@ jobs:
             echo "GRAFANA_ADMIN_PASSWORD=$(rnd)"
             echo "LANGFUSE_NEXTAUTH_SECRET=$(rnd)"
             echo "LANGFUSE_SALT=$(rnd)"
+            # Langfuse isn't started here; empty keys turn tracing off instead of
+            # failing (and blocking on a flush) on every LLM call.
+            echo "LANGFUSE_PUBLIC_KEY="
+            echo "LANGFUSE_SECRET_KEY="
             echo "JWT_SECRET=$(rnd)$(rnd)"
             echo "LLM_BASE_URL=$LLM_URL"
             echo "LLM_API_KEY=$LLM_KEY"

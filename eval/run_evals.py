@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import requests
@@ -100,18 +101,38 @@ class EvalHarness:
                     "model": LLM_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.0,
-                    "max_tokens": 10
+                    # Was 10. Reasoning models (e.g. openai/gpt-oss-120b on Groq)
+                    # spend tokens thinking before they answer, so they hit the
+                    # limit with an EMPTY reply (finish_reason="length"), which was
+                    # scored 0. Confirmed: the same correct fix scored 0 at 10 tokens
+                    # and 10/10 at 1024 (131 tokens used). Every patch in the second
+                    # CI eval run scored 0 this way, including one whose PR opened
+                    # after passing the real tests.
+                    "max_tokens": 1024
                 },
-                timeout=30
+                timeout=60
             )
             resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"].strip()
-            # Extract first number
-            digits = ''.join(c for c in content if c.isdigit())
-            return min(max(int(digits), 0), 10) if digits else 0
+            choice = resp.json()["choices"][0]
+            content = (choice["message"].get("content") or "").strip()
+            score = self._parse_score(content)
+            if score is None:
+                # No usable answer is a grading failure, not a score of 0.
+                print(f"Judge gave no score (finish_reason={choice.get('finish_reason')!r}, reply={content[:100]!r})")
+            return score
         except Exception as e:
             print(f"Error grading patch: {e}")
             return None
+
+    @staticmethod
+    def _parse_score(content: str) -> int | None:
+        """First integer 0-10 in the judge's reply.
+
+        This used to join every digit in the reply, so "7/10" became 710 (and
+        clamped to 10), and "Score: 3 out of 10" became 310 → 10.
+        """
+        match = re.search(r"\b(10|[0-9])\b", content)
+        return int(match.group(1)) if match else None
 
     async def run_case(self, case_id: str) -> EvalResult:
         print(f"\n[{case_id}] Starting eval run...")
@@ -126,6 +147,11 @@ class EvalHarness:
         with open(case_path / "bug_description.txt") as f:
             issue_description = f.read().strip()
 
+        # Each case lives on its own branch (see setup_test_repo.py), so one
+        # case's failing test can't fail another case's fix.
+        branch_file = case_path / "branch.txt"
+        branch = branch_file.read_text().strip() if branch_file.exists() else ""
+
         start_time = time.time()
         
         # Trigger the pipeline
@@ -133,7 +159,8 @@ class EvalHarness:
         try:
             resp = requests.post(f"{API_URL}/trigger", headers=API_HEADERS, timeout=30, json={
                 "repoUrl": self.repo_url,
-                "issueDescription": issue_description
+                "issueDescription": issue_description,
+                "branch": branch,
             })
             error = None if resp.ok else f"HTTP {resp.status_code} {resp.text[:300]}"
         except requests.RequestException as e:

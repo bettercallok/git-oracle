@@ -1,85 +1,64 @@
+"""Builds the golden eval repo and dataset.
+
+Layout of the generated repo (pushed to the fixture repo with --push):
+
+    main        base commit: correct code, every test passes
+    case/<id>   main → the commit that INTRODUCES case <id>'s bug → an unrelated
+                follow-up commit
+
+Each case gets its own branch because the test runner runs the repo's whole
+suite. When both bugs sat on one main, no fix for case2 could ever pass: case1's
+still-failing test failed the suite. That is exactly how the second CI eval run
+escalated a case2 fix whose own change was fine.
+
+The follow-up commit keeps the bug commit from being HEAD. The orchestrator used
+to pre-fill rootCommit with HEAD, so a case whose bug was HEAD scored a correct
+root cause even when the investigator never answered. Case1's old "bug commit"
+also only added a comment; the NPE was there from the first commit, so an
+investigator that blamed the first commit was arguably right and scored wrong.
+Now the bug commit is the one that actually removes the guard.
+
+Each case directory in golden/ holds bug_description.txt, expected_root_commit.txt,
+expected_fix.patch and branch.txt (read by run_evals.py).
+"""
 import argparse
 import os
 import shutil
 import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Dict
 
 REPO_PATH = "/tmp/gitoracle-eval-repo"
 GOLDEN_DIR = Path(__file__).parent / "golden"
+PKG = "src/main/java/com/example"
+TEST_PKG = "src/test/java/com/example"
+
 
 def run_git(*args, cwd=REPO_PATH):
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
 
-def setup_repo():
-    if os.path.exists(REPO_PATH):
-        shutil.rmtree(REPO_PATH)
-    
-    os.makedirs(REPO_PATH)
-    # Pin the branch name: git's default (master vs main) depends on the
-    # machine's init.defaultBranch, and --push publishes "main".
-    run_git("init", "-b", "main")
-    # Setup dummy user
-    run_git("config", "user.email", "test@gitoracle.ai")
-    run_git("config", "user.name", "Test User")
 
-    if os.path.exists(GOLDEN_DIR):
-        shutil.rmtree(GOLDEN_DIR)
-    os.makedirs(GOLDEN_DIR)
+def git_out(*args) -> str:
+    return subprocess.check_output(["git", *args], cwd=REPO_PATH).decode().strip()
 
-    # 1. Base Commit (No bugs)
-    java_file_path = os.path.join(REPO_PATH, "src/main/java/com/example/UserService.java")
-    os.makedirs(os.path.dirname(java_file_path), exist_ok=True)
-    with open(java_file_path, "w") as f:
-        f.write("""package com.example;
 
-public class UserService {
-    private PaymentGateway paymentGateway;
+def write(rel_path: str, content: str):
+    path = os.path.join(REPO_PATH, rel_path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
 
-    public UserService(PaymentGateway paymentGateway) {
-        this.paymentGateway = paymentGateway;
-    }
 
-    public void processPayment(User user, PaymentInfo payment) {
-        String userId = user.getId();
-        paymentGateway.charge(userId, payment.getAmount());
-    }
-}
-""")
-    user_file_path = os.path.join(REPO_PATH, "src/main/java/com/example/User.java")
-    with open(user_file_path, "w") as f:
-        f.write("""package com.example;
-public class User {
-    private String id;
-    public String getId() { return id; }
-}
-""")
-    payment_file_path = os.path.join(REPO_PATH, "src/main/java/com/example/PaymentInfo.java")
-    with open(payment_file_path, "w") as f:
-        f.write("""package com.example;
-public class PaymentInfo {
-    private double amount;
-    public double getAmount() { return amount; }
-}
-""")
-    gateway_file_path = os.path.join(REPO_PATH, "src/main/java/com/example/PaymentGateway.java")
-    with open(gateway_file_path, "w") as f:
-        f.write("""package com.example;
-public class PaymentGateway {
-    public void charge(String userId, double amount) {}
-}
-""")
+def commit(message: str) -> str:
+    run_git("add", ".")
+    run_git("commit", "-m", message)
+    return git_out("rev-parse", "HEAD")
 
-    # A pom.xml + real JUnit test so Test Runner has something to actually run.
-    # Without this the repo has no framework markers at all, defaults to pytest,
-    # and every self-test call reports "no tests ran" (pytest exit code 5) —
-    # meaning a fix could never be verified as passing regardless of quality.
-    # This test intentionally fails on the original buggy code (a raw
-    # NullPointerException escaping processPayment for a null user) and passes
-    # once any reasonable guard is added, so it discriminates real fix quality
-    # instead of asserting one specific exception type/message.
-    pom_path = os.path.join(REPO_PATH, "pom.xml")
-    with open(pom_path, "w") as f:
-        f.write("""<project xmlns="http://maven.apache.org/POM/4.0.0">
+
+# ─── Base: correct code with passing tests ───────────────────────────────────
+
+POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.example</groupId>
   <artifactId>gitoracle-eval-repo</artifactId>
@@ -107,11 +86,70 @@ public class PaymentGateway {
     </plugins>
   </build>
 </project>
-""")
-    test_path = os.path.join(REPO_PATH, "src/test/java/com/example/UserServiceTest.java")
-    os.makedirs(os.path.dirname(test_path), exist_ok=True)
-    with open(test_path, "w") as f:
-        f.write("""package com.example;
+"""
+
+USER_SERVICE_OK = """package com.example;
+
+public class UserService {
+    private PaymentGateway paymentGateway;
+
+    public UserService(PaymentGateway paymentGateway) {
+        this.paymentGateway = paymentGateway;
+    }
+
+    public void processPayment(User user, PaymentInfo payment) {
+        if (user == null) {
+            throw new IllegalArgumentException("User cannot be null");
+        }
+        String userId = user.getId();
+        paymentGateway.charge(userId, payment.getAmount());
+    }
+}
+"""
+
+BATCH_PROCESSOR_OK = """package com.example;
+
+import java.util.List;
+
+public class BatchProcessor {
+    public int process(List<String> items) {
+        int processed = 0;
+        for (int i = 0; i < items.size(); i++) {
+            System.out.println(items.get(i));
+            processed++;
+        }
+        return processed;
+    }
+}
+"""
+
+BASE_FILES: Dict[str, str] = {
+    "pom.xml": POM,
+    f"{PKG}/UserService.java": USER_SERVICE_OK,
+    f"{PKG}/User.java": """package com.example;
+
+public class User {
+    private String id;
+    public String getId() { return id; }
+}
+""",
+    f"{PKG}/PaymentInfo.java": """package com.example;
+
+public class PaymentInfo {
+    private double amount;
+    public double getAmount() { return amount; }
+}
+""",
+    f"{PKG}/PaymentGateway.java": """package com.example;
+
+public class PaymentGateway {
+    public void charge(String userId, double amount) {}
+}
+""",
+    f"{PKG}/BatchProcessor.java": BATCH_PROCESSOR_OK,
+    # Passes on main, fails once case npe's bug commit removes the guard. Any
+    # deliberate guard passes again — it doesn't pin one exception type/message.
+    f"{TEST_PKG}/UserServiceTest.java": """package com.example;
 
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -132,26 +170,46 @@ public class UserServiceTest {
         }
     }
 }
-""")
+""",
+    # Passes on main, fails once case ioob's bug commit changes < to <=.
+    f"{TEST_PKG}/BatchProcessorTest.java": """package com.example;
 
-    run_git("add", ".")
-    run_git("commit", "-m", "Initial commit: Add UserService and models")
+import org.junit.jupiter.api.Test;
+import java.util.List;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
-    # CASE 1: Null Pointer Exception
-    #
-    # Committed directly to main, sequentially before case 2 — NOT on a separate
-    # branch. This used to `checkout -b case1-npe`, commit here, then
-    # `checkout main` for case 2, leaving case1's bug commit reachable only from
-    # the abandoned case1-npe branch. run_evals.py always clones this repo at its
-    # default branch (main), so case1_npe's expected_root_commit was structurally
-    # unreachable from every clone the harness ever created — confirmed live: the
-    # Investigator correctly ranked the initial commit (the true root cause
-    # reachable from main) at 0.8-0.9 confidence, while the golden file expected a
-    # commit main's history never contained. Keeping both cases' bug commits on
-    # one linear history, the same way case 2 already worked correctly, is what
-    # makes expected_root_commit actually reachable by the code path that uses it.
-    with open(java_file_path, "w") as f:
-        f.write("""package com.example;
+public class BatchProcessorTest {
+    @Test
+    void process_handlesEveryItemExactlyOnce() {
+        assertEquals(3, new BatchProcessor().process(List.of("a", "b", "c")));
+    }
+}
+""",
+}
+
+
+# ─── Cases ───────────────────────────────────────────────────────────────────
+
+@dataclass
+class Case:
+    id: str
+    branch: str
+    description: str
+    bug_message: str
+    bug_files: Dict[str, str]          # files rewritten by the bug commit
+    expected_fix: str                  # golden patch, against the bug commit
+    followup_message: str
+    followup_files: Dict[str, str] = field(default_factory=dict)
+
+
+CASES = [
+    Case(
+        id="case1_npe",
+        branch="case/npe",
+        description="NullPointerException in UserService.processPayment (user.getId()). "
+                    "processPayment is sometimes called with a null user.",
+        bug_message="refactor: simplify processPayment",
+        bug_files={f"{PKG}/UserService.java": """package com.example;
 
 public class UserService {
     private PaymentGateway paymentGateway;
@@ -161,81 +219,94 @@ public class UserService {
     }
 
     public void processPayment(User user, PaymentInfo payment) {
-        // BUG: user can be null if fetched from DB incorrectly
         String userId = user.getId();
         paymentGateway.charge(userId, payment.getAmount());
     }
 }
-""")
-    run_git("add", ".")
-    run_git("commit", "-m", "feat: update processPayment")
-    sha1 = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_PATH).decode().strip()
-    
-    case1_dir = GOLDEN_DIR / "case1_npe"
-    os.makedirs(case1_dir)
-    with open(case1_dir / "bug_description.txt", "w") as f:
-        f.write("NullPointerException in UserService.java line 11 (user.getId()). The user object can sometimes be null.")
-    with open(case1_dir / "expected_root_commit.txt", "w") as f:
-        f.write(sha1)
-    with open(case1_dir / "expected_fix.patch", "w") as f:
-        f.write("""--- src/main/java/com/example/UserService.java
-+++ src/main/java/com/example/UserService.java
-@@ -10,6 +10,9 @@
+"""},
+        expected_fix="""--- a/src/main/java/com/example/UserService.java
++++ b/src/main/java/com/example/UserService.java
+@@ -8,6 +8,9 @@
      }
- 
+
      public void processPayment(User user, PaymentInfo payment) {
 +        if (user == null) {
 +            throw new IllegalArgumentException("User cannot be null");
 +        }
-         // BUG: user can be null if fetched from DB incorrectly
          String userId = user.getId();
          paymentGateway.charge(userId, payment.getAmount());
-""")
-
-    # CASE 2: Logic Error / Out of Bounds — committed directly on top of case 1's
-    # commit (both now on main, no branch switch needed).
-    processor_path = os.path.join(REPO_PATH, "src/main/java/com/example/BatchProcessor.java")
-    with open(processor_path, "w") as f:
-        f.write("""package com.example;
-import java.util.List;
-
-public class BatchProcessor {
-    public void process(List<String> items) {
-        // BUG: <= size() will throw IndexOutOfBoundsException
-        for (int i = 0; i <= items.size(); i++) {
-            System.out.println(items.get(i));
-        }
-    }
-}
-""")
-    run_git("add", ".")
-    run_git("commit", "-m", "feat: add BatchProcessor")
-    sha2 = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_PATH).decode().strip()
-    
-    case2_dir = GOLDEN_DIR / "case2_ioob"
-    os.makedirs(case2_dir)
-    with open(case2_dir / "bug_description.txt", "w") as f:
-        f.write("IndexOutOfBoundsException in BatchProcessor.java line 8 (items.get(i)). The loop iterates past the end of the list.")
-    with open(case2_dir / "expected_root_commit.txt", "w") as f:
-        f.write(sha2)
-    with open(case2_dir / "expected_fix.patch", "w") as f:
-        f.write("""--- src/main/java/com/example/BatchProcessor.java
-+++ src/main/java/com/example/BatchProcessor.java
+     }
+""",
+        followup_message="docs: add README",
+        followup_files={"README.md": "# Payments service\n\nInternal payment processing.\n"},
+    ),
+    Case(
+        id="case2_ioob",
+        branch="case/ioob",
+        description="IndexOutOfBoundsException in BatchProcessor.process (items.get(i)). "
+                    "The loop runs one past the end of the list.",
+        bug_message="perf: tighten BatchProcessor loop",
+        bug_files={f"{PKG}/BatchProcessor.java": BATCH_PROCESSOR_OK.replace(
+            "i < items.size()", "i <= items.size()")},
+        expected_fix="""--- a/src/main/java/com/example/BatchProcessor.java
++++ b/src/main/java/com/example/BatchProcessor.java
 @@ -5,7 +5,7 @@
  public class BatchProcessor {
-     public void process(List<String> items) {
--        // BUG: <= size() will throw IndexOutOfBoundsException
+     public int process(List<String> items) {
+         int processed = 0;
 -        for (int i = 0; i <= items.size(); i++) {
 +        for (int i = 0; i < items.size(); i++) {
              System.out.println(items.get(i));
+             processed++;
          }
-     }
-""")
+""",
+        followup_message="chore: add .editorconfig",
+        followup_files={".editorconfig": "root = true\n\n[*.java]\nindent_style = space\nindent_size = 4\n"},
+    ),
+]
 
-    print(f"Setup complete. Repo at {REPO_PATH}, Golden dataset at {GOLDEN_DIR}")
+
+def setup_repo():
+    if os.path.exists(REPO_PATH):
+        shutil.rmtree(REPO_PATH)
+    os.makedirs(REPO_PATH)
+    # Pin the branch name: git's default (master vs main) depends on the
+    # machine's init.defaultBranch, and --push publishes "main".
+    run_git("init", "-b", "main")
+    run_git("config", "user.email", "test@gitoracle.ai")
+    run_git("config", "user.name", "Test User")
+
+    if os.path.exists(GOLDEN_DIR):
+        shutil.rmtree(GOLDEN_DIR)
+    os.makedirs(GOLDEN_DIR)
+
+    for rel_path, content in BASE_FILES.items():
+        write(rel_path, content)
+    commit("Initial commit: payments service with tests")
+
+    for case in CASES:
+        run_git("checkout", "-q", "-b", case.branch, "main")
+        for rel_path, content in case.bug_files.items():
+            write(rel_path, content)
+        bug_sha = commit(case.bug_message)
+        for rel_path, content in case.followup_files.items():
+            write(rel_path, content)
+        commit(case.followup_message)
+
+        case_dir = GOLDEN_DIR / case.id
+        os.makedirs(case_dir)
+        (case_dir / "bug_description.txt").write_text(case.description)
+        (case_dir / "expected_root_commit.txt").write_text(bug_sha)
+        (case_dir / "expected_fix.patch").write_text(case.expected_fix)
+        (case_dir / "branch.txt").write_text(case.branch)
+
+    run_git("checkout", "-q", "main")
+    print(f"Setup complete. Repo at {REPO_PATH} ({len(CASES)} case branches), "
+          f"golden dataset at {GOLDEN_DIR}")
+
 
 def push_repo(remote_url: str):
-    """Force-push the freshly built repo to a GitHub fixture repo.
+    """Force-push main and every case branch to the GitHub fixture repo.
 
     The pipeline only clones https://github.com/... URLs (RepoRefValidator), so
     a local file:// repo can't be evaluated. Every run rebuilds history from
@@ -244,12 +315,14 @@ def push_repo(remote_url: str):
     CalledProcessError (whose message repeats the full command line) is never
     allowed to propagate as-is.
     """
+    refs = ["main"] + [case.branch for case in CASES]
     try:
-        run_git("push", "--force", remote_url, "main")
+        run_git("push", "--force", remote_url, *refs)
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or b"").decode(errors="replace").replace(remote_url, "<fixture remote>")
         raise SystemExit(f"git push to the fixture remote failed (exit {e.returncode}):\n{stderr}") from None
-    print("Pushed golden repo to the fixture remote.")
+    print(f"Pushed {', '.join(refs)} to the fixture remote.")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build the golden eval repo and dataset")

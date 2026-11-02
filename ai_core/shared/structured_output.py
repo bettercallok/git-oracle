@@ -39,6 +39,11 @@ LLM_FALLBACK_MODEL_NAME = os.environ.get("LLM_FALLBACK_MODEL_NAME")
 # that missing observability config never crashes a production agent.
 try:
     from langfuse import Langfuse
+    # Empty counts as unset. Setting the keys to "" is how a deployment without
+    # Langfuse (CI) turns tracing off; passing "" through still built a client
+    # that failed — and flushed synchronously — on every LLM call.
+    if not os.environ.get("LANGFUSE_PUBLIC_KEY") or not os.environ.get("LANGFUSE_SECRET_KEY"):
+        raise RuntimeError("LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not set")
     _lf = Langfuse(
         public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
         secret_key=os.environ["LANGFUSE_SECRET_KEY"],
