@@ -56,6 +56,12 @@ public class OrchestratorApplication {
         return factory;
     }
 
+    /** Injected wherever "now" matters (job timeline, state timestamps) so tests can fix it. */
+    @Bean
+    public java.time.Clock clock() {
+        return java.time.Clock.systemUTC();
+    }
+
     @Bean
     public CommandLineRunner initDefaultTenant(EntityManager entityManager, TransactionTemplate transactionTemplate) {
         return args -> {

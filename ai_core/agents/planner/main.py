@@ -13,6 +13,7 @@ from shared.structured_output import llm_structured
 from shared.memory import SemanticMemory
 from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 from shared.internal_auth import require_internal_token
+from shared.job_events import report_event
 from shared.body_limit import BodySizeLimitMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -181,6 +182,13 @@ async def handle_planner_job(payload: dict):
         # 2. Execute AI Planning
         plan = await create_plan(request)
         logger.info(f"Generated Plan for job {job_id}: {plan.strategy}")
+        await report_event(
+            job_id, "planner",
+            f"Plan: {plan.strategy}, up to {plan.max_lines_to_change} lines in "
+            f"{', '.join(plan.affected_files) or 'no specific files'}",
+            details={"strategy": plan.strategy, "affected_files": plan.affected_files[:20],
+                     "confidence": plan.confidence},
+        )
         
         # 3. Publish to next step (Fixer)
         producer = KafkaEventProducer()

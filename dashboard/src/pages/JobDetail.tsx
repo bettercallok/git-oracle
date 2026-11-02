@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, CheckCircle2, Loader2, AlertCircle, GitPullRequest, RefreshCw, Send } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Loader2, AlertCircle, GitPullRequest, RefreshCw, Send, ExternalLink } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import { stateMeta, isRunning } from '../utils/jobState';
 
 /** Safely format a timestamp from the backend.
  *  Handles: null, undefined, epoch (Jan 1 1970) and valid ISO strings.
@@ -27,17 +28,56 @@ const formatTime = (raw: string | null | undefined): string => {
 interface Job {
   id: string;
   repo: string;
-  errorMessage: string;
   state: string;
-  tokensUsed: number;
+  /** Why it's in this state — the escalation or failure reason. */
+  stateReason?: string | null;
+  stateChangedAt?: string | null;
+  attempts?: number | null;
+  // The entity field is tokenBudgetUsed; this page read `tokensUsed`, which the
+  // API never sends, so it always showed 0.
+  tokenBudgetUsed?: number | null;
+  rootCommit?: string | null;
+  causalScore?: number | null;
+  baseCommit?: string | null;
   createdAt: string;
   prUrl?: string;
+}
+
+interface JobEvent {
+  id: string;
+  type: 'STATE_CHANGE' | 'AGENT_PROGRESS' | 'ERROR';
+  fromState?: string | null;
+  toState?: string | null;
+  actor: string;
+  message?: string | null;
+  createdAt: string;
 }
 
 const fetchJob = async (id: string): Promise<Job> => {
   const { data } = await apiClient.get(`/jobs/${id}`);
   return data;
 };
+
+const fetchEvents = async (id: string): Promise<JobEvent[]> => {
+  const { data } = await apiClient.get(`/jobs/${id}/events`);
+  return data;
+};
+
+// Every LLM call in a job is traced under the job id (structured_output.py).
+const LANGFUSE_URL = import.meta.env.VITE_LANGFUSE_URL || 'http://localhost:3000';
+
+/** "2m 14s" between two timestamps; empty when either is missing. */
+const duration = (from: string, to?: string | null): string => {
+  if (!to) return '';
+  const ms = new Date(to).getTime() - new Date(from).getTime();
+  if (!(ms >= 0)) return '';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+};
+
+const shortSha = (sha?: string | null) => (sha ? sha.substring(0, 8) : '');
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -61,6 +101,13 @@ export default function JobDetail() {
     refetchInterval: 3000,
   });
 
+  const { data: events = [] } = useQuery({
+    queryKey: ['job-events', jobId],
+    queryFn: () => fetchEvents(jobId!),
+    enabled: !!jobId,
+    refetchInterval: 3000,
+  });
+
   const feedbackMutation = useMutation({
     mutationFn: (instructions: string) =>
       apiClient.post(`/jobs/${jobId}/feedback`, { instructions }),
@@ -68,6 +115,7 @@ export default function JobDetail() {
       setFeedbackSent(true);
       setInstructions('');
       queryClient.invalidateQueries({ queryKey: ['job', jobId] });
+      queryClient.invalidateQueries({ queryKey: ['job-events', jobId] });
       setTimeout(() => setFeedbackSent(false), 5000);
     }
   });
@@ -91,11 +139,12 @@ export default function JobDetail() {
     );
   }
 
-  // Support both 'status' and 'state' field names
-  const status = (job as any).status || job.state;
-  const isSuccess = status === 'SUCCESS' || status === 'PR_OPENED';
-  const isReady   = ['PR_OPENED', 'SUCCESS', 'FAILED', 'ESCALATED', 'INVESTIGATING', 'PLANNING', 'TESTING', 'REGENERATING', 'QUEUED'].includes(status);
-  const isEscalated = status === 'ESCALATED';
+  const status = job.state;
+  const meta = stateMeta(status);
+  const isSuccess = meta.group === 'succeeded';
+  const needsHuman = meta.group === 'attention' || meta.group === 'failed';
+  // The timeline's last state change, to show how long the current state has run.
+  const stateChanges = events.filter(e => e.type === 'STATE_CHANGE');
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
@@ -105,12 +154,20 @@ export default function JobDetail() {
             <ArrowLeft size={16} />
           </Link>
           <h1 className="page-title" style={{ marginBottom: 0 }}>Job {job.id.substring(0,8)}</h1>
-          <span className={`badge ${isSuccess ? 'badge-success' : 'badge-warning'}`} style={{ padding: '4px 8px' }}>
-            {isSuccess ? <CheckCircle2 size={12} style={{ marginRight: 2 }} /> : <Loader2 size={12} style={{ marginRight: 2 }} />} 
+          <span className={`badge ${meta.badge}`} style={{ padding: '4px 8px' }}>
+            {isSuccess ? <CheckCircle2 size={12} style={{ marginRight: 2 }} />
+              : needsHuman ? <AlertCircle size={12} style={{ marginRight: 2 }} />
+              : <Loader2 size={12} className={isRunning(status) ? 'spinner' : undefined} style={{ marginRight: 2 }} />}
             {status}
           </span>
+          <a href={`${LANGFUSE_URL}/trace/${job.id}`} target="_blank" rel="noreferrer"
+             className="btn btn-outline" style={{ marginLeft: 'auto', padding: '6px 10px', textDecoration: 'none' }}>
+            View LLM trace <ExternalLink size={14} />
+          </a>
         </div>
-        <p className="page-description" style={{ marginLeft: 50 }}>Full pipeline timeline</p>
+        <p className="page-description" style={{ marginLeft: 50 }}>
+          {meta.label}{job.stateChangedAt && !meta.terminal ? ` for ${duration(job.stateChangedAt, new Date().toISOString())}` : ''}
+        </p>
       </motion.div>
 
       <motion.div variants={itemVariants} className="stat-grid">
@@ -120,17 +177,44 @@ export default function JobDetail() {
         </div>
         <div className="card">
           <div className="stat-label">Tokens Used</div>
-          <div className="mono" style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>{job.tokensUsed ?? 0}</div>
+          <div className="mono" style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>{job.tokenBudgetUsed ?? 0}</div>
         </div>
         <div className="card">
-          <div className="stat-label">Status</div>
-          <div className="stat-value">{status}</div>
+          <div className="stat-label">Fix Attempts</div>
+          <div className="stat-value">{job.attempts ?? 0}</div>
+        </div>
+        <div className="card">
+          <div className="stat-label">Root Cause</div>
+          <div className="mono" style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>
+            {job.rootCommit
+              ? `${shortSha(job.rootCommit)}${job.causalScore != null ? ` (${job.causalScore.toFixed(2)})` : ''}`
+              : 'not identified'}
+          </div>
         </div>
         <div className="card">
           <div className="stat-label">When</div>
           <div className="stat-value" style={{ fontSize: '0.9rem' }}>{formatTime(job.createdAt)}</div>
         </div>
       </motion.div>
+
+      {/* Why it stopped */}
+      {needsHuman && job.stateReason && (
+        <motion.div variants={itemVariants}
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: 12,
+            padding: '14px 20px', borderRadius: 10, marginBottom: 16,
+            background: 'var(--danger-bg)', border: '1px solid var(--danger)'
+          }}
+        >
+          <AlertCircle size={18} color="var(--danger)" style={{ flexShrink: 0, marginTop: 2 }} />
+          <div>
+            <div style={{ color: 'var(--text-primary)', fontWeight: 500, marginBottom: 4 }}>{meta.label}</div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {job.stateReason}
+            </div>
+          </div>
+        </motion.div>
+      )}
 
       {/* PR URL Banner */}
       {job.prUrl && (
@@ -152,54 +236,40 @@ export default function JobDetail() {
 
       <motion.div variants={itemVariants} className="card" style={{ padding: '28px 32px' }}>
         <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 24 }}>Pipeline Timeline</h2>
-        <div className="timeline">
-            <motion.div className="timeline-item" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}>
-              <div className="timeline-dot" />
-              <div className="timeline-time">{formatTime(job.createdAt)}</div>
-              <div className="timeline-title">Job Created</div>
-              <div className="timeline-body">GitOracle orchestrator began processing the event.</div>
-            </motion.div>
-
-            {['INVESTIGATING','PLANNING','TESTING','PR_OPENED','SUCCESS','ESCALATED','REGENERATING'].includes(status) && (
-              <motion.div className="timeline-item" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }}>
-                <div className="timeline-dot" style={{ borderColor: 'var(--accent)' }} />
-                <div className="timeline-time">AI Phase</div>
-                <div className="timeline-title">Planner → Fixer → Test Runner</div>
-                <div className="timeline-body">Agents are collaborating to generate and validate a fix.</div>
-              </motion.div>
-            )}
-
-            {isSuccess && (
-              <motion.div className="timeline-item" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }}>
-                <div className="timeline-dot" style={{ borderColor: 'var(--success)' }} />
-                <div className="timeline-time">Completed</div>
-                <div className="timeline-title">Pull Request Opened</div>
-                <div className="timeline-body">GitOracle autonomously fixed the issue and opened a PR.</div>
-              </motion.div>
-            )}
-
-            {isEscalated && (
-              <motion.div className="timeline-item" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }}>
-                <div className="timeline-dot" style={{ borderColor: 'var(--danger, #ef4444)' }} />
-                <div className="timeline-time">Escalated</div>
-                <div className="timeline-title">Fixer Could Not Produce a Valid Patch</div>
-                <div className="timeline-body">The agent exhausted its attempts without a fix that passed guardrails or tests. Review the escalation queue, or submit new instructions below to retry.</div>
-              </motion.div>
-            )}
-
-            {status === 'REGENERATING' && (
-              <motion.div className="timeline-item" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }}>
-                <div className="timeline-dot" style={{ borderColor: '#f59e0b', animationName: 'pulse' }} />
-                <div className="timeline-time">Now</div>
-                <div className="timeline-title">Regenerating Fix</div>
-                <div className="timeline-body">Applying your instructions and generating a new patch...</div>
-              </motion.div>
-            )}
-        </div>
+        {events.length === 0 ? (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+            No events recorded yet. Jobs created before the timeline existed have none.
+          </p>
+        ) : (
+          <div className="timeline">
+            {events.map((e, i) => {
+              const isState = e.type === 'STATE_CHANGE';
+              const toMeta = stateMeta(e.toState);
+              const next = isState ? stateChanges[stateChanges.indexOf(e) + 1] : undefined;
+              const spent = isState
+                ? duration(e.createdAt, next?.createdAt ?? (toMeta.terminal ? null : new Date().toISOString()))
+                : '';
+              const dot = e.type === 'ERROR' ? 'var(--danger)' : isState ? toMeta.color : 'var(--border-subtle)';
+              return (
+                <motion.div key={e.id} className="timeline-item"
+                  initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: Math.min(i, 10) * 0.03 }}>
+                  <div className="timeline-dot" style={{ borderColor: dot }} />
+                  <div className="timeline-time">
+                    {formatTime(e.createdAt)} · {e.actor}{spent ? ` · ${spent}` : ''}
+                  </div>
+                  <div className="timeline-title" style={isState ? undefined : { fontWeight: 400, fontSize: '0.9rem' }}>
+                    {isState ? toMeta.label : e.type === 'ERROR' ? 'Error' : 'Progress'}
+                  </div>
+                  {e.message && <div className="timeline-body" style={{ wordBreak: 'break-word' }}>{e.message}</div>}
+                </motion.div>
+              );
+            })}
+          </div>
+        )}
       </motion.div>
 
       {/* Human Feedback Panel */}
-      {isReady && (
         <motion.div variants={itemVariants} className="card" style={{ padding: '28px 32px', marginTop: 16 }}>
           <h2 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
             <RefreshCw size={16} color="var(--accent)" />
@@ -259,7 +329,6 @@ export default function JobDetail() {
             </button>
           </div>
         </motion.div>
-      )}
     </motion.div>
   );
 }

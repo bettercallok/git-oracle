@@ -10,6 +10,7 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Typed, validated request bodies for the orchestrator's HTTP API.
@@ -191,5 +192,27 @@ public final class Requests {
         @NotNull(message = "chatHistory[].content is required")
         @Size(max = 10_000, message = "chatHistory[].content must be at most 10000 characters")
         String content
+    ) {}
+
+    /**
+     * POST /api/v1/jobs/{id}/events — an agent's progress note for the job
+     * timeline. STATE_CHANGE is deliberately not accepted: only the
+     * orchestrator's JobStateService changes state, so an agent can't fake one.
+     */
+    public record RecordJobEvent(
+        @NotBlank(message = "type is required")
+        @Pattern(regexp = "AGENT_PROGRESS|ERROR", message = "type must be AGENT_PROGRESS or ERROR")
+        String type,
+
+        @NotBlank(message = "actor is required")
+        @Size(max = 64, message = "actor must be at most 64 characters")
+        String actor,
+
+        @NotBlank(message = "message is required")
+        @Size(max = 4_000, message = "message must be at most 4000 characters")
+        String message,
+
+        @Size(max = 50, message = "details must have at most 50 entries")
+        Map<String, Object> details
     ) {}
 }

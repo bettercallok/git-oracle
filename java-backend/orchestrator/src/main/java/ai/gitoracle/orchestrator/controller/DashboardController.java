@@ -1,6 +1,9 @@
 package ai.gitoracle.orchestrator.controller;
 
 import ai.gitoracle.core.model.postgres.AgentJob;
+import ai.gitoracle.core.model.postgres.JobEvent;
+import ai.gitoracle.orchestrator.repository.JobEventRepository;
+import ai.gitoracle.orchestrator.service.JobStateService;
 import ai.gitoracle.core.entity.Escalation;
 import ai.gitoracle.core.entity.EvalRun;
 import ai.gitoracle.core.kafka.KafkaTopics;
@@ -42,15 +45,20 @@ public class DashboardController {
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository;
     private final ai.gitoracle.orchestrator.repository.JobPromptVersionRepository jobPromptVersionRepository;
+    private final JobStateService jobState;
+    private final JobEventRepository jobEventRepository;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     public DashboardController(EntityManager entityManager, KafkaTemplate<String, Object> kafkaTemplate,
                                ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository,
-                               ai.gitoracle.orchestrator.repository.JobPromptVersionRepository jobPromptVersionRepository) {
+                               ai.gitoracle.orchestrator.repository.JobPromptVersionRepository jobPromptVersionRepository,
+                               JobStateService jobState, JobEventRepository jobEventRepository) {
         this.entityManager = entityManager;
         this.kafkaTemplate = kafkaTemplate;
         this.prOutcomeRepository = prOutcomeRepository;
         this.jobPromptVersionRepository = jobPromptVersionRepository;
+        this.jobState = jobState;
+        this.jobEventRepository = jobEventRepository;
     }
 
     @GetMapping("/jobs")
@@ -70,6 +78,36 @@ public class DashboardController {
             .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    /** The job's timeline, oldest first: every state change and agent progress note. */
+    @GetMapping("/jobs/{id}/events")
+    public ResponseEntity<List<JobEvent>> getJobEvents(@PathVariable UUID id) {
+        return findOwnedJob(id)
+            .map(job -> ResponseEntity.ok(jobEventRepository.findByJobIdOrderByCreatedAtAsc(job.getId())))
+            .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Agents report progress here ("attempt 2 started", "search block not found").
+     *
+     * <p>Agents call the orchestrator directly with only X-Internal-Token, so there
+     * is no tenant on the request and the job's own tenant is used. The same path
+     * is also reachable through the gateway, where a tenant IS present — then the
+     * caller must own the job, exactly like every other job route, so one tenant
+     * can't write into another's timeline.
+     */
+    @PostMapping("/jobs/{id}/events")
+    public ResponseEntity<Void> recordJobEvent(@PathVariable UUID id,
+                                               @Valid @RequestBody Requests.RecordJobEvent request) {
+        AgentJob job = TenantContext.tenantId() != null
+            ? findOwnedJob(id).orElse(null)
+            : entityManager.find(AgentJob.class, id);
+        if (job == null) return ResponseEntity.notFound().build();
+
+        jobState.record(job, JobEvent.Type.valueOf(request.type()), request.actor(),
+                        request.message(), request.details());
+        return ResponseEntity.accepted().build();
+    }
+
     @PostMapping("/jobs")
     public ResponseEntity<AgentJob> createJob(@Valid @RequestBody Requests.CreateJob request) {
         // CLI hits this endpoint.
@@ -87,6 +125,8 @@ public class DashboardController {
         job.setState("QUEUED");
         job.setErrorId("manual-trigger");
         entityManager.persist(job);
+        entityManager.flush(); // assigns the id the timeline event needs
+        jobState.recordCreated(job, "Created from the CLI", "cli");
         return ResponseEntity.ok(job);
     }
 
@@ -138,9 +178,8 @@ public class DashboardController {
 
         logger.info("Dashboard feedback received for job {} — triggering new fix cycle", jobId);
 
-        // Update job state
-        job.setState("REGENERATING");
-        entityManager.merge(job);
+        jobState.transition(job, "REGENERATING", "Regeneration requested from the dashboard: " + instructions,
+                            "dashboard");
 
         // Build a new fix event with the human's instructions
         String repoPath = "/tmp/gitoracle-workspaces/" + jobId;
@@ -224,11 +263,12 @@ public class DashboardController {
         job.setRepo(repoUrl);
         job.setState("QUEUED");
         job.setErrorId("dashboard-trigger-" + System.currentTimeMillis());
-        job.setCreatedAt(OffsetDateTime.now());
         job.setRawPayload(null);
         job.setTenantId(tenantId);
         entityManager.persist(job);
         entityManager.flush(); // ensure ID is assigned
+        jobState.recordCreated(job, (investigateFirst ? "Full pipeline" : "Direct fix")
+            + " requested: " + issue, "dashboard");
 
         logger.info("Dashboard trigger: new job {} for repo {} (investigateFirst={})",
                     job.getId(), repoUrl, investigateFirst);
@@ -332,8 +372,8 @@ public class DashboardController {
             if (job != null) {
                 if ("approve".equals(action)) {
                     // Resume the pipeline - push to plan phase
-                    job.setState("PLANNING");
-                    entityManager.merge(job);
+                    jobState.transition(job, "PLANNING",
+                        "Escalation approved — resuming at planning", "dashboard");
                     
                     Map<String, Object> plannerPayload = new HashMap<>();
                     plannerPayload.put("job_id", job.getId().toString());
@@ -364,8 +404,8 @@ public class DashboardController {
 
                     kafkaTemplate.send("job.events.plan", plannerPayload);
                 } else {
-                    job.setState("FAILED");
-                    entityManager.merge(job);
+                    jobState.transition(job, "FAILED", "Escalation rejected: " + escalation.getReason(),
+                                        "dashboard");
                 }
             }
         }

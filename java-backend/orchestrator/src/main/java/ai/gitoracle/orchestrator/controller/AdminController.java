@@ -102,8 +102,10 @@ public class AdminController {
         }
 
         try {
+            // Counted 'COMPLETED', a state nothing ever sets, so the success rate
+            // was always 0. A job succeeds when its PR opens.
             Long jobsCompleted = entityManager.createQuery(
-                "SELECT COUNT(j) FROM AgentJob j WHERE j.tenantId = :tenantId AND j.state = 'COMPLETED'", Long.class)
+                "SELECT COUNT(j) FROM AgentJob j WHERE j.tenantId = :tenantId AND j.state = 'PR_OPENED'", Long.class)
                 .setParameter("tenantId", tenantUuid)
                 .getSingleResult();
 

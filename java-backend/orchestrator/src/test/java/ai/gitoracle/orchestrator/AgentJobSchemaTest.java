@@ -41,6 +41,29 @@ class AgentJobSchemaTest {
             .isEqualToIgnoringCase("TEXT");
     }
 
+    /**
+     * created_at/updated_at were insertable=false/updatable=false with no DB
+     * default, so Hibernate-created schemas stored NULL for every job: the job
+     * list's ORDER BY created_at was arbitrary and nothing could tell how long a
+     * job had been stuck. Hibernate must write them.
+     */
+    @Test
+    void timestampsAreWrittenByHibernate() throws NoSuchFieldException {
+        Field created = AgentJob.class.getDeclaredField("createdAt");
+        Field updated = AgentJob.class.getDeclaredField("updatedAt");
+
+        assertThat(created.getAnnotation(org.hibernate.annotations.CreationTimestamp.class)).isNotNull();
+        assertThat(created.getAnnotation(Column.class).insertable()).isTrue();
+        assertThat(updated.getAnnotation(org.hibernate.annotations.UpdateTimestamp.class)).isNotNull();
+        assertThat(updated.getAnnotation(Column.class).updatable()).isTrue();
+    }
+
+    @Test
+    void stateReasonIsUnboundedText() throws NoSuchFieldException {
+        Column column = AgentJob.class.getDeclaredField("stateReason").getAnnotation(Column.class);
+        assertThat(column.columnDefinition()).isEqualToIgnoringCase("TEXT");
+    }
+
     @Test
     void fixPatchCanHoldARealisticUnifiedDiff() {
         // A same-order sanity check on the Java side: nothing in AgentJob itself

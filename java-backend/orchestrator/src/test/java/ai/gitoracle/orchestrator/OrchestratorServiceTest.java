@@ -1,7 +1,9 @@
 package ai.gitoracle.orchestrator;
 
 import ai.gitoracle.core.model.postgres.AgentJob;
+import ai.gitoracle.orchestrator.repository.JobEventRepository;
 import ai.gitoracle.orchestrator.repository.PrOutcomeRepository;
+import ai.gitoracle.orchestrator.service.JobStateService;
 import ai.gitoracle.orchestrator.service.WorkspaceService;
 import ai.gitoracle.orchestrator.token.AgentJobRepository;
 import jakarta.persistence.EntityManager;
@@ -20,6 +22,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -28,6 +31,7 @@ import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 /**
@@ -56,6 +60,8 @@ class OrchestratorServiceTest {
 
     private AgentJobRepository jobRepository;
     private PrOutcomeRepository prOutcomeRepository;
+    private JobEventRepository jobEventRepository;
+    private EntityManager entityManager;
     private OrchestratorService service;
     private MockRestServiceServer mockGitHubBot;
 
@@ -65,10 +71,15 @@ class OrchestratorServiceTest {
         prOutcomeRepository = mock(PrOutcomeRepository.class);
         KafkaTemplate<String, Object> kafkaTemplate = mock(KafkaTemplate.class);
         WorkspaceService workspaceService = mock(WorkspaceService.class);
-        EntityManager entityManager = mock(EntityManager.class);
+        entityManager = mock(EntityManager.class);
+        jobEventRepository = mock(JobEventRepository.class);
+        // The real state service over mocked repositories: these tests assert on
+        // the job's resulting state, which is exactly what it decides.
+        JobStateService jobState = new JobStateService(jobRepository, jobEventRepository,
+            java.time.Clock.fixed(java.time.Instant.parse("2026-10-29T12:00:00Z"), java.time.ZoneOffset.UTC));
 
         service = new OrchestratorService(jobRepository, kafkaTemplate, workspaceService,
-                                           entityManager, prOutcomeRepository);
+                                           entityManager, prOutcomeRepository, jobState);
 
         // OrchestratorService constructs its own `new RestTemplate()` rather than
         // taking one as a constructor argument, so the only way to intercept the
@@ -301,5 +312,131 @@ class OrchestratorServiceTest {
         ));
 
         assertThat(job.getAuthorizedFiles()).isEqualTo("src/main/java/com/example/UserService.java");
+    }
+
+    // ── Honest states: PLANNING / FIXING / reasons (job timeline) ─────────
+
+    private String planEvent(UUID jobId, String investigationJson) {
+        return "{\"job_id\":\"" + jobId + "\",\"investigation_result\":" + investigationJson + "}";
+    }
+
+    @Test
+    void investigationResultMovesTheJobToPlanningAndSetsTheRootCause() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "INVESTIGATING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.persistInvestigationResult(planEvent(jobId,
+            "{\"ranked_causes\":[{\"commit_sha\":\"7f8e49eb8fa66bb8\",\"causal_effect_score\":0.8}]}"));
+
+        assertThat(job.getState()).isEqualTo("PLANNING");
+        assertThat(job.getRootCommit()).isEqualTo("7f8e49eb8fa66bb8");
+        assertThat(job.getStateReason()).contains("7f8e49eb");
+        assertThat(job.getStateChangedAt()).isNotNull();
+    }
+
+    @Test
+    void investigationWithNoRankedCauseLeavesRootCommitNullInsteadOfAPlaceholder() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "INVESTIGATING", null);
+        job.setBaseCommit("headheadheadhead");
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.persistInvestigationResult(planEvent(jobId, "{\"narrative\":\"nothing found\"}"));
+
+        assertThat(job.getRootCommit()).isNull();
+        assertThat(job.getState()).isEqualTo("PLANNING");
+    }
+
+    @Test
+    void fixDispatchMovesAPlanningJobToFixing() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "PLANNING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.markFixing("{\"job_id\":\"" + jobId + "\",\"plan\":{\"strategy\":\"surgical_patch\"}}");
+
+        assertThat(job.getState()).isEqualTo("FIXING");
+        assertThat(job.getStateReason()).contains("surgical_patch");
+    }
+
+    @Test
+    void aLateFixDispatchNeverPullsATestingJobBackToFixing() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "TESTING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.markFixing("{\"job_id\":\"" + jobId + "\",\"plan\":{\"strategy\":\"surgical_patch\"}}");
+
+        assertThat(job.getState()).isEqualTo("TESTING");
+    }
+
+    @Test
+    void eachGeneratedFixCountsAsAnAttempt() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "FIXING", null);
+        job.setAttempts(1);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+        mockGitHubBot.expect(requestTo("http://localhost:9006/validate/patch")).andRespond(withServerError());
+
+        service.handleFixGenerated(Map.of("jobId", jobId.toString(), "patch", "diff"));
+
+        assertThat(job.getAttempts()).isEqualTo(2);
+    }
+
+    @Test
+    void guardrailsRejectionFailsTheJobWithTheirReason() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "FIXING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+        mockGitHubBot.expect(requestTo("http://localhost:9006/validate/patch"))
+            .andRespond(withStatus(org.springframework.http.HttpStatus.FORBIDDEN)
+                .body("{\"detail\":\"unauthorized file: evil.sh\"}")
+                .contentType(MediaType.APPLICATION_JSON));
+
+        service.handleFixGenerated(Map.of("jobId", jobId.toString(), "patch", "diff"));
+
+        assertThat(job.getState()).isEqualTo("FAILED");
+        assertThat(job.getStateReason()).startsWith("Guardrails rejected").contains("evil.sh");
+    }
+
+    @Test
+    void aTestRunnerErrorFailsTheJobInsteadOfLeavingItInTesting() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "FIXING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+        mockGitHubBot.expect(requestTo("http://localhost:9006/validate/patch"))
+            .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        mockGitHubBot.expect(requestTo("http://localhost:8084/test")).andRespond(withServerError());
+
+        service.handleFixGenerated(Map.of("jobId", jobId.toString(), "patch", "diff"));
+
+        assertThat(job.getState()).isEqualTo("FAILED");
+        assertThat(job.getStateReason()).startsWith("Test runner");
+    }
+
+    @Test
+    void aLateEscalationNeverOverwritesAJobWhosePrAlreadyOpened() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "PR_OPENED", "https://github.com/bettercallok/chillcall/pull/6");
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.handleJobEscalated(Map.of("jobId", jobId.toString(), "reason", "TOKEN_BUDGET_EXCEEDED"));
+
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+        verify(entityManager, never()).persist(any());
+    }
+
+    @Test
+    void anEscalationRecordsItsReasonOnTheJob() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "FIXING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.handleJobEscalated(Map.of("jobId", jobId.toString(), "reason", "Planner Agent failed: boom"));
+
+        assertThat(job.getState()).isEqualTo("ESCALATED");
+        assertThat(job.getStateReason()).isEqualTo("Planner Agent failed: boom");
+        verify(entityManager).persist(any());
     }
 }
