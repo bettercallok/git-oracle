@@ -11,10 +11,12 @@ from patch_scanner import scan_patch, PatchScanResult
 # Ensure ai_core modules can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.internal_auth import require_internal_token
+from shared.health import add_health_route
 from shared.body_limit import BodySizeLimitMiddleware
 
 app = FastAPI(title="GitOracle Guardrails Engine", dependencies=[Depends(require_internal_token)])
 app.add_middleware(BodySizeLimitMiddleware)
+add_health_route(app, "guardrails")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

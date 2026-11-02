@@ -11,6 +11,15 @@ rule_files:
 scrape_configs:
 
   # ─── Spring Boot Services (via Actuator /actuator/prometheus) ─
+  # api-gateway exposes /actuator/prometheus too but was never scraped.
+  - job_name: 'api-gateway'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8080']
+        labels:
+          service: 'api-gateway'
+          layer: 'java-service'
+
   - job_name: 'error-ingestor'
     metrics_path: '/actuator/prometheus'
     static_configs:
@@ -52,6 +61,10 @@ scrape_configs:
           layer: 'java-service'
 
   # ─── Python AI Agents (via /metrics endpoint) ─────────────────
+  # NOTE: no agent serves /metrics yet, so these scrapes fail (up == 0) by
+  # design for now — the alert rules only use up{layer="java-service"}.
+  # Agent liveness is /health (shared/health.py) plus start_local.sh's
+  # restart loop.
   - job_name: 'investigator-agent'
     metrics_path: '/metrics'
     static_configs:
@@ -76,10 +89,20 @@ scrape_configs:
           service: 'reviewer'
           layer: 'ai-agent'
 
-  - job_name: 'planner-agent'
+  # 9004 is commit_analyst; the planner binds 9007 (planner/main.py). This job
+  # was labelled planner while scraping commit_analyst's port.
+  - job_name: 'commit-analyst-agent'
     metrics_path: '/metrics'
     static_configs:
       - targets: ['host.docker.internal:9004']
+        labels:
+          service: 'commit-analyst'
+          layer: 'ai-agent'
+
+  - job_name: 'planner-agent'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:9007']
         labels:
           service: 'planner'
           layer: 'ai-agent'

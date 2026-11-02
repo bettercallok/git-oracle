@@ -1,0 +1,24 @@
+# Alert rules for GitOracle. Loaded via rule_files in prometheus.yml.
+# No Alertmanager is configured yet: these show up as firing alerts in the
+# Prometheus UI (/alerts) and can be wired to a receiver later.
+groups:
+  - name: gitoracle
+    rules:
+      - alert: JavaServiceDown
+        expr: up{layer="java-service"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} is down"
+          description: "Prometheus has not been able to scrape {{ $labels.service }} for 2 minutes."
+
+      # JobWatchdog escalates jobs stuck in a working state past their limit.
+      # One is an incident; a burst usually means an agent or Kafka is broken.
+      - alert: JobsStalling
+        expr: increase(gitoracle_watchdog_escalations_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jobs stalled in {{ $labels.state }}"
+          description: "The watchdog escalated {{ $value | humanize }} job(s) stuck in {{ $labels.state }} in the last 15 minutes. Check that state's agent (/health) and supervisor.log."

@@ -10,15 +10,24 @@ InternalAuthFilter in each of the Java services.
 
 Nothing external calls a Python agent directly today (every caller is
 another GitOracle service — the orchestrator, the fixer, another agent), so
-this is applied uniformly to every route with no health-check carve-out.
+this is applied to every route except EXEMPT_PATHS: /health reports liveness
+only, and a supervisor or probe must be able to reach it without the secret
+(the same carve-out the Java filters make for /actuator and /health).
 """
 import hmac
 import os
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
+
+EXEMPT_PATHS = frozenset({"/health"})
 
 
-def require_internal_token(x_internal_token: str | None = Header(default=None)) -> None:
+def require_internal_token(
+    request: Request = None,  # type: ignore[assignment]  # injected by FastAPI; None in direct unit-test calls
+    x_internal_token: str | None = Header(default=None),
+) -> None:
+    if request is not None and request.url.path in EXEMPT_PATHS:
+        return
     configured = os.environ.get("GITORACLE_INTERNAL_TOKEN", "")
     # Fails CLOSED: an unconfigured token means "refuse everything", not
     # "skip the check" — the same posture the Java services' fail-closed

@@ -2,6 +2,17 @@
 # dashboard's own origin by default; override via GITORACLE_ALLOWED_ORIGINS for other setups.
 gitoracle:
   allowed-origins: ${GITORACLE_ALLOWED_ORIGINS:http://localhost:5173}
+  # Escalates jobs stuck in a working state past these limits (JobWatchdog).
+  watchdog:
+    enabled: ${GITORACLE_WATCHDOG_ENABLED:true}
+    interval: PT1M
+    limits:
+      QUEUED: PT5M
+      INVESTIGATING: PT10M
+      PLANNING: PT5M
+      FIXING: PT20M
+      TESTING: PT15M
+      REGENERATING: PT20M
 
 spring:
   application:

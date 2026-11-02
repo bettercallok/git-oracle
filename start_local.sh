@@ -64,6 +64,46 @@ if ! docker info >/dev/null 2>&1; then
   echo "⚠️  Docker daemon not reachable — test-runner will refuse to run tests until it is."
 fi
 
+# ─── Process supervision ─────────────────────────────────────────────────────
+# Every service used to be a bare `nohup … &`: if one crashed, nothing restarted
+# it and nothing said so — the dashboard just stopped moving. Each service now
+# runs inside a small restart loop: when the process exits it's logged to
+# supervisor.log and restarted after a backoff (2s doubling to 60s, reset once
+# it has stayed up 5 minutes). The loop ignores SIGHUP like nohup did, so
+# services still survive closing this terminal. stop_local.sh writes
+# $STOP_FLAG and kills the loops BEFORE killing services, so nothing respawns.
+ROOT_DIR="$(pwd)"
+STOP_FLAG="$ROOT_DIR/.gitoracle-stopping"
+SUPERVISOR_LOG="$ROOT_DIR/supervisor.log"
+rm -f "$STOP_FLAG"
+
+# supervise <name> <logfile> <command...>
+# Writes <logfile without .log>.pid (the service) and .supervisor.pid (the loop),
+# relative to the current directory, like the old `echo $! > x.pid` did.
+supervise() {
+  local name="$1" log="$2"; shift 2
+  local pidfile="${log%.log}.pid"
+  : > "$log"
+  (
+    trap '' HUP
+    backoff=2
+    while [ ! -f "$STOP_FLAG" ]; do
+      started=$(date +%s)
+      "$@" </dev/null >>"$log" 2>&1 &
+      child=$!
+      echo "$child" > "$pidfile"
+      wait "$child"; code=$?
+      [ -f "$STOP_FLAG" ] && break
+      ran=$(( $(date +%s) - started ))
+      [ "$ran" -ge 300 ] && backoff=2
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $name exited (code $code) after ${ran}s — restarting in ${backoff}s" >> "$SUPERVISOR_LOG"
+      sleep "$backoff"
+      backoff=$(( backoff * 2 > 60 ? 60 : backoff * 2 ))
+    done
+  ) &
+  echo $! > "${log%.log}.supervisor.pid"
+}
+
 echo "☕ Building Java Microservices..."
 set -a
 source .env
@@ -100,43 +140,30 @@ echo "☕ Starting Java Microservices..."
 JVM_ARGS=(-Xmx224m -XX:MaxMetaspaceSize=160m -XX:+UseSerialGC -Xss256k)
 ORCHESTRATOR_JVM_ARGS=(-Xmx320m -XX:MaxMetaspaceSize=192m -XX:+UseSerialGC -Xss256k)
 
-nohup java "${JVM_ARGS[@]}" -jar "$(jar_for api-gateway)" </dev/null > api-gateway.log 2>&1 &
-echo $! > api-gateway.pid
-nohup java "${JVM_ARGS[@]}" -jar "$(jar_for error-ingestor)" </dev/null > error-ingestor.log 2>&1 &
-echo $! > error-ingestor.pid
-nohup java "${ORCHESTRATOR_JVM_ARGS[@]}" -jar "$(jar_for orchestrator)" </dev/null > orchestrator.log 2>&1 &
-echo $! > orchestrator.pid
-nohup java "${JVM_ARGS[@]}" -jar "$(jar_for test-runner)" </dev/null > test-runner.log 2>&1 &
-echo $! > test-runner.pid
+supervise api-gateway api-gateway.log java "${JVM_ARGS[@]}" -jar "$(jar_for api-gateway)"
+supervise error-ingestor error-ingestor.log java "${JVM_ARGS[@]}" -jar "$(jar_for error-ingestor)"
+supervise orchestrator orchestrator.log java "${ORCHESTRATOR_JVM_ARGS[@]}" -jar "$(jar_for orchestrator)"
+supervise test-runner test-runner.log java "${JVM_ARGS[@]}" -jar "$(jar_for test-runner)"
 # github-bot's GitHubClient.java loads its own .env via a bare Dotenv.configure().load()
 # with no explicit directory, i.e. it depends on the process CWD being java-backend/github-bot/
 # (which ./gradlew :github-bot:bootRun set implicitly) — preserve that by launching from there.
 # jar_for's path is relative to java-backend/, so once we cd into github-bot/ the jar is
 # at build/libs/<name>.jar, not <name>.jar directly — keep the full relative suffix.
 GITHUB_BOT_JAR_REL="build/libs/$(basename "$(jar_for github-bot)")"
-(cd github-bot && nohup java "${JVM_ARGS[@]}" -jar "$GITHUB_BOT_JAR_REL" </dev/null > ../github-bot.log 2>&1 &
-echo $! > ../github-bot.pid)
-nohup java "${JVM_ARGS[@]}" -jar "$(jar_for git-forensics)" </dev/null > git-forensics.log 2>&1 &
-echo $! > git-forensics.pid
+(cd github-bot && supervise github-bot ../github-bot.log java "${JVM_ARGS[@]}" -jar "$GITHUB_BOT_JAR_REL")
+supervise git-forensics git-forensics.log java "${JVM_ARGS[@]}" -jar "$(jar_for git-forensics)"
 cd ..
 
 echo "🐍 Starting Python AI Agents..."
 cd ai_core
 source .venv/bin/activate
-nohup python agents/fixer/main.py </dev/null > fixer.log 2>&1 &
-echo $! > fixer.pid
-nohup python agents/planner/main.py </dev/null > planner.log 2>&1 &
-echo $! > planner.pid
-nohup python agents/investigator/main.py </dev/null > investigator.log 2>&1 &
-echo $! > investigator.pid
-nohup python agents/reviewer/main.py </dev/null > reviewer.log 2>&1 &
-echo $! > reviewer.pid
-nohup python agents/prompt_registry/main.py </dev/null > prompt_registry.log 2>&1 &
-echo $! > prompt_registry.pid
-nohup python agents/guardrails/main.py </dev/null > guardrails.log 2>&1 &
-echo $! > guardrails.pid
-nohup python -m agents.commit_analyst.main </dev/null > commit_analyst.log 2>&1 &
-echo $! > commit_analyst.pid
+supervise fixer fixer.log python agents/fixer/main.py
+supervise planner planner.log python agents/planner/main.py
+supervise investigator investigator.log python agents/investigator/main.py
+supervise reviewer reviewer.log python agents/reviewer/main.py
+supervise prompt_registry prompt_registry.log python agents/prompt_registry/main.py
+supervise guardrails guardrails.log python agents/guardrails/main.py
+supervise commit_analyst commit_analyst.log python -m agents.commit_analyst.main
 cd ..
 
 # LLM inference uses external API (configured via LLM_BASE_URL in .env)
@@ -148,12 +175,12 @@ if [ "${SKIP_DASHBOARD:-0}" != "1" ]; then
   echo "🎨 Starting Dashboard UI..."
   cd dashboard
   npm install > /dev/null 2>&1
-  nohup npm run dev </dev/null > dashboard.log 2>&1 &
-  echo $! > dashboard.pid
+  supervise dashboard dashboard.log npm run dev
   cd ..
 fi
 
 echo "✅ All services have been launched in the background!"
 echo "You can view the dashboard at: http://localhost:5173"
+echo "Crash restarts are logged to: supervisor.log"
 echo "To stop the app services:  ./stop_local.sh"
 echo "To stop infrastructure too: ./stop_local.sh && make infra-down"

@@ -16,9 +16,11 @@ make infra-up                      # kafka, postgres+pgvector, neo4j, qdrant, re
 ./stop_local.sh                    # stops app processes only (NOT infra)
 make infra-down                    # stops infra containers, keeps volumes
 ```
-**Never kill service ports with `lsof -ti :<port> | xargs kill`.** Prometheus (in a container) holds a live connection to every scraped host port (`host.docker.internal:8081-8085,9001-9006`), so `com.docker.backend` shows up in `lsof -i :<port>` output right next to the real service — that shortcut has killed Docker Desktop's backend twice. Always use `./stop_local.sh`, which filters by command name (`java|python|node|npm|uvicorn|gradlew`) with an explicit Docker denylist.
+**Never kill service ports with `lsof -ti :<port> | xargs kill`.** Prometheus (in a container) holds a live connection to every scraped host port (`host.docker.internal:8080-8085,9001-9007`), so `com.docker.backend` shows up in `lsof -i :<port>` output right next to the real service — that shortcut has killed Docker Desktop's backend twice. Always use `./stop_local.sh`, which filters by command name (`java|python|node|npm|uvicorn|gradlew`) with an explicit Docker denylist.
 
 Java services are launched with plain `java -jar`, never `./gradlew bootRun` — `bootRun` keeps a second, uncapped Gradle build-supervisor JVM resident for the service's entire runtime (6 services → 12 resident JVMs instead of 6). `start_local.sh` builds jars once via a single short-lived `./gradlew --no-daemon :<module>:bootJar -x test` invocation per service, then runs the jars directly.
+
+`start_local.sh` runs every service inside a restart loop (`supervise`): a crashed process is restarted with backoff (2s doubling to 60s) and logged to `supervisor.log`. `stop_local.sh` touches `.gitoracle-stopping` and kills the loops (via their `*.supervisor.pid` files) **before** the port sweep — if you stop services any other way, the loops will restart them.
 
 After a restart, confirm a Java service is actually ready by grepping its log for `"Started <X>Application"`, not by curling its port — a dying old process can leave a port that still answers healthchecks for a moment during the handoff.
 
@@ -84,7 +86,11 @@ Never call `job.setState(...)` directly. `JobStateService.transition` (or `trans
 Every per-request override a job can carry — `human_instructions`, `target_repo`, `branch` — is threaded explicitly through every Kafka hop end-to-end rather than looked up from the DB, since these are per-request overrides, not part of a job's durable identity. If you add a new override, thread it the same way (event payload field → every downstream consumer reads it with a default) rather than persisting it on `AgentJob`.
 
 ### Python agents are dual-mode: FastAPI server + Kafka consumer in one process
-Each of the 7 agents starts a Kafka consumer thread in its `@app.on_event("startup")` hook (topic name hardcoded per-agent, e.g. fixer listens on `job.events.fix`) *and* exposes its own synchronous HTTP endpoint (`/fix`, `/plan`, etc.) that the Kafka handler calls into internally, and that other services also call directly (e.g. the fixer's own self-test call to test-runner, or the orchestrator's synchronous guardrails/test-runner/github-bot calls). Don't assume an agent is reachable only via Kafka or only via HTTP — check both call sites before changing a signature.
+The investigator, planner and fixer each start a Kafka consumer task in their `@app.on_event("startup")` hook (topic name hardcoded per-agent, e.g. fixer listens on `job.events.fix`), via `shared/kafka_consumer.py`. That loop never exits silently: a message whose handler raises is copied to `job.events.dlq` with the error and its job is escalated (`job-escalated`, `source` = agent), then the loop moves on; if the consumer itself dies it is rebuilt with backoff. Every agent serves `GET /health` (no token needed; 503 when its consumer is down). Use `shared/kafka_producer.get_producer()` — one producer per process — never a fresh `KafkaEventProducer()` per message.
+
+Separately, the orchestrator's `JobWatchdog` (every minute) escalates jobs stuck in a working state past `gitoracle.watchdog.limits` (e.g. INVESTIGATING 10m, FIXING 20m) with a reason, and counts them in `gitoracle_watchdog_escalations_total` (alert `JobsStalling` in `infrastructure/prometheus/rules/`).
+
+Each agent also exposes its own synchronous HTTP endpoint (`/fix`, `/plan`, etc.) that the Kafka handler calls into internally, and that other services also call directly (e.g. the fixer's own self-test call to test-runner, or the orchestrator's synchronous guardrails/test-runner/github-bot calls). Don't assume an agent is reachable only via Kafka or only via HTTP — check both call sites before changing a signature.
 
 ### Service map
 | service | port | role |
