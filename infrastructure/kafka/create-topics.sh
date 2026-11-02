@@ -52,6 +52,20 @@ create_topic "tests-passed"                  3 604800000
 create_topic "tests-failed"                  3 604800000
 create_topic "pr-opened"                     3 604800000
 
+# ─── Agent dispatch topics (Java → Python agents) ─────────────
+# These carry every job between agents but were never created here — they
+# existed only because the broker auto-creates topics on first use, with
+# broker defaults instead of this script's retention/compression settings.
+create_topic "job.events.investigate"        3 604800000
+create_topic "job.events.plan"               3 604800000
+create_topic "job.events.fix"                3 604800000
+create_topic "job.events.review.received"    3 604800000
+create_topic "github-pr-events"              3 604800000
+
+# Messages an agent could not process, with the error (shared/kafka_consumer.py).
+# Kept 30 days so a failure can be inspected and the message replayed.
+create_topic "job.events.dlq"                1 2592000000
+
 # ─── Human interaction topics ─────────────────────────────────
 create_topic "confirmation-required"         1 604800000
 create_topic "human-confirmation-received"   1 604800000

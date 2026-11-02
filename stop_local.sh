@@ -55,6 +55,17 @@ safe_kill_port() {
 }
 
 echo "🛑 Stopping GitOracle app services..."
+
+# start_local.sh runs every service inside a restart loop. Stop the loops FIRST,
+# or they would restart each service the moment the sweep below kills it: the
+# flag tells a loop not to restart, and killing the loop's own PID (from the
+# .supervisor.pid file it wrote — never a port lookup) ends it immediately.
+touch .gitoracle-stopping
+for f in java-backend/*.supervisor.pid ai_core/*.supervisor.pid dashboard/*.supervisor.pid; do
+  [ -f "$f" ] || continue
+  kill "$(cat "$f")" 2>/dev/null || true
+done
+
 for PORT in $APP_PORTS; do
   safe_kill_port "$PORT"
 done

@@ -11,6 +11,7 @@ import uvicorn
 # Ensure ai_core modules can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.internal_auth import require_internal_token
+from shared.health import add_health_route
 from shared.body_limit import BodySizeLimitMiddleware
 
 # Build the connection string from the same POSTGRES_* env vars the other agents
@@ -61,6 +62,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="GitOracle Prompt Registry", lifespan=lifespan, dependencies=[Depends(require_internal_token)])
 app.add_middleware(BodySizeLimitMiddleware)
+add_health_route(app, "prompt_registry")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

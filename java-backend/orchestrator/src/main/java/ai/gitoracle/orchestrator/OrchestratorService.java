@@ -4,6 +4,7 @@ import ai.gitoracle.core.kafka.KafkaTopics;
 import ai.gitoracle.core.kafka.event.ErrorIngestedEvent;
 import ai.gitoracle.core.model.postgres.AgentJob;
 import ai.gitoracle.orchestrator.token.AgentJobRepository;
+import ai.gitoracle.orchestrator.service.JobStateService;
 import ai.gitoracle.orchestrator.service.WorkspaceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,10 +19,10 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
 import jakarta.persistence.EntityManager;
-import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -34,6 +35,7 @@ public class OrchestratorService {
     private final WorkspaceService workspaceService;
     private final EntityManager entityManager;
     private final ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository;
+    private final JobStateService jobState;
     private final RestTemplate restTemplate = new RestTemplate();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
@@ -45,12 +47,14 @@ public class OrchestratorService {
 
     public OrchestratorService(AgentJobRepository jobRepository, KafkaTemplate<String, Object> kafkaTemplate,
                                WorkspaceService workspaceService, EntityManager entityManager,
-                               ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository) {
+                               ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository,
+                               JobStateService jobState) {
         this.jobRepository = jobRepository;
         this.kafkaTemplate = kafkaTemplate;
         this.workspaceService = workspaceService;
         this.entityManager = entityManager;
         this.prOutcomeRepository = prOutcomeRepository;
+        this.jobState = jobState;
     }
 
     /** Wraps a request body with the X-Internal-Token header every internal-service call needs. */
@@ -140,23 +144,26 @@ public class OrchestratorService {
             job.setTenantId(event.getTenantId() != null
                 ? event.getTenantId()
                 : ai.gitoracle.core.model.postgres.Tenant.DEFAULT_ID);
-            job.setCreatedAt(OffsetDateTime.now());
+            // Saved once as QUEUED so it has an id before its first timeline event.
+            job.setState("QUEUED");
+            jobRepository.save(job);
+            jobState.recordCreated(job, "Error reported: " + event.getErrorId(), "error-ingestor");
         }
 
-        job.setState("INVESTIGATING");
-        jobRepository.save(job);
+        jobState.transition(job, "INVESTIGATING", "Cloning the repo and starting investigation", "orchestrator");
 
-        logger.info("Job {} ready. Triggering AI Planner...", job.getId());
-        
         // 2. Clone the repository (a specific branch, if the job requested one) into
         // a dynamic workspace
         String branch = event.getBranch();
         String repoPath = workspaceService.cloneRepository(event.getRepoUrl(), branch, job.getId());
 
-        // Capture the real HEAD commit so downstream PRs report an accurate root commit
+        // HEAD is what the patch will apply to — recorded as the base commit, NOT
+        // as the root cause. rootCommit stays null until the Investigator answers
+        // (persistInvestigationResult); filling it with HEAD made a job whose
+        // Investigator never responded look like it had found a cause.
         String headSha = workspaceService.getHeadCommitSha(repoPath);
         if (headSha != null) {
-            job.setRootCommit(headSha);
+            job.setBaseCommit(headSha);
             jobRepository.save(job);
         }
 
@@ -217,21 +224,65 @@ public class OrchestratorService {
                 // the commit that introduced the bug, so it was measuring HEAD and would only
                 // ever be "right" when the bug commit happened to be HEAD.
                 //
-                // HEAD stays as the fallback, so a job whose investigation yields no ranked
-                // cause is no worse off than before.
-                rankedCause(investigation).ifPresent(cause -> {
-                    job.setRootCommit(cause.sha());
-                    job.setCausalScore(cause.score());
+                // A job whose investigation yields no ranked cause keeps rootCommit
+                // null — "not found" — rather than inheriting a placeholder.
+                var cause = rankedCause(investigation);
+                cause.ifPresent(c -> {
+                    job.setRootCommit(c.sha());
+                    job.setCausalScore(c.score());
                     logger.info("Job {} root cause set from investigation: {} (score {})",
-                                jobIdStr, cause.sha(), cause.score());
+                                jobIdStr, c.sha(), c.score());
                 });
 
                 jobRepository.save(job);
                 logger.info("Persisted investigation result for job {}", jobIdStr);
+
+                // The investigate→plan handoff is the moment investigation ends. The
+                // job used to stay INVESTIGATING through planning AND fixing, which
+                // is what made a stalled first CI eval run look like a slow
+                // investigation. ESCALATED is allowed because approving an
+                // escalation resumes here (DashboardController sets PLANNING first,
+                // making this a no-op in that case).
+                jobState.transitionFrom(job, Set.of("QUEUED", "INVESTIGATING", "ESCALATED"), "PLANNING",
+                    cause.map(c -> "Investigation complete — top cause " + shortSha(c.sha())
+                                   + String.format(" (score %.2f)", c.score()))
+                         .orElse("Investigation complete — no ranked cause"),
+                    "investigator");
             });
         } catch (Exception e) {
             logger.warn("Could not persist investigation result: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Snoops the plan→fix handoff (planner → fixer, or a dashboard/review
+     * regeneration) to move the job to FIXING. A separate consumer group, like the
+     * plan snoop, so the fixer still receives every message.
+     */
+    @KafkaListener(topics = "job.events.fix", groupId = "orchestrator-fix-snoop-group",
+                   containerFactory = "stringValueKafkaListenerContainerFactory")
+    @Transactional
+    public void markFixing(String rawJson) {
+        try {
+            Map<String, Object> event = objectMapper.readValue(rawJson, Map.class);
+            String jobIdStr = (String) event.get("job_id");
+            if (jobIdStr == null) return;
+            Object plan = event.get("plan");
+            String strategy = plan instanceof Map<?, ?> p && p.get("strategy") != null
+                ? String.valueOf(p.get("strategy")) : "unspecified";
+
+            jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job ->
+                // Only forward: a late-processed message must not pull a job that
+                // has already produced its fix (TESTING) back to FIXING.
+                jobState.transitionFrom(job, Set.of("QUEUED", "INVESTIGATING", "PLANNING", "REGENERATING"),
+                    "FIXING", "Plan ready (strategy: " + strategy + ") — generating a fix", "planner"));
+        } catch (Exception e) {
+            logger.warn("Could not record FIXING for job.events.fix message: {}", e.getMessage());
+        }
+    }
+
+    private static String shortSha(String sha) {
+        return sha != null && sha.length() > 8 ? sha.substring(0, 8) : sha;
     }
 
     // Package-private (not private) so OrchestratorServiceTest can exercise it
@@ -282,13 +333,19 @@ public class OrchestratorService {
         // the event, not this row.
         String authorizedFilesCsv = event.getOrDefault("authorizedFiles", "");
         jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
-            job.setState("TESTING");
             String patch = event.get("patch");
             if (patch != null && !patch.isBlank()) {
                 job.setFixPatch(patch);
             }
             job.setAuthorizedFiles(authorizedFilesCsv);
+            // One per fix cycle the fixer completes (a regeneration is another cycle).
+            // The field existed but nothing ever incremented it, and the PR body
+            // reported a hardcoded fixAttempts=1.
+            job.setAttempts((job.getAttempts() == null ? 0 : job.getAttempts()) + 1);
             jobRepository.save(job);
+            jobState.transition(job, "TESTING",
+                "Fix #" + job.getAttempts() + " generated — validating with guardrails and running tests",
+                "fixer");
         });
 
         // 3. Call the Guardrails Agent (:9006) to validate the patch
@@ -333,18 +390,12 @@ public class OrchestratorService {
             logger.info("Guardrails validation passed.");
         } catch (org.springframework.web.client.HttpClientErrorException e) {
             logger.warn("Guardrails validation FAILED for job {}: {}", jobIdStr, e.getResponseBodyAsString());
-            jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
-                job.setState("FAILED");
-                jobRepository.save(job);
-            });
+            fail(jobIdStr, "Guardrails rejected the patch: " + e.getResponseBodyAsString(), "guardrails");
             return; // Block execution
         } catch (Exception e) {
             logger.error("Failed to contact Guardrails Agent. Is it running on port 9006?", e);
             // We can choose to fail open or fail closed here. For safety, we fail closed.
-            jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
-                job.setState("FAILED");
-                jobRepository.save(job);
-            });
+            fail(jobIdStr, "Guardrails unreachable, failing closed: " + e.getMessage(), "orchestrator");
             return;
         }
 
@@ -355,9 +406,11 @@ public class OrchestratorService {
             // Look up the repo URL and root commit from the job record
             final String[] repoUrl = {""};
             final String[] rootCommit = {null};
+            final Integer[] attempts = {1};
             jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
                 repoUrl[0] = job.getRepo();
                 rootCommit[0] = job.getRootCommit();
+                if (job.getAttempts() != null) attempts[0] = job.getAttempts();
             });
 
             // branch flows through the event chain the same way targetRepo does — an
@@ -388,19 +441,25 @@ public class OrchestratorService {
                 testsPassedPayload.put("isRegeneration", event.getOrDefault("isRegeneration", "false"));
                 testsPassedPayload.put("qualityScore",   String.valueOf(response.get("qualityScore")));
                 testsPassedPayload.put("coverageDelta",  String.valueOf(response.get("coverageDelta")));
+                testsPassedPayload.put("fixAttempts",    String.valueOf(attempts[0]));
                 kafkaTemplate.send(KafkaTopics.TESTS_PASSED, testsPassedPayload);
             } else {
                 String testLogs = response != null ? String.valueOf(response.get("logs")) : "no response";
-                logger.warn("Tests FAILED for job {}. Logs:\n{}", jobIdStr,
-                    testLogs.length() > 500 ? testLogs.substring(0, 500) + "..." : testLogs);
-                jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
-                    job.setState("FAILED");
-                    jobRepository.save(job);
-                });
+                String excerpt = testLogs.length() > 500 ? testLogs.substring(0, 500) + "..." : testLogs;
+                logger.warn("Tests FAILED for job {}. Logs:\n{}", jobIdStr, excerpt);
+                fail(jobIdStr, "Tests failed with the patch applied: " + excerpt, "test-runner");
             }
         } catch (Exception e) {
             logger.error("Failed to contact Test Runner. Is it running on port 8084?", e);
+            // This used to only log, leaving the job in TESTING forever with nothing
+            // to say why.
+            fail(jobIdStr, "Test runner unreachable or errored: " + e.getMessage(), "orchestrator");
         }
+    }
+
+    private void fail(String jobIdStr, String reason, String actor) {
+        jobRepository.findById(UUID.fromString(jobIdStr))
+            .ifPresent(job -> jobState.transition(job, "FAILED", reason, actor));
     }
 
     @KafkaListener(topics = KafkaTopics.TESTS_PASSED, groupId = "orchestrator-group")
@@ -459,7 +518,7 @@ public class OrchestratorService {
             prRequest.put("rootCommit", event.get("rootCommit"));
             prRequest.put("causalScore", 0.95);
             prRequest.put("fixStrategy", "patch");
-            prRequest.put("fixAttempts", 1);
+            prRequest.put("fixAttempts", (int) parseDoubleOrDefault(event.get("fixAttempts"), 1));
             prRequest.put("testsPassed", 1);
             prRequest.put("testsTotal", 1);
             prRequest.put("coverageDelta", parseDoubleOrDefault(event.get("coverageDelta"), 0.0));
@@ -477,9 +536,8 @@ public class OrchestratorService {
 
             jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
                 if (finalSuccess) {
-                    job.setState("PR_OPENED");
                     job.setPrUrl(prUrl);
-                    jobRepository.save(job);
+                    jobState.transition(job, "PR_OPENED", "Pull request opened: " + prUrl, "github-bot");
                     logger.info("Orchestrator pipeline complete for job: {} — PR: {}", jobIdStr, prUrl);
                 } else {
                     escalateUnlessAlreadySucceeded(job, prError);
@@ -508,8 +566,7 @@ public class OrchestratorService {
                         job.getId(), reason, job.getPrUrl());
             return;
         }
-        job.setState("ESCALATED");
-        jobRepository.save(job);
+        jobState.transition(job, "ESCALATED", "PR creation failed: " + reason, "github-bot");
         logger.error("GitHub Bot failed to open PR for job {}: {}", job.getId(), reason);
     }
 
@@ -562,8 +619,8 @@ public class OrchestratorService {
 
             if (actionNeeded) {
                 logger.info("Re-triggering Fixer Agent with human instructions for job {}", jobIdStr);
-                job.setState("REGENERATING");
-                jobRepository.save(job);
+                jobState.transition(job, "REGENERATING",
+                    "Reviewer agreed with a PR comment — regenerating: " + comment, "reviewer");
 
                 String repoPath    = "/tmp/gitoracle-workspaces/" + jobIdStr;
                 String repoForPr   = repo != null ? repo.replace("https://github.com/", "") : "";
@@ -601,16 +658,22 @@ public class OrchestratorService {
         
         logger.warn("Orchestrator received JOB_ESCALATED event for job: {}", jobIdStr);
         
-        // 1. Update job state to ESCALATED
+        // 1. Update job state to ESCALATED — unless the job already finished. This
+        // used to overwrite unconditionally, so a late escalation (e.g. a token
+        // budget warning arriving after the PR opened) turned a successful job
+        // into ESCALATED and queued a pointless human review.
+        String reason = String.valueOf(event.getOrDefault("reason", "Unknown escalation reason"));
         jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
-            job.setState("ESCALATED");
-            jobRepository.save(job);
-            
+            String actor = String.valueOf(event.getOrDefault("source", "agent"));
+            if (!jobState.transition(job, "ESCALATED", reason, actor)) {
+                return;
+            }
+
             // 2. Create Escalation record for the frontend
             ai.gitoracle.core.entity.Escalation escalation = new ai.gitoracle.core.entity.Escalation();
             escalation.setId(UUID.randomUUID());
             escalation.setJob(job);
-            escalation.setReason((String) event.getOrDefault("reason", "Unknown escalation reason"));
+            escalation.setReason(reason);
             
             Object confObj = event.get("confidenceScore");
             if (confObj instanceof Number) {

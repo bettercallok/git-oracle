@@ -35,6 +35,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
 from shared.internal_auth import require_internal_token
+from shared.health import add_health_route
 from shared.body_limit import BodySizeLimitMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -42,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="GitOracle Commit Analyst", version="1.0", dependencies=[Depends(require_internal_token)])
 app.add_middleware(BodySizeLimitMiddleware)
+add_health_route(app, "commit_analyst")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -132,11 +134,6 @@ DIFF:
     return messages
 
 # ─── Endpoints ─────────────────────────────────────────────────────────────────
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "agent": "commit_analyst"}
-
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(request: AnalyzeRequest):

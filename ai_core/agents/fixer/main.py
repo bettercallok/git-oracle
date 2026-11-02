@@ -17,6 +17,7 @@ from shared.structured_output import llm_structured
 from shared.memory import AgentMemory
 from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 from shared.internal_auth import require_internal_token
+from shared.job_events import report_event, ERROR
 from shared.body_limit import BodySizeLimitMiddleware
 from shared.safe_paths import UnsafePathError, partition_safe, resolve_within, safe_read_text
 
@@ -276,6 +277,8 @@ async def execute_fix(request: FixerRequest):
     # ReAct Loop (Up to 3 attempts to save time during testing, normally 5)
     for attempt in range(3):
         logger.info(f"Fixer Attempt {attempt + 1}")
+        await report_event(request.job_id, "fixer", f"Attempt {attempt + 1} of 3 started",
+                           details={"attempt": attempt + 1})
         
         # 2. Retrieve Episodic Memory
         try:
@@ -343,11 +346,17 @@ Do not write a diff yourself — the unified diff is computed automatically from
             )
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
+            await report_event(request.job_id, "fixer", f"Attempt {attempt + 1}: LLM call failed: {e}",
+                               type=ERROR, details={"attempt": attempt + 1})
             continue
 
         diff_text = build_unified_diff(local_src_path, edit.file_path, edit.search, edit.replace)
         if diff_text is None:
             logger.warning(f"Rejected edit to {edit.file_path} — asking the model to retry")
+            await report_event(request.job_id, "fixer",
+                               f"Attempt {attempt + 1}: edit to {edit.file_path} rejected — search text not "
+                               "found verbatim, or unbalanced braces",
+                               details={"attempt": attempt + 1, "file": edit.file_path})
             hint = (
                 f"WARNING: Your previous edit to {edit.file_path} was rejected — either the 'search' text didn't "
                 "match exactly (copy it verbatim, including whitespace/indentation, from the source context above), "
@@ -373,6 +382,9 @@ Do not write a diff yourself — the unified diff is computed automatically from
         patch_hash = hashlib.sha256(patch.diff.encode('utf-8')).hexdigest()
         if patch_hash in seen_patches:
             logger.warning("Loop detected! Agent generated the exact same patch.")
+            await report_event(request.job_id, "fixer",
+                               f"Attempt {attempt + 1}: produced the same patch as before — retrying",
+                               details={"attempt": attempt + 1})
             hint = "WARNING: Your previous patch failed the tests. You MUST try a fundamentally different approach. Do not output the same diff."
             continue
         
@@ -417,6 +429,10 @@ Do not write a diff yourself — the unified diff is computed automatically from
                 request.branch or ""
             )
         
+        await report_event(request.job_id, "fixer",
+                           f"Attempt {attempt + 1}: self-test {'passed' if tests_passed else 'failed'} "
+                           f"({edit.file_path})",
+                           details={"attempt": attempt + 1, "file": edit.file_path, "passed": bool(tests_passed)})
         if tests_passed:
             # 7. Store successful fix in episodic memory
             try:
@@ -435,7 +451,8 @@ Do not write a diff yourself — the unified diff is computed automatically from
 
 import asyncio
 from shared.kafka_consumer import KafkaEventConsumer
-from shared.kafka_producer import KafkaEventProducer
+from shared.kafka_producer import get_producer, close_producer
+from shared.health import add_health_route
 
 async def handle_fix_job(payload: dict):
     logger.info(f"Received Kafka event for fixer: {payload}")
@@ -448,7 +465,13 @@ async def handle_fix_job(payload: dict):
     target_repo = payload.get("target_repo", "")
     branch = payload.get("branch") or None
 
-    plan = PlannerOutput(**plan_dict)
+    try:
+        # Inside a try: a malformed plan used to raise straight out of the
+        # handler — before any escalation code — and kill the consumer.
+        plan = PlannerOutput(**plan_dict)
+    except Exception as e:
+        await _escalate(job_id, f"Fixer received an invalid plan: {e}", 0.0)
+        return
 
     bug_desc = payload.get("bug_description", "Fixing error based on plan")
     if human_instructions:
@@ -468,7 +491,7 @@ async def handle_fix_job(payload: dict):
     
     try:
         result = await execute_fix(request)
-        producer = KafkaEventProducer()
+        producer = get_producer()
         if result.success and result.patch:
             fix_payload = {
                 "jobId": job_id,
@@ -500,12 +523,35 @@ async def handle_fix_job(payload: dict):
             })
             logger.info(f"Published job-escalated for job {job_id}")
     except Exception as e:
-        logger.error(f"Fix execution failed for job {job_id}: {e}")
+        # Used to only log, leaving the job in FIXING forever. The investigator
+        # and planner already escalated on failure; now the fixer does too.
+        logger.exception(f"Fix execution failed for job {job_id}: {e}")
+        await _escalate(job_id, f"Fixer Agent failed: {e}", request.plan.confidence)
+
+
+async def _escalate(job_id: str, reason: str, confidence: float) -> None:
+    try:
+        await get_producer().publish("job-escalated", {
+            "jobId": job_id, "reason": reason, "confidenceScore": confidence, "source": "fixer",
+        })
+        logger.info(f"Published job-escalated for job {job_id}")
+    except Exception as publish_error:
+        logger.error(f"Could not escalate job {job_id}: {publish_error}")
+
+# Created at import so /health can report on it. The task is kept on app.state:
+# asyncio holds only a weak reference to tasks, and this one used to be
+# fire-and-forget.
+_consumer = KafkaEventConsumer(topic="job.events.fix", group_id="fixer-agent-group")
+add_health_route(app, "fixer", _consumer)
 
 @app.on_event("startup")
 async def startup_event():
-    consumer = KafkaEventConsumer(topic="job.events.fix", group_id="fixer-agent-group")
-    asyncio.create_task(consumer.consume(handle_fix_job))
+    app.state.consumer_task = asyncio.create_task(_consumer.consume(handle_fix_job))
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    app.state.consumer_task.cancel()
+    await close_producer()
 
 if __name__ == "__main__":
     import uvicorn

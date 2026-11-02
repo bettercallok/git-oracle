@@ -13,6 +13,7 @@ from shared.structured_output import llm_structured
 from shared.memory import SemanticMemory
 from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 from shared.internal_auth import require_internal_token
+from shared.job_events import report_event
 from shared.body_limit import BodySizeLimitMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -129,7 +130,8 @@ Constrain the Fixer Agent by setting 'max_lines_to_change' to the absolute minim
 # ==========================================
 import asyncio
 from shared.kafka_consumer import KafkaEventConsumer
-from shared.kafka_producer import KafkaEventProducer
+from shared.kafka_producer import get_producer, close_producer
+from shared.health import add_health_route
 
 async def handle_planner_job(payload: dict):
     logger.info(f"Received Kafka event for planning: {payload}")
@@ -181,9 +183,16 @@ async def handle_planner_job(payload: dict):
         # 2. Execute AI Planning
         plan = await create_plan(request)
         logger.info(f"Generated Plan for job {job_id}: {plan.strategy}")
+        await report_event(
+            job_id, "planner",
+            f"Plan: {plan.strategy}, up to {plan.max_lines_to_change} lines in "
+            f"{', '.join(plan.affected_files) or 'no specific files'}",
+            details={"strategy": plan.strategy, "affected_files": plan.affected_files[:20],
+                     "confidence": plan.confidence},
+        )
         
         # 3. Publish to next step (Fixer)
-        producer = KafkaEventProducer()
+        producer = get_producer()
         fix_payload = {
             "job_id": job_id,
             "repo_url": payload.get("repo_url", ""),
@@ -203,7 +212,7 @@ async def handle_planner_job(payload: dict):
         # if planning throws, because nothing downstream ever runs to move it on.
         logger.error(f"Planning failed for job {job_id}: {e}")
         try:
-            await KafkaEventProducer().publish("job-escalated", {
+            await get_producer().publish("job-escalated", {
                 "jobId": job_id,
                 "reason": f"Planner Agent failed: {e}",
                 "confidenceScore": float(getattr(investigation, "confidence_score", 0.0) or 0.0),
@@ -212,11 +221,20 @@ async def handle_planner_job(payload: dict):
         except Exception as publish_error:
             logger.error(f"Could not escalate job {job_id}: {publish_error}")
 
+# Created at import so /health can report on it. The task is kept on app.state:
+# asyncio holds only a weak reference to tasks, and this one used to be
+# fire-and-forget.
+_consumer = KafkaEventConsumer(topic="job.events.plan", group_id="planner-agent-group")
+add_health_route(app, "planner", _consumer)
+
 @app.on_event("startup")
 async def startup_event():
-    # Start the Kafka consumer in a background task
-    consumer = KafkaEventConsumer(topic="job.events.plan", group_id="planner-agent-group")
-    asyncio.create_task(consumer.consume(handle_planner_job))
+    app.state.consumer_task = asyncio.create_task(_consumer.consume(handle_planner_job))
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    app.state.consumer_task.cancel()
+    await close_producer()
 
 if __name__ == "__main__":
     import uvicorn

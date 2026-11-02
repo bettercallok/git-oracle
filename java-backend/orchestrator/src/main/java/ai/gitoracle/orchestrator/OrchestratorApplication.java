@@ -19,6 +19,10 @@ import java.util.HashMap;
 import java.util.Map;
 
 @SpringBootApplication(exclude = {Neo4jReactiveDataAutoConfiguration.class})
+// Scheduling drives JobWatchdog; properties bind gitoracle.watchdog.*.
+@org.springframework.scheduling.annotation.EnableScheduling
+@org.springframework.boot.context.properties.EnableConfigurationProperties(
+    ai.gitoracle.orchestrator.service.WatchdogProperties.class)
 @EntityScan(basePackages = {"ai.gitoracle.core.model.postgres", "ai.gitoracle.core.entity"})
 @EnableJpaRepositories(basePackages = {"ai.gitoracle.core.model.postgres", "ai.gitoracle.orchestrator"})
 public class OrchestratorApplication {
@@ -54,6 +58,12 @@ public class OrchestratorApplication {
         ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(stringValueConsumerFactory);
         return factory;
+    }
+
+    /** Injected wherever "now" matters (job timeline, state timestamps) so tests can fix it. */
+    @Bean
+    public java.time.Clock clock() {
+        return java.time.Clock.systemUTC();
     }
 
     @Bean
