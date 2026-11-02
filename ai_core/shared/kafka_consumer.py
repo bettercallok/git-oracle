@@ -112,6 +112,14 @@ class KafkaEventConsumer:
                                     f"undecodable message: {e}", None)
             return
 
+        # Every handler expects an event object. An empty message (raw None — a
+        # tombstone) or valid JSON that isn't an object (`[]`, `"x"`, `3`) used to
+        # reach the handler anyway and crash it with an unrelated TypeError.
+        if not isinstance(payload, dict):
+            logger.error(f"Non-object message on {self.topic}: {type(payload).__name__}")
+            await self._dead_letter(payload, f"not a JSON object: {type(payload).__name__}", None)
+            return
+
         logger.debug(f"Received event: {payload}")
         try:
             await message_handler(payload)
