@@ -136,4 +136,24 @@ class JobStateServiceTest {
         assertThat(event.getValue().getDetails()).contains("\"attempt\":2");
         verify(jobRepository, never()).save(any());
     }
+
+    @Test
+    void anOpenPrCanBeMergedOrClosedAndAClosedOneCanStillBeMerged() {
+        AgentJob closed = job("PR_OPENED");
+        assertThat(service.transition(closed, "PR_CLOSED", "closed by a human", "github")).isTrue();
+        assertThat(service.transition(closed, "PR_MERGED", "reopened and merged", "github")).isTrue();
+
+        AgentJob merged = job("PR_OPENED");
+        assertThat(service.transition(merged, "PR_MERGED", "merged", "github")).isTrue();
+        assertThat(service.transition(merged, "PR_CLOSED", "late", "github")).isFalse();
+        assertThat(merged.getState()).isEqualTo("PR_MERGED");
+    }
+
+    @Test
+    void aFailedJobCannotBeMarkedMergedOrClosed() {
+        AgentJob failed = job("FAILED");
+
+        assertThat(service.transition(failed, "PR_MERGED", "?", "github")).isFalse();
+        assertThat(service.transition(failed, "PR_CLOSED", "?", "github")).isFalse();
+    }
 }

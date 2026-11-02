@@ -5,8 +5,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.kohsuke.github.GHPullRequest;
 import org.kohsuke.github.GitHub;
@@ -159,6 +161,49 @@ public class GitHubController {
     }
 
     public record PullRequestResult(boolean success, String prUrl, String error) {}
+
+    /** {@code state} is "open" or "closed"; {@code by} merged or closed it (null while open). */
+    public record PullRequestStatus(String prUrl, String state, boolean merged, String by) {}
+
+    /**
+     * Whether a PR GitOracle opened is still open, merged or closed — asked of
+     * GitHub directly. The orchestrator's PrStatusReconciler polls this for
+     * jobs in PR_OPENED, because the pull_request webhook that would otherwise
+     * report it can't reach a local deployment (it never had).
+     */
+    @GetMapping("/pull-request/status")
+    public ResponseEntity<?> pullRequestStatus(@RequestParam("url") String prUrl) {
+        String repoFullName = repositoryOf(prUrl);
+        Integer number = repoFullName == null ? null : pullRequestNumber(prUrl, repoFullName);
+        if (number == null) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("error", "not a GitHub pull request URL: " + prUrl));
+        }
+        try {
+            RepoRefValidator.validateRepoUrl("https://github.com/" + repoFullName);
+            GHPullRequest pr = githubClient.getAuthenticatedGitHub().getRepository(repoFullName).getPullRequest(number);
+            boolean open = pr.getState() == org.kohsuke.github.GHIssueState.OPEN;
+            boolean merged = !open && pr.isMerged();
+            String by = null;
+            if (merged && pr.getMergedBy() != null) {
+                by = pr.getMergedBy().getLogin();
+            } else if (!open && pr.getClosedBy() != null) {
+                by = pr.getClosedBy().getLogin();
+            }
+            return ResponseEntity.ok(new PullRequestStatus(prUrl, open ? "open" : "closed", merged, by));
+        } catch (RepoRefValidator.InvalidRepoRefException e) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            logger.warn("Could not read status of {}: {}", prUrl, e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(java.util.Map.of("error", String.valueOf(e.getMessage())));
+        }
+    }
+
+    /** "owner/repo" from a GitHub pull request URL, or null. */
+    static String repositoryOf(String prUrl) {
+        if (prUrl == null) return null;
+        Matcher m = PR_URL.matcher(prUrl.trim());
+        return m.matches() ? m.group(1) : null;
+    }
 
     private static final Pattern PR_URL = Pattern.compile("^https://github\\.com/([^/]+/[^/]+)/pull/(\\d+)/?$");
 

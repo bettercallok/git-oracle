@@ -81,7 +81,7 @@ class OrchestratorServiceTest {
 
         service = new OrchestratorService(jobRepository, kafkaTemplate, workspaceService,
                                            entityManager, prOutcomeRepository, jobState,
-                                           new EscalationService(jobState, entityManager));
+                                           new EscalationService(jobState, entityManager, prOutcomeRepository));
 
         // OrchestratorService constructs its own `new RestTemplate()` rather than
         // taking one as a constructor argument, so the only way to intercept the
@@ -544,5 +544,90 @@ class OrchestratorServiceTest {
             org.mockito.ArgumentCaptor.forClass(ai.gitoracle.core.entity.Escalation.class);
         verify(entityManager).persist(escalation.capture());
         assertThat(escalation.getValue().getConfidenceScore()).isEqualTo(0.42);
+    }
+
+    // ── what a human did with the PR ──────────────────────────────────────
+
+    @Test
+    void aPrClosedWithoutMergingMovesTheJobToPrClosed() {
+        // chillcall#18 was closed without merging and job 9e09ccf6 kept showing
+        // "PR opened": the outcome went into pr_outcomes only.
+        UUID jobId = UUID.randomUUID();
+        String pr = "https://github.com/bettercallok/chillcall/pull/18";
+        AgentJob job = jobWith(jobId, "PR_OPENED", pr);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.handlePrOutcome(Map.of("jobId", jobId.toString(), "type", "PR_CLOSED",
+                                       "reviewer", "bettercallok", "prUrl", pr));
+
+        assertThat(job.getState()).isEqualTo("PR_CLOSED");
+        assertThat(job.getStateReason()).isEqualTo("Pull request closed without merging by bettercallok: " + pr);
+        verify(prOutcomeRepository).save(any());
+    }
+
+    @Test
+    void aMergedPrMovesTheJobToPrMerged() {
+        UUID jobId = UUID.randomUUID();
+        String pr = "https://github.com/bettercallok/chillcall/pull/18";
+        AgentJob job = jobWith(jobId, "PR_OPENED", pr);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.recordPrOutcome(jobId, "MERGED", "bettercallok", pr);
+
+        assertThat(job.getState()).isEqualTo("PR_MERGED");
+    }
+
+    @Test
+    void anOutcomeAlreadyRecordedForThatPrChangesNothing() {
+        UUID jobId = UUID.randomUUID();
+        String pr = "https://github.com/bettercallok/chillcall/pull/18";
+        AgentJob job = jobWith(jobId, "PR_OPENED", pr);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+        when(prOutcomeRepository.existsByJobIdAndOutcomeAndPrUrl(jobId, "CLOSED", pr)).thenReturn(true);
+
+        service.recordPrOutcome(jobId, "CLOSED", "bettercallok", pr);
+
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+        verify(prOutcomeRepository, never()).save(any());
+    }
+
+    @Test
+    void closingAnOlderPrIsRecordedButLeavesAJobWithANewerPrAlone() {
+        // After a regeneration opened a new PR, the old one being closed is history.
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "PR_OPENED", "https://github.com/bettercallok/chillcall/pull/25");
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.recordPrOutcome(jobId, "CLOSED", "bettercallok", "https://github.com/bettercallok/chillcall/pull/18");
+
+        verify(prOutcomeRepository).save(any());
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+    }
+
+    @Test
+    void anApprovalIsRecordedWithoutChangingTheJobsState() {
+        UUID jobId = UUID.randomUUID();
+        String pr = "https://github.com/bettercallok/chillcall/pull/18";
+        AgentJob job = jobWith(jobId, "PR_OPENED", pr);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.recordPrOutcome(jobId, "APPROVED", "reviewer", pr);
+
+        verify(prOutcomeRepository).save(any());
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+    }
+
+    @Test
+    void aFailedRegenerationOfAJobWhosePrWasClosedReturnsItToPrClosedNotPrOpened() {
+        UUID jobId = UUID.randomUUID();
+        String pr = "https://github.com/bettercallok/chillcall/pull/18";
+        AgentJob job = jobWith(jobId, "FIXING", pr);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+        when(prOutcomeRepository.existsByJobIdAndOutcomeAndPrUrl(jobId, "CLOSED", pr)).thenReturn(true);
+
+        service.handleJobEscalated(Map.of("jobId", jobId.toString(), "reason", "Fixer Agent exhausted all attempts."));
+
+        assertThat(job.getState()).isEqualTo("PR_CLOSED");
+        verify(entityManager, never()).persist(any());
     }
 }

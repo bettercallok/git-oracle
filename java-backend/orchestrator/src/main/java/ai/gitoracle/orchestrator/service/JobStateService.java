@@ -40,13 +40,20 @@ public class JobStateService {
     private static final Logger logger = LoggerFactory.getLogger(JobStateService.class);
 
     /** States a job does not leave on its own. */
-    public static final Set<String> TERMINAL = Set.of("PR_OPENED", "FAILED");
+    public static final Set<String> TERMINAL = Set.of("PR_OPENED", "PR_MERGED", "PR_CLOSED", "FAILED");
 
     /**
-     * The one way back out of a terminal state: a human asked for another fix
-     * cycle (a PR review comment, or the dashboard's "regenerate").
+     * The only ways out of a terminal state. REGENERATING from any of them: a
+     * human asked for another fix cycle (a PR review comment, or the
+     * dashboard's "regenerate"). And what a human does to the PR itself —
+     * merging or closing it — which nothing used to record on the job at all:
+     * a PR closed without merging still showed as "PR opened" indefinitely.
      */
-    private static final String REENTRY = "REGENERATING";
+    private static final Map<String, Set<String>> TERMINAL_EXITS = Map.of(
+        "PR_OPENED", Set.of("REGENERATING", "PR_MERGED", "PR_CLOSED"),
+        "PR_CLOSED", Set.of("REGENERATING", "PR_MERGED"),
+        "PR_MERGED", Set.of("REGENERATING"),
+        "FAILED",    Set.of("REGENERATING"));
 
     private static final int MAX_REASON_CHARS = 4000;
 
@@ -63,8 +70,8 @@ public class JobStateService {
 
     /**
      * Moves {@code job} to {@code to}. Returns false (and changes nothing) if the
-     * job is already there, or is finished and this isn't a {@code REGENERATING}
-     * re-entry.
+     * job is already there, or is finished and {@code to} isn't one of the ways
+     * out of that state (see {@link #TERMINAL_EXITS}).
      */
     public boolean transition(AgentJob job, String to, String reason, String actor) {
         return transitionFrom(job, null, to, reason, actor);
@@ -81,7 +88,7 @@ public class JobStateService {
         if (to.equals(from)) {
             return false;
         }
-        if (from != null && TERMINAL.contains(from) && !REENTRY.equals(to)) {
+        if (from != null && TERMINAL.contains(from) && !TERMINAL_EXITS.get(from).contains(to)) {
             logger.warn("Job {} is {} — refusing to move it to {} ({}: {})",
                         job.getId(), from, to, actor, reason);
             return false;

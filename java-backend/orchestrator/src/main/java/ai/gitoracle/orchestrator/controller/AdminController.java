@@ -103,9 +103,10 @@ public class AdminController {
 
         try {
             // Counted 'COMPLETED', a state nothing ever sets, so the success rate
-            // was always 0. A job succeeds when its PR opens.
+            // was always 0. A job succeeds when its PR opens — and still counts
+            // once that PR is merged.
             Long jobsCompleted = entityManager.createQuery(
-                "SELECT COUNT(j) FROM AgentJob j WHERE j.tenantId = :tenantId AND j.state = 'PR_OPENED'", Long.class)
+                "SELECT COUNT(j) FROM AgentJob j WHERE j.tenantId = :tenantId AND j.state IN ('PR_OPENED', 'PR_MERGED')", Long.class)
                 .setParameter("tenantId", tenantUuid)
                 .getSingleResult();
 

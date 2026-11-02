@@ -7,7 +7,9 @@
  * sets — while PLANNING and FIXING, which the backend does set, were missing,
  * so those jobs showed as "info" and weren't counted as running.
  */
-export type StateGroup = 'queued' | 'running' | 'succeeded' | 'attention' | 'failed';
+// 'closed': a human closed the PR without merging it — finished, not a
+// failure of the pipeline, and nothing left for anyone to do.
+export type StateGroup = 'queued' | 'running' | 'succeeded' | 'attention' | 'failed' | 'closed';
 
 export interface StateMeta {
   label: string;
@@ -26,6 +28,8 @@ const META: Record<string, StateMeta> = {
   TESTING:       { label: 'Testing',       badge: 'badge-warning', group: 'running',   color: 'var(--accent)',  terminal: false },
   REGENERATING:  { label: 'Regenerating',  badge: 'badge-warning', group: 'running',   color: 'var(--warning)', terminal: false },
   PR_OPENED:     { label: 'PR opened',     badge: 'badge-success', group: 'succeeded', color: 'var(--success)', terminal: true },
+  PR_MERGED:     { label: 'PR merged',     badge: 'badge-success', group: 'succeeded', color: 'var(--success)', terminal: true },
+  PR_CLOSED:     { label: 'PR closed',     badge: 'badge-info',    group: 'closed',    color: 'var(--text-muted)', terminal: true },
   ESCALATED:     { label: 'Escalated',     badge: 'badge-danger',  group: 'attention', color: 'var(--danger)',  terminal: false },
   FAILED:        { label: 'Failed',        badge: 'badge-danger',  group: 'failed',    color: 'var(--danger)',  terminal: true },
 };

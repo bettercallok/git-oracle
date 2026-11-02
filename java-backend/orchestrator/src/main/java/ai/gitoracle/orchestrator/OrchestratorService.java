@@ -108,8 +108,27 @@ public class OrchestratorService {
 
         // Kafka redelivers; GitHub also retries webhooks. Recording the same
         // outcome twice would inflate the merge rate, so make this idempotent.
-        if (prOutcomeRepository.existsByJobIdAndOutcome(jobId, outcome)) {
-            logger.info("PR outcome {} for job {} already recorded — ignoring duplicate.", outcome, jobId);
+        recordPrOutcome(jobId, outcome, event.getOrDefault("reviewer", "unknown"), event.getOrDefault("prUrl", ""));
+    }
+
+    /**
+     * Records what a human did with a job's PR, and moves the job to match.
+     *
+     * <p>The outcome used to go into pr_outcomes only — the job itself stayed
+     * PR_OPENED after its PR was closed without merging (job 9e09ccf6,
+     * chillcall#18). MERGED and CLOSED now move the job to PR_MERGED / PR_CLOSED.
+     * Called for webhook events and by {@link ai.gitoracle.orchestrator.service.PrStatusReconciler},
+     * which finds the same outcomes by asking GitHub; whichever comes second is a
+     * duplicate and changes nothing.
+     *
+     * <p>Only the job's <em>current</em> PR moves it: after a regeneration opens a
+     * new PR, closing the old one is still recorded but leaves the job alone.
+     */
+    @Transactional
+    public void recordPrOutcome(UUID jobId, String outcome, String reviewer, String prUrl) {
+        String url = prUrl == null ? "" : prUrl;
+        if (prOutcomeRepository.existsByJobIdAndOutcomeAndPrUrl(jobId, outcome, url)) {
+            logger.info("PR outcome {} for job {} ({}) already recorded — ignoring duplicate.", outcome, jobId, url);
             return;
         }
 
@@ -117,11 +136,28 @@ public class OrchestratorService {
         row.setId(UUID.randomUUID());
         row.setJobId(jobId);
         row.setOutcome(outcome);
-        row.setReviewer(event.getOrDefault("reviewer", "unknown"));
-        row.setPrUrl(event.getOrDefault("prUrl", ""));
+        row.setReviewer(reviewer == null ? "unknown" : reviewer);
+        row.setPrUrl(url);
         prOutcomeRepository.save(row);
-
         logger.info("Recorded PR outcome {} for job {} (by {})", outcome, jobId, row.getReviewer());
+
+        String toState = switch (outcome) {
+            case "MERGED" -> "PR_MERGED";
+            case "CLOSED" -> "PR_CLOSED";
+            default -> null;   // an approval or a revert says nothing about whether the PR is still open
+        };
+        if (toState == null) return;
+        jobRepository.findById(jobId).ifPresent(job -> {
+            if (!url.isBlank() && !url.equals(job.getPrUrl())) {
+                logger.info("Job {}: {} was for {}, not its current PR {} — state unchanged",
+                            jobId, outcome, url, job.getPrUrl());
+                return;
+            }
+            String reason = "MERGED".equals(outcome)
+                ? "Pull request merged by " + row.getReviewer() + ": " + url
+                : "Pull request closed without merging by " + row.getReviewer() + ": " + url;
+            jobState.transitionFrom(job, Set.of("PR_OPENED", "PR_CLOSED"), toState, reason, "github");
+        });
     }
 
     @KafkaListener(topics = KafkaTopics.ERROR_INGESTED, groupId = "orchestrator-group")
@@ -586,9 +622,9 @@ public class OrchestratorService {
             logger.warn("PR creation failed for job {} ({}), but it already has PR {} — keeping PR_OPENED.",
                         job.getId(), reason, job.getPrUrl());
             // A failed update of a regenerated fix leaves the job in TESTING; return
-            // it to PR_OPENED (its PR is unchanged) with the reason. A no-op for a
-            // job that is already PR_OPENED.
-            jobState.transition(job, "PR_OPENED",
+            // it to its PR's state (the PR is unchanged) with the reason. A no-op
+            // for a job that is already there.
+            jobState.transition(job, escalations.stateForExistingPr(job),
                 "Regenerated fix passed its tests, but updating the pull request failed: " + reason
                     + " The existing pull request is unchanged: " + job.getPrUrl(),
                 "github-bot");

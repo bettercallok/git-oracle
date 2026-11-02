@@ -20,6 +20,9 @@ public interface AgentJobRepository extends JpaRepository<AgentJob, UUID> {
     @Query("UPDATE AgentJob j SET j.tokenBudgetUsed = COALESCE(j.tokenBudgetUsed, 0) + :tokens WHERE j.id = :jobId")
     int incrementTokens(@Param("jobId") UUID jobId, @Param("tokens") int tokens);
 
+    /** Jobs whose PR is open, for PrStatusReconciler. */
+    java.util.List<AgentJob> findByState(String state);
+
     /** Candidates for the stalled-job watchdog. */
     java.util.List<AgentJob> findByStateInAndStateChangedAtBefore(
             java.util.Collection<String> states, java.time.OffsetDateTime changedBefore);

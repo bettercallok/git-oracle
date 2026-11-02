@@ -47,8 +47,8 @@ LLM_MODEL = os.environ.get("LLM_MODEL_NAME", "llama-3.3-70b-versatile")
 # only terminal states written are PR_OPENED (success), ESCALATED and FAILED.
 # Polling for "SUCCESS" meant a successful run never satisfied the loop condition
 # and the harness hung forever on its first case.
-TERMINAL_STATES = {"PR_OPENED", "ESCALATED", "FAILED"}
-SUCCESS_STATES = {"PR_OPENED"}
+TERMINAL_STATES = {"PR_OPENED", "PR_MERGED", "PR_CLOSED", "ESCALATED", "FAILED"}
+SUCCESS_STATES = {"PR_OPENED", "PR_MERGED"}
 
 # A full pipeline pass (investigate → plan → fix → test → PR) plus LLM latency.
 POLL_TIMEOUT_SECONDS = int(os.environ.get("EVAL_POLL_TIMEOUT", "600"))

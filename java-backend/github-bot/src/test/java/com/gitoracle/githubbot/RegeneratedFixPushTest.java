@@ -135,6 +135,15 @@ class RegeneratedFixPushTest {
         assertThat(GitHubController.pullRequestNumber(null, "bettercallok/chillcall")).isNull();
     }
 
+    @Test
+    void theStatusEndpointOnlyAcceptsGitHubPullRequestUrls() {
+        assertThat(GitHubController.repositoryOf("https://github.com/bettercallok/chillcall/pull/18"))
+            .isEqualTo("bettercallok/chillcall");
+        assertThat(GitHubController.repositoryOf("https://github.com/bettercallok/chillcall/issues/18")).isNull();
+        assertThat(GitHubController.repositoryOf("https://evil.example/a/b/pull/1")).isNull();
+        assertThat(GitHubController.repositoryOf(null)).isNull();
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────
 
     private static void configure(String repo) throws Exception {

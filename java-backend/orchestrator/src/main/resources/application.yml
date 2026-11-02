@@ -13,6 +13,12 @@ gitoracle:
       FIXING: PT20M
       TESTING: PT15M
       REGENERATING: PT20M
+  # Asks GitHub (via github-bot) whether each PR_OPENED job's PR was merged or
+  # closed (PrStatusReconciler) — the pull_request webhook can't reach a local
+  # deployment. One GitHub API call per open PR per interval.
+  pr-reconciler:
+    enabled: ${GITORACLE_PR_RECONCILER_ENABLED:true}
+    interval: ${GITORACLE_PR_RECONCILER_INTERVAL:PT3M}
 
 spring:
   application:

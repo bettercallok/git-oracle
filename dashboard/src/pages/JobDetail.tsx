@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, CheckCircle2, Loader2, AlertCircle, GitPullRequest, RefreshCw, Send, ExternalLink } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Loader2, AlertCircle, GitPullRequest, GitPullRequestClosed, RefreshCw, Send, ExternalLink } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { stateMeta, isRunning } from '../utils/jobState';
@@ -64,7 +64,9 @@ const fetchEvents = async (id: string): Promise<JobEvent[]> => {
 };
 
 // Every LLM call in a job is traced under the job id (structured_output.py).
-const LANGFUSE_URL = import.meta.env.VITE_LANGFUSE_URL || 'http://localhost:3000';
+// Langfuse runs on LANGFUSE_PORT (3002) in docker-compose.infra.yml. This
+// defaulted to :3000, where nothing listens, so the link always went nowhere.
+const LANGFUSE_URL = import.meta.env.VITE_LANGFUSE_URL || 'http://localhost:3002';
 
 /** "2m 14s" between two timestamps; empty when either is missing. */
 const duration = (from: string, to?: string | null): string => {
@@ -143,6 +145,7 @@ export default function JobDetail() {
   const meta = stateMeta(status);
   const isSuccess = meta.group === 'succeeded';
   const needsHuman = meta.group === 'attention' || meta.group === 'failed';
+  const prClosed = meta.group === 'closed';
   // The timeline's last state change, to show how long the current state has run.
   const stateChanges = events.filter(e => e.type === 'STATE_CHANGE');
 
@@ -157,6 +160,7 @@ export default function JobDetail() {
           <span className={`badge ${meta.badge}`} style={{ padding: '4px 8px' }}>
             {isSuccess ? <CheckCircle2 size={12} style={{ marginRight: 2 }} />
               : needsHuman ? <AlertCircle size={12} style={{ marginRight: 2 }} />
+              : prClosed ? <GitPullRequestClosed size={12} style={{ marginRight: 2 }} />
               : <Loader2 size={12} className={isRunning(status) ? 'spinner' : undefined} style={{ marginRight: 2 }} />}
             {status}
           </span>
@@ -211,6 +215,26 @@ export default function JobDetail() {
             <div style={{ color: 'var(--text-primary)', fontWeight: 500, marginBottom: 4 }}>{meta.label}</div>
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
               {job.stateReason}
+            </div>
+          </div>
+        </motion.div>
+      )}
+
+      {/* A human closed the PR without merging: finished, nothing broken. */}
+      {prClosed && (
+        <motion.div variants={itemVariants}
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: 12,
+            padding: '14px 20px', borderRadius: 10, marginBottom: 16,
+            background: 'var(--bg-surface-raised)', border: '1px solid var(--border-strong)'
+          }}
+        >
+          <GitPullRequestClosed size={18} color="var(--text-muted)" style={{ flexShrink: 0, marginTop: 2 }} />
+          <div>
+            <div style={{ color: 'var(--text-primary)', fontWeight: 500, marginBottom: 4 }}>{meta.label}</div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', wordBreak: 'break-word' }}>
+              {job.stateReason || 'The pull request was closed without being merged.'}
+              {' '}Use Regenerate Fix below to try a different fix — it opens a new pull request.
             </div>
           </div>
         </motion.div>
