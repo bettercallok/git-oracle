@@ -24,12 +24,13 @@ from typing import Any, Awaitable, Callable, Optional
 
 from aiokafka import AIOKafkaConsumer
 
+from shared import topics
 from shared.kafka_producer import get_producer
 
 logger = logging.getLogger(__name__)
 
-DLQ_TOPIC = "job.events.dlq"
-ESCALATION_TOPIC = "job-escalated"
+DLQ_TOPIC = topics.JOB_DLQ
+ESCALATION_TOPIC = topics.JOB_ESCALATED
 
 Handler = Callable[[dict], Awaitable[Any]]
 
@@ -97,7 +98,7 @@ class KafkaEventConsumer:
                 if consumer is not None:
                     try:
                         await consumer.stop()
-                    except Exception:
+                    except Exception:  # noqa: BLE001 — cleanup of a consumer that has already died
                         logger.debug("Error stopping dead consumer", exc_info=True)
             await asyncio.sleep(delay)
             delay = min(delay * 2, self.max_backoff)
@@ -105,7 +106,7 @@ class KafkaEventConsumer:
     async def _handle(self, raw: Optional[bytes], message_handler: Handler) -> None:
         try:
             payload = json.loads(raw.decode("utf-8")) if raw is not None else None
-        except Exception as e:
+        except ValueError as e:  # bad UTF-8 or bad JSON (both ValueError)
             logger.error(f"Undecodable message on {self.topic}: {e}")
             await self._dead_letter(raw.decode("utf-8", errors="replace") if raw else None,
                                     f"undecodable message: {e}", None)
@@ -139,7 +140,8 @@ class KafkaEventConsumer:
             await get_producer().publish(ESCALATION_TOPIC, {
                 "jobId": job_id,
                 "reason": reason[:4000],
-                "confidenceScore": 0.0,
+                # No confidenceScore: a crash has none, and a placeholder 0.0
+                # showed in the Escalation Queue as a real, very low score.
                 "source": self.agent_name,
             })
         except Exception:

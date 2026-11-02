@@ -18,8 +18,8 @@ import java.util.Base64;
 /**
  * Shared GitHub App authentication service for the Orchestrator.
  *
- * Reads credentials from the same .env file used by the github-bot module
- * (GITHUB_APP_ID, GITHUB_INSTALLATION_ID, GITHUB_PRIVATE_KEY_PATH).
+ * Credentials: GITHUB_APP_ID, GITHUB_INSTALLATION_ID, GITHUB_PRIVATE_KEY_PATH,
+ * resolved by GitHubAppCredentials (root .env first, legacy github-bot/.env second).
  *
  * The installation token is refreshed on every call to avoid expiry issues.
  * GitHub installation tokens are valid for 1 hour.
@@ -34,43 +34,17 @@ public class GitHubClientService {
     private final String privateKeyPath;
 
     public GitHubClientService() {
-        // Read github-bot/.env directly rather than via Dotenv.configure(), because
-        // dotenv-java's get() prefers an already-set OS environment variable of the
-        // same name over the file it just loaded. start_local.sh does `set -a; source
-        // .env` on the workspace-root .env before launching this process, so the root
-        // .env's placeholder values (e.g. GITHUB_PRIVATE_KEY_PATH=./secrets/github-app.pem)
-        // were always winning over github-bot/.env's real ones, regardless of which
-        // .directory() this pointed at — confirmed live via the Commit Explorer failing
-        // with "GitHub API error: ./secrets/github-app.pem".
-        //
-        // The path was hardcoded to one developer's checkout, so on any other machine
-        // (CI included) the file was never found and every GitHub call failed.
-        // start_local.sh launches this service from java-backend/, so the default
-        // resolves to java-backend/github-bot/.env; GITHUB_BOT_ENV_FILE overrides it.
+        // Root .env (exported by start_local.sh) first; the legacy github-bot/.env
+        // second. start_local.sh launches this service from java-backend/, so the
+        // default legacy path resolves to java-backend/github-bot/.env;
+        // GITHUB_BOT_ENV_FILE overrides it. See GitHubAppCredentials for why.
         String botEnvFile = System.getenv().getOrDefault("GITHUB_BOT_ENV_FILE",
             System.getProperty("user.dir") + "/github-bot/.env");
-        java.util.Map<String, String> botEnv = readEnvFile(botEnvFile);
-        this.appId           = botEnv.get("GITHUB_APP_ID");
-        this.installationId  = botEnv.get("GITHUB_INSTALLATION_ID");
-        this.privateKeyPath  = botEnv.get("GITHUB_PRIVATE_KEY_PATH");
-        logger.info("GitHubClientService initialised for App ID: {}", appId);
-    }
-
-    private static java.util.Map<String, String> readEnvFile(String path) {
-        java.util.Map<String, String> values = new java.util.HashMap<>();
-        try {
-            for (String line : Files.readAllLines(Paths.get(path), StandardCharsets.UTF_8)) {
-                String trimmed = line.trim();
-                if (trimmed.isEmpty() || trimmed.startsWith("#") || !trimmed.contains("=")) {
-                    continue;
-                }
-                int idx = trimmed.indexOf('=');
-                values.put(trimmed.substring(0, idx).trim(), trimmed.substring(idx + 1).trim());
-            }
-        } catch (java.io.IOException e) {
-            logger.warn("Could not read {}: {}", path, e.getMessage());
-        }
-        return values;
+        GitHubAppCredentials creds = GitHubAppCredentials.load(botEnvFile, logger);
+        this.appId           = creds.appId();
+        this.installationId  = creds.installationId();
+        this.privateKeyPath  = creds.privateKeyPath();
+        logger.info("GitHubClientService initialised for App ID: {} (from {})", appId, creds.source());
     }
 
     /**

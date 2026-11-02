@@ -28,8 +28,17 @@ public class Neo4jGraphService {
             String messageShort = commit.message() != null
                 ? commit.message().split("\n", 2)[0] : "";
 
+            // Keyed on email, matching init.cypher's uniqueness constraint. Merging on the
+            // display name collapsed different people who share a name into one
+            // Developer (pooling their bug counts) and split one person across name
+            // changes. Without an email, fall back to the name rather than merging
+            // every email-less author into a single "" node.
+            boolean hasEmail = commit.authorEmail() != null && !commit.authorEmail().isBlank();
+            String developerMerge = hasEmail
+                ? "MERGE (d:Developer {email: $email}) SET d.name = $author "
+                : "MERGE (d:Developer {name: $author}) ";
             String mergeCypher =
-                "MERGE (d:Developer {name: $author}) " +
+                developerMerge +
                 "MERGE (c:Commit {sha: $sha}) " +
                 "SET c.message = $message, c.message_short = $messageShort, " +
                 "    c.short_sha = $shortSha, c.isBugFix = $isBugFix, c.repo = $repo " +
@@ -37,6 +46,7 @@ public class Neo4jGraphService {
 
             neo4jClient.query(mergeCypher)
                 .bind(commit.author()).to("author")
+                .bind(hasEmail ? commit.authorEmail() : "").to("email")
                 .bind(commit.sha()).to("sha")
                 .bind(commit.message()).to("message")
                 .bind(messageShort).to("messageShort")

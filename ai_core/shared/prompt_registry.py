@@ -31,7 +31,7 @@ async def fetch_prompt_versioned(
             response.raise_for_status()
             payload = response.json()
             return payload["content"], payload.get("version")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — registry down -> the agent's built-in prompt
         logger.warning(f"Failed to fetch prompt for agent '{agent_name}' from registry: {e}")
         return fallback, None
 
@@ -61,5 +61,5 @@ async def report_prompt_version(job_id: Optional[str], agent_name: str, version:
                 json={"agentName": agent_name, "version": version},
                 headers={"X-Internal-Token": os.environ.get("GITORACLE_INTERNAL_TOKEN", "")}
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — prompt-version attribution is best-effort
         logger.warning(f"Failed to report prompt version for job {job_id}: {e}")

@@ -3,6 +3,7 @@ package ai.gitoracle.orchestrator.controller;
 import ai.gitoracle.core.model.postgres.AgentJob;
 import ai.gitoracle.core.model.postgres.JobEvent;
 import ai.gitoracle.orchestrator.repository.JobEventRepository;
+import ai.gitoracle.orchestrator.service.EscalationService;
 import ai.gitoracle.orchestrator.service.JobStateService;
 import ai.gitoracle.core.entity.Escalation;
 import ai.gitoracle.core.entity.EvalRun;
@@ -12,6 +13,7 @@ import ai.gitoracle.core.security.RepoRefValidator;
 import ai.gitoracle.orchestrator.dto.Requests;
 import ai.gitoracle.orchestrator.security.TenantContext;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.web.bind.annotation.*;
@@ -24,6 +26,7 @@ import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 // No @CrossOrigin here: the dashboard reaches this exclusively through the API
@@ -199,7 +202,7 @@ public class DashboardController {
         plan.put("confidence", 1.0);
         fixPayload.put("plan", plan);
 
-        kafkaTemplate.send("job.events.fix", fixPayload);
+        kafkaTemplate.send(KafkaTopics.JOB_FIX, fixPayload);
 
         return ResponseEntity.ok(Map.of("status", "REGENERATING", "jobId", jobId.toString()));
     }
@@ -321,7 +324,7 @@ public class DashboardController {
         plan.put("confidence", 1.0);
         fixPayload.put("plan", plan);
 
-        kafkaTemplate.send("job.events.fix", fixPayload);
+        kafkaTemplate.send(KafkaTopics.JOB_FIX, fixPayload);
 
         return ResponseEntity.ok(Map.of(
             "status", "QUEUED",
@@ -335,11 +338,20 @@ public class DashboardController {
      * the job they belong to, which is the real owner of the tenant
      * relationship. Joining rather than denormalising keeps one source of truth
      * for which tenant a piece of work belongs to.
+     *
+     * <p>Only escalations still waiting on a human, for jobs still escalated.
+     * This returned every escalation ever raised, so an approved or rejected
+     * one stayed on screen looking exactly like a pending one — and the buttons
+     * looked broken, inviting the repeated clicks that each restarted the job.
+     * An escalation whose job has since moved on (a later run, a rejection, a
+     * newer escalation) can't be acted on either, so it isn't shown.
      */
     @GetMapping("/escalations")
     public ResponseEntity<List<Escalation>> getEscalations() {
         List<Escalation> escalations = entityManager.createQuery(
-                "SELECT e FROM Escalation e WHERE e.job.tenantId = :tenantId ORDER BY e.createdAt DESC", Escalation.class)
+                "SELECT e FROM Escalation e WHERE e.job.tenantId = :tenantId"
+                    + " AND e.status = 'PENDING' AND e.job.state = 'ESCALATED'"
+                    + " ORDER BY e.createdAt DESC", Escalation.class)
             .setParameter("tenantId", TenantContext.requireTenantId())
             .setMaxResults(50)
             .getResultList();
@@ -347,69 +359,102 @@ public class DashboardController {
     }
 
     @PostMapping("/escalations/{id}/resolve")
-    public ResponseEntity<Void> resolveEscalation(@PathVariable UUID id,
-                                                  @Valid @RequestBody Requests.ResolveEscalation request) {
+    public ResponseEntity<Map<String, String>> resolveEscalation(@PathVariable UUID id,
+                                                                 @Valid @RequestBody Requests.ResolveEscalation request) {
         Escalation escalation = entityManager.find(Escalation.class, id);
-        if (escalation != null && !ownsEscalation(escalation)) {
-            // Same reasoning as findOwnedJob: indistinguishable from "no such
-            // escalation". Approving another tenant's escalation would have
-            // resumed their pipeline and opened a pull request against their repo.
-            logger.warn("Tenant {} attempted to resolve escalation {} it does not own — reporting as not found.",
-                TenantContext.requireTenantId(), id);
+        if (escalation == null || !ownsEscalation(escalation)) {
+            if (escalation != null) {
+                // Same reasoning as findOwnedJob: indistinguishable from "no such
+                // escalation". Approving another tenant's escalation would have
+                // resumed their pipeline and opened a pull request against their repo.
+                logger.warn("Tenant {} attempted to resolve escalation {} it does not own — reporting as not found.",
+                    TenantContext.requireTenantId(), id);
+            }
             return ResponseEntity.notFound().build();
         }
-        if (escalation != null) {
-            // Constrained to exactly "approve" or "reject" on the record. It
-            // used to be any string, with everything that wasn't "approve"
-            // falling through to REJECTED — so a typo, or an absent field,
-            // silently rejected an escalation a human meant to approve.
-            String action = request.action();
-            escalation.setStatus("approve".equals(action) ? "APPROVED" : "REJECTED");
-            escalation.setResolvedAt(OffsetDateTime.now());
-            entityManager.merge(escalation);
-            
-            AgentJob job = escalation.getJob();
-            if (job != null) {
-                if ("approve".equals(action)) {
-                    // Resume the pipeline - push to plan phase
-                    jobState.transition(job, "PLANNING",
-                        "Escalation approved — resuming at planning", "dashboard");
-                    
-                    Map<String, Object> plannerPayload = new HashMap<>();
-                    plannerPayload.put("job_id", job.getId().toString());
-                    plannerPayload.put("repo_url", job.getRepo());
-                    plannerPayload.put("repo_path", "/tmp/gitoracle-workspaces/" + job.getId());
-                    plannerPayload.put("error_id", job.getErrorId());
 
-                    // Resume with the real investigation result stored during the original run.
-                    // Fall back to a minimal synthetic one only if nothing was persisted.
-                    Map<String, Object> invResult = null;
-                    if (job.getInvestigationResult() != null) {
-                        try {
-                            invResult = objectMapper.readValue(
-                                job.getInvestigationResult(),
-                                new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-                        } catch (Exception e) {
-                            logger.warn("Could not parse stored investigation result for job {}: {}",
-                                job.getId(), e.getMessage());
-                        }
-                    }
-                    if (invResult == null) {
-                        invResult = new HashMap<>();
-                        invResult.put("narrative", "No stored investigation found; human approved escalation: " + escalation.getReason());
-                        invResult.put("confidence_score", 1.0);
-                        invResult.put("recommended_strategy", "human_approved_force");
-                    }
-                    plannerPayload.put("investigation_result", invResult);
+        // Constrained to exactly "approve" or "reject" on the record. It
+        // used to be any string, with everything that wasn't "approve"
+        // falling through to REJECTED — so a typo, or an absent field,
+        // silently rejected an escalation a human meant to approve.
+        boolean approve = "approve".equals(request.action());
+        AgentJob job = escalation.getJob();
 
-                    kafkaTemplate.send("job.events.plan", plannerPayload);
-                } else {
-                    jobState.transition(job, "FAILED", "Escalation rejected: " + escalation.getReason(),
-                                        "dashboard");
+        // An escalation is resolved once. Approving used to run again on every
+        // click, already-resolved or not, and each run re-dispatched the job to
+        // the planner — confirmed live on job 9e09ccf6: five clicks in twelve
+        // seconds started five concurrent pipeline runs, which tripped the LLM
+        // provider's rate limit and escalated the job again.
+        if (!"PENDING".equals(escalation.getStatus())) {
+            return conflict("This escalation was already " + escalation.getStatus().toLowerCase() + ".");
+        }
+        if (approve && EscalationService.hasPullRequest(job)) {
+            return conflict("This job already has a pull request (" + job.getPrUrl()
+                + "). Approving would run the pipeline again and could open a second one — reject this instead.");
+        }
+        if (approve && !"ESCALATED".equals(job.getState())) {
+            return conflict("This job is " + job.getState() + ", not escalated, so there is nothing to resume.");
+        }
+
+        // Claim it atomically, so two requests racing past the check above
+        // (a double click) can't both resume the job.
+        int claimed = entityManager.createQuery(
+                "UPDATE Escalation e SET e.status = :status, e.resolvedAt = :now"
+                    + " WHERE e.id = :id AND e.status = 'PENDING'")
+            .setParameter("status", approve ? "APPROVED" : "REJECTED")
+            .setParameter("now", OffsetDateTime.now())
+            .setParameter("id", id)
+            .executeUpdate();
+        if (claimed == 0) {
+            return conflict("This escalation was already resolved.");
+        }
+
+        if (approve) {
+            if (!jobState.transitionFrom(job, Set.of("ESCALATED"), "PLANNING",
+                    "Escalation approved — resuming at planning", "dashboard")) {
+                throw new IllegalStateException("Job " + job.getId() + " left ESCALATED while being approved");
+            }
+
+            Map<String, Object> plannerPayload = new HashMap<>();
+            plannerPayload.put("job_id", job.getId().toString());
+            plannerPayload.put("repo_url", job.getRepo());
+            plannerPayload.put("repo_path", "/tmp/gitoracle-workspaces/" + job.getId());
+            plannerPayload.put("error_id", job.getErrorId());
+
+            // Resume with the real investigation result stored during the original run.
+            // Fall back to a minimal synthetic one only if nothing was persisted.
+            Map<String, Object> invResult = null;
+            if (job.getInvestigationResult() != null) {
+                try {
+                    invResult = objectMapper.readValue(
+                        job.getInvestigationResult(),
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                } catch (Exception e) {
+                    logger.warn("Could not parse stored investigation result for job {}: {}",
+                        job.getId(), e.getMessage());
                 }
             }
+            if (invResult == null) {
+                invResult = new HashMap<>();
+                invResult.put("narrative", "No stored investigation found; human approved escalation: " + escalation.getReason());
+                invResult.put("confidence_score", 1.0);
+                invResult.put("recommended_strategy", "human_approved_force");
+            }
+            plannerPayload.put("investigation_result", invResult);
+
+            kafkaTemplate.send(KafkaTopics.JOB_PLAN, plannerPayload);
+            return ResponseEntity.ok(Map.of("status", "APPROVED", "jobState", job.getState()));
         }
-        return ResponseEntity.ok().build();
+
+        // Rejecting closes the escalation; it only fails a job that is still
+        // waiting on it. A job that has moved on keeps its state.
+        jobState.transitionFrom(job, Set.of("ESCALATED"), "FAILED",
+                                "Escalation rejected: " + escalation.getReason(), "dashboard");
+        return ResponseEntity.ok(Map.of("status", "REJECTED", "jobState", job.getState()));
+    }
+
+    private static ResponseEntity<Map<String, String>> conflict(String message) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", message));
     }
 
     @PostMapping("/evals")

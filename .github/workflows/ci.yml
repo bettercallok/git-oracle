@@ -70,6 +70,11 @@ jobs:
       - name: Run Ruff Lint
         run: ruff check ai_core cli/gitOracle eval --select E9,F
 
+      # A blanket `except Exception` must say why it's safe (`# noqa: BLE001 — <reason>`).
+      # Unexplained catch-alls are how failures in this pipeline went silent.
+      - name: No unexplained blanket excepts
+        run: ruff check ai_core/agents ai_core/shared --select BLE001
+
       # Blocking. This was `|| true`, so it could never fail a build; the 17
       # errors it was hiding have been fixed.
       - name: Run Mypy Typecheck
@@ -191,5 +196,96 @@ jobs:
       - name: Run --help
         run: gitOracle --help
 
-# The golden-dataset eval needs the whole stack and a real LLM, so it lives in
-# eval.yml (manual + nightly) instead of pretending to run here.
+  # The whole pipeline, for real, with only the LLM faked
+  # (ai_core/tests/mock_llm_server.py): gateway → orchestrator → investigator →
+  # planner → fixer → guardrails → test-runner's Maven run in Docker. Unit tests
+  # can't see the class of bug that broke the first CI eval (an agent's Kafka
+  # consumer dying on lz4-compressed messages); this does, on the PR that
+  # introduces it, in ~10 minutes and without LLM tokens.
+  #
+  # It clones the public fixture repo read-only (no secrets), so it needs
+  # vars.EVAL_FIXTURE_REPO — unavailable to fork PRs, which skip it — and the
+  # case/npe branch, which the Golden Dataset Eval publishes on its first run.
+  pipeline-e2e:
+    name: Pipeline End-to-End (mock LLM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      EVAL_FIXTURE_REPO: ${{ vars.EVAL_FIXTURE_REPO }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Check the fixture branch exists
+        run: |
+          if [ -z "$EVAL_FIXTURE_REPO" ]; then
+            echo "::error::vars.EVAL_FIXTURE_REPO is not set (see the header of .github/workflows/eval.yml)"; exit 1
+          fi
+          if ! git ls-remote --exit-code --heads "https://github.com/$EVAL_FIXTURE_REPO" case/npe >/dev/null; then
+            echo "::error::$EVAL_FIXTURE_REPO has no case/npe branch yet — run the Golden Dataset Eval once to publish the fixture branches."
+            exit 1
+          fi
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: ai_core/requirements.txt
+
+      - name: Install Python agent dependencies
+        run: |
+          python -m venv ai_core/.venv
+          ai_core/.venv/bin/pip install --upgrade pip
+          ai_core/.venv/bin/pip install -r ai_core/requirements.txt
+          pip install requests
+
+      - name: Write .env (mock LLM)
+        env:
+          LLM_URL: http://127.0.0.1:18089/v1/chat/completions
+          LLM_KEY: mock
+          LLM_MODEL: mock
+        run: scripts/ci/write_env.sh
+
+      - name: Start the mock LLM
+        run: |
+          nohup ai_core/.venv/bin/python ai_core/tests/mock_llm_server.py > mock_llm.log 2>&1 &
+          for i in $(seq 1 30); do grep -q "Uvicorn running" mock_llm.log && break; sleep 1; done
+          grep -q "Uvicorn running" mock_llm.log || { cat mock_llm.log; exit 1; }
+
+      - name: Start the stack
+        run: scripts/ci/start_stack.sh
+
+      - name: Run case1 end to end
+        run: python scripts/ci/e2e_check.py --repo-url "https://github.com/$EVAL_FIXTURE_REPO" --branch case/npe
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-e2e-logs
+          path: |
+            java-backend/*.log
+            ai_core/*.log
+            supervisor.log
+            mock_llm.log
+          if-no-files-found: ignore
+
+      - name: Stop services
+        if: always()
+        run: |
+          ./stop_local.sh || true
+          docker compose -f docker-compose.infra.yml down -v || true
+
+# The golden-dataset eval needs a real LLM and costs tokens, so it lives in
+# eval.yml (manual + nightly) rather than running on every PR.

@@ -63,7 +63,7 @@ async def process_feedback(job_id: str, outcome: str):
         else:
             logger.warning(f"Unknown feedback outcome: {outcome}")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — one bad feedback event must not stop the daemon
         logger.error(f"Error processing feedback for job {job_id}: {e}")
     finally:
         await conn.close()

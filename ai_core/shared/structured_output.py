@@ -1,5 +1,7 @@
 import os
 import json
+import asyncio
+import random
 import httpx
 import logging
 from datetime import datetime, timezone
@@ -47,10 +49,15 @@ try:
     _lf = Langfuse(
         public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
         secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-        host=f"http://localhost:{os.environ.get('LANGFUSE_PORT', '3002')}",
+        # LANGFUSE_HOST when it's a full URL (a Langfuse elsewhere: a container
+        # network, a hosted instance). .env.example has always set it to the bare
+        # hostname "localhost" for other uses, so a value without a scheme keeps
+        # the old http://localhost:<LANGFUSE_PORT> instead of breaking tracing.
+        host=(os.environ.get("LANGFUSE_HOST", "") if os.environ.get("LANGFUSE_HOST", "").startswith(("http://", "https://"))
+              else f"http://localhost:{os.environ.get('LANGFUSE_PORT', '3002')}"),
     )
     logger.info("Langfuse observability initialised ✓")
-except Exception as _e:
+except Exception as _e:  # noqa: BLE001 — tracing is optional; any init failure disables it
     _lf = None
     logger.warning(f"Langfuse not available — tracing disabled: {_e}")
 
@@ -71,7 +78,7 @@ async def _report_tokens(job_id: str, tokens_used: int, agent_name: str) -> None
                 json={"tokensUsed": tokens_used, "agentName": agent_name},
                 headers={"X-Internal-Token": os.environ.get("GITORACLE_INTERNAL_TOKEN", "")}
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — token reporting is best-effort
         logger.warning(f"Failed to report tokens to Orchestrator: {e}")
 
 
@@ -107,7 +114,7 @@ def _trace_to_langfuse(
             end_time=end_time,
         )
         _lf.flush()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — tracing must never fail an LLM call
         logger.warning(f"Langfuse tracing error (non-fatal): {e}")
 
 
@@ -123,6 +130,50 @@ async def _execute_llm_request(client: httpx.AsyncClient, base_url: str, payload
     response = await client.post(base_url, json=payload, headers=headers)
     if response.status_code >= 500:
         response.raise_for_status()
+    return response
+
+
+# A 429 used to be returned like any other 4xx and raised by the caller's
+# raise_for_status, so a free-tier provider's per-minute limit failed the agent
+# outright and escalated the job. Confirmed live on job 9e09ccf6: several
+# concurrent pipeline runs tripped Groq's limit and every planner and fixer call
+# in the next minute failed within a second, with no attempt to wait it out.
+LLM_RATE_LIMIT_RETRIES = int(os.environ.get("LLM_RATE_LIMIT_RETRIES", "4"))
+LLM_RATE_LIMIT_MAX_WAIT_SECONDS = float(os.environ.get("LLM_RATE_LIMIT_MAX_WAIT_SECONDS", "60"))
+
+
+def _retry_after_seconds(response: httpx.Response) -> Optional[float]:
+    """The provider's Retry-After, in seconds, when it sends a numeric one."""
+    value = response.headers.get("retry-after")
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        return None  # HTTP-date form: fall back to our own backoff
+
+
+async def _execute_with_rate_limit_backoff(client: httpx.AsyncClient, base_url: str, payload: dict,
+                                           headers: Optional[dict] = None) -> httpx.Response:
+    """_execute_llm_request, waiting out 429s (Retry-After if given, else exponential).
+
+    Still rate-limited after the last retry raises HTTPStatusError, so the
+    caller can try the fallback model before giving up.
+    """
+    for attempt in range(LLM_RATE_LIMIT_RETRIES + 1):
+        response = await _execute_llm_request(client, base_url, payload, headers=headers)
+        if response.status_code != 429:
+            return response
+        if attempt == LLM_RATE_LIMIT_RETRIES:
+            break
+        delay = _retry_after_seconds(response)
+        if delay is None:
+            delay = 2.0 ** (attempt + 1) + random.uniform(0, 1)
+        delay = min(delay, LLM_RATE_LIMIT_MAX_WAIT_SECONDS)
+        logger.warning(f"LLM rate-limited (429) by {base_url} — waiting {delay:.1f}s "
+                       f"(retry {attempt + 1} of {LLM_RATE_LIMIT_RETRIES})")
+        await asyncio.sleep(delay)
+    response.raise_for_status()
     return response
 
 
@@ -179,7 +230,7 @@ async def llm_structured(
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
             # 1. Primary Attempt
-            response = await _execute_llm_request(client, base_url, payload, headers=headers)
+            response = await _execute_with_rate_limit_backoff(client, base_url, payload, headers=headers)
         except Exception as primary_e:
             logger.warning(f"Primary LLM ({base_url}) failed: {primary_e}")
             if LLM_FALLBACK_BASE_URL and LLM_FALLBACK_MODEL_NAME:
@@ -187,7 +238,7 @@ async def llm_structured(
                 payload["model"] = LLM_FALLBACK_MODEL_NAME
                 try:
                     # 2. Fallback Attempt
-                    response = await _execute_llm_request(client, LLM_FALLBACK_BASE_URL, payload, headers=headers)
+                    response = await _execute_with_rate_limit_backoff(client, LLM_FALLBACK_BASE_URL, payload, headers=headers)
                 except Exception as fallback_e:
                     logger.error(f"Fallback LLM also failed: {fallback_e}")
                     raise LLMUnavailableError("Both primary and fallback LLM servers are unavailable.") from fallback_e

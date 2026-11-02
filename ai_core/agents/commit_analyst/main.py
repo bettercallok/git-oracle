@@ -25,7 +25,6 @@ GET /health
 """
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 import os
@@ -44,13 +43,9 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="GitOracle Commit Analyst", version="1.0", dependencies=[Depends(require_internal_token)])
 app.add_middleware(BodySizeLimitMiddleware)
 add_health_route(app, "commit_analyst")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORS middleware: agents are called server-to-server only (orchestrator,
+# other agents), never from a browser. allow_origins=["*"] with
+# allow_credentials=True let any web page a developer visited call them.
 
 # ─── Request / Response Models ─────────────────────────────────────────────────
 
@@ -158,7 +153,7 @@ async def analyze(request: AnalyzeRequest):
             request.repo, request.sha[:7], result.suggested_action
         )
         return result
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — HTTP boundary: any LLM failure becomes a 502, cause logged
         logger.error("LLM call failed for commit_analyst: %s", e)
         raise HTTPException(
             status_code=502,
@@ -169,6 +164,8 @@ async def analyze(request: AnalyzeRequest):
 # ─── Entry Point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    from shared.config import check_startup_config
+    check_startup_config("commit_analyst", needs_llm=True)
     import uvicorn
     port = int(os.environ.get("PORT", 9004))
     logger.info("Starting Commit Analyst agent on port %d", port)

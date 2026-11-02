@@ -54,6 +54,21 @@ public class InternalAuthFilter extends OncePerRequestFilter {
     @Value("${gitoracle.internal-token:}")
     private String configuredToken;
 
+    /**
+     * Refuse to start without the internal token. It used to default to empty,
+     * so a misconfigured service booted "healthy" and then answered every
+     * internal call with 401 — a failure only visible one request at a time,
+     * far from its cause. A clear startup error names the missing setting.
+     */
+    @jakarta.annotation.PostConstruct
+    void requireInternalTokenConfigured() {
+        if (configuredToken == null || configuredToken.isBlank()) {
+            throw new IllegalStateException("GITORACLE_INTERNAL_TOKEN is not set. Every internal "
+                + "service call would be rejected with 401, so this service refuses to start. "
+                + "Set it in the root .env (any long random string, the same for every service).");
+        }
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {

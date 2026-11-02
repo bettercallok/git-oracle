@@ -3,6 +3,7 @@ package ai.gitoracle.orchestrator;
 import ai.gitoracle.core.model.postgres.AgentJob;
 import ai.gitoracle.orchestrator.repository.JobEventRepository;
 import ai.gitoracle.orchestrator.repository.PrOutcomeRepository;
+import ai.gitoracle.orchestrator.service.EscalationService;
 import ai.gitoracle.orchestrator.service.JobStateService;
 import ai.gitoracle.orchestrator.service.WorkspaceService;
 import ai.gitoracle.orchestrator.token.AgentJobRepository;
@@ -79,7 +80,8 @@ class OrchestratorServiceTest {
             java.time.Clock.fixed(java.time.Instant.parse("2026-10-29T12:00:00Z"), java.time.ZoneOffset.UTC));
 
         service = new OrchestratorService(jobRepository, kafkaTemplate, workspaceService,
-                                           entityManager, prOutcomeRepository, jobState);
+                                           entityManager, prOutcomeRepository, jobState,
+                                           new EscalationService(jobState, entityManager));
 
         // OrchestratorService constructs its own `new RestTemplate()` rather than
         // taking one as a constructor argument, so the only way to intercept the
@@ -169,6 +171,63 @@ class OrchestratorServiceTest {
         service.handleTestsPassed(Map.of("jobId", jobId.toString(), "patch", "diff"));
 
         assertThat(job.getState()).isEqualTo("ESCALATED");
+    }
+
+    // ── regenerated fixes on a job that already has a PR ──────────────────
+
+    @Test
+    void aRegeneratedFixThatPassedTestsUpdatesTheExistingPr() {
+        // Job 9e09ccf6: the regenerated fix passed every test and was then
+        // dropped as a "duplicate delivery" because the job already had a PR.
+        UUID jobId = UUID.randomUUID();
+        String pr = "https://github.com/bettercallok/chillcall/pull/18";
+        AgentJob job = jobWith(jobId, "TESTING", pr);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        mockGitHubBot.expect(requestTo("http://localhost:8085/pull-request"))
+            .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                .jsonPath("$.existingPrUrl").value(pr))
+            .andRespond(withSuccess("{\"success\":true,\"prUrl\":\"" + pr + "\"}", MediaType.APPLICATION_JSON));
+
+        service.handleTestsPassed(Map.of("jobId", jobId.toString(), "patch", "diff", "isRegeneration", "true"));
+
+        mockGitHubBot.verify();
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+        assertThat(job.getPrUrl()).isEqualTo(pr);
+        assertThat(job.getStateReason()).startsWith("Pull request updated with the regenerated fix");
+    }
+
+    @Test
+    void aRegeneratedFixWhoseOldPrWasClosedRecordsTheNewPr() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "TESTING", "https://github.com/bettercallok/chillcall/pull/18");
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        mockGitHubBot.expect(requestTo("http://localhost:8085/pull-request"))
+            .andRespond(withSuccess(
+                "{\"success\":true,\"prUrl\":\"https://github.com/bettercallok/chillcall/pull/25\"}",
+                MediaType.APPLICATION_JSON));
+
+        service.handleTestsPassed(Map.of("jobId", jobId.toString(), "patch", "diff"));
+
+        assertThat(job.getPrUrl()).isEqualTo("https://github.com/bettercallok/chillcall/pull/25");
+        assertThat(job.getStateReason()).startsWith("Pull request opened");
+    }
+
+    @Test
+    void aFailedUpdateOfARegeneratedFixReturnsTheJobToPrOpenedWithTheReason() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "TESTING", "https://github.com/bettercallok/chillcall/pull/18");
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        mockGitHubBot.expect(requestTo("http://localhost:8085/pull-request"))
+            .andRespond(withSuccess("{\"success\":false,\"error\":\"push rejected\"}", MediaType.APPLICATION_JSON));
+
+        service.handleTestsPassed(Map.of("jobId", jobId.toString(), "patch", "diff"));
+
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+        assertThat(job.getPrUrl()).isEqualTo("https://github.com/bettercallok/chillcall/pull/18");
+        assertThat(job.getStateReason()).contains("updating the pull request failed: push rejected");
     }
 
     // ── escalateUnlessAlreadySucceeded: the last line of defense ──────────
@@ -438,5 +497,52 @@ class OrchestratorServiceTest {
         assertThat(job.getState()).isEqualTo("ESCALATED");
         assertThat(job.getStateReason()).isEqualTo("Planner Agent failed: boom");
         verify(entityManager).persist(any());
+    }
+
+    @Test
+    void aFailedRegenerationOfAJobWithAnOpenPrReturnsItToPrOpenedInsteadOfEscalating() {
+        // Job 9e09ccf6: "regenerate" on a PR_OPENED job, the second cycle failed,
+        // and the job was queued for approval — which would re-run the pipeline
+        // against a job whose fix was already open as a PR.
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "FIXING", "https://github.com/bettercallok/chillcall/pull/18");
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.handleJobEscalated(Map.of("jobId", jobId.toString(),
+            "reason", "Fixer Agent exhausted all attempts and could not fix the bug."));
+
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+        assertThat(job.getStateReason())
+            .startsWith("Regeneration failed — Fixer Agent exhausted all attempts")
+            .endsWith("pull/18");
+        verify(entityManager, never()).persist(any());
+    }
+
+    @Test
+    void anEscalationWithNoConfidenceStoresNullNotZero() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "PLANNING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.handleJobEscalated(Map.of("jobId", jobId.toString(), "reason", "Planner Agent failed: 429"));
+
+        org.mockito.ArgumentCaptor<ai.gitoracle.core.entity.Escalation> escalation =
+            org.mockito.ArgumentCaptor.forClass(ai.gitoracle.core.entity.Escalation.class);
+        verify(entityManager).persist(escalation.capture());
+        assertThat(escalation.getValue().getConfidenceScore()).isNull();
+    }
+
+    @Test
+    void anEscalationKeepsAConfidenceTheAgentReported() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "FIXING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.handleJobEscalated(Map.of("jobId", jobId.toString(), "reason", "exhausted", "confidenceScore", 0.42));
+
+        org.mockito.ArgumentCaptor<ai.gitoracle.core.entity.Escalation> escalation =
+            org.mockito.ArgumentCaptor.forClass(ai.gitoracle.core.entity.Escalation.class);
+        verify(entityManager).persist(escalation.capture());
+        assertThat(escalation.getValue().getConfidenceScore()).isEqualTo(0.42);
     }
 }

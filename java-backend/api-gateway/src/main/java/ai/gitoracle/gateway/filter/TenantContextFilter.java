@@ -79,6 +79,21 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
     @Value("${gitoracle.internal-token:}")
     private String configuredInternalToken;
 
+    /**
+     * Refuse to start without the internal token. It used to default to empty,
+     * so a misconfigured service booted "healthy" and then answered every
+     * internal call with 401 — a failure only visible one request at a time,
+     * far from its cause. A clear startup error names the missing setting.
+     */
+    @jakarta.annotation.PostConstruct
+    void requireInternalTokenConfigured() {
+        if (configuredInternalToken == null || configuredInternalToken.isBlank()) {
+            throw new IllegalStateException("GITORACLE_INTERNAL_TOKEN is not set. Every internal "
+                + "service call would be rejected with 401, so this service refuses to start. "
+                + "Set it in the root .env (any long random string, the same for every service).");
+        }
+    }
+
     /** Paths that bypass authentication entirely. */
     private static final java.util.List<String> EXEMPT_PATHS = java.util.List.of(
         "/actuator", "/health", "/api/v1/health"

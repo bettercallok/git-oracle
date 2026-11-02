@@ -12,7 +12,7 @@ import org.testcontainers.utility.DockerImageName;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@SpringBootTest
+@SpringBootTest(properties = "gitoracle.internal-token=test-internal-token")
 @Testcontainers
 public class SmokeTest {
 

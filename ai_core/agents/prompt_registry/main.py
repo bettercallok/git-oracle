@@ -2,7 +2,6 @@ import os
 import sys
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import asyncpg
 import redis.asyncio as redis
@@ -63,13 +62,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="GitOracle Prompt Registry", lifespan=lifespan, dependencies=[Depends(require_internal_token)])
 app.add_middleware(BodySizeLimitMiddleware)
 add_health_route(app, "prompt_registry")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORS middleware: agents are called server-to-server only (orchestrator,
+# other agents), never from a browser. allow_origins=["*"] with
+# allow_credentials=True let any web page a developer visited call them.
 
 class PromptVersion(BaseModel):
     content: str
@@ -159,4 +154,6 @@ async def activate_version(agent: str, key: str, version: int):
     return {"status": "activated", "version": version}
 
 if __name__ == "__main__":
+    from shared.config import check_startup_config
+    check_startup_config("prompt_registry", needs_llm=False)
     uvicorn.run(app, host=os.getenv("BIND_HOST", "127.0.0.1"), port=9005)

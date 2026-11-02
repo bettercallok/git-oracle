@@ -4,6 +4,7 @@ import ai.gitoracle.core.kafka.KafkaTopics;
 import ai.gitoracle.core.kafka.event.ErrorIngestedEvent;
 import ai.gitoracle.core.model.postgres.AgentJob;
 import ai.gitoracle.orchestrator.token.AgentJobRepository;
+import ai.gitoracle.orchestrator.service.EscalationService;
 import ai.gitoracle.orchestrator.service.JobStateService;
 import ai.gitoracle.orchestrator.service.WorkspaceService;
 import org.slf4j.Logger;
@@ -36,6 +37,7 @@ public class OrchestratorService {
     private final EntityManager entityManager;
     private final ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository;
     private final JobStateService jobState;
+    private final EscalationService escalations;
     private final RestTemplate restTemplate = new RestTemplate();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
@@ -48,13 +50,14 @@ public class OrchestratorService {
     public OrchestratorService(AgentJobRepository jobRepository, KafkaTemplate<String, Object> kafkaTemplate,
                                WorkspaceService workspaceService, EntityManager entityManager,
                                ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository,
-                               JobStateService jobState) {
+                               JobStateService jobState, EscalationService escalations) {
         this.jobRepository = jobRepository;
         this.kafkaTemplate = kafkaTemplate;
         this.workspaceService = workspaceService;
         this.entityManager = entityManager;
         this.prOutcomeRepository = prOutcomeRepository;
         this.jobState = jobState;
+        this.escalations = escalations;
     }
 
     /** Wraps a request body with the X-Internal-Token header every internal-service call needs. */
@@ -188,7 +191,7 @@ public class OrchestratorService {
             event.getTargetRepo() != null ? event.getTargetRepo() : "");
         investigatorPayload.put("branch", branch != null ? branch : "");
 
-        kafkaTemplate.send("job.events.investigate", investigatorPayload);
+        kafkaTemplate.send(KafkaTopics.JOB_INVESTIGATE, investigatorPayload);
     }
 
     /**
@@ -197,7 +200,7 @@ public class OrchestratorService {
      * later resume planning with the real findings instead of fabricated context.
      * Uses a distinct consumer group so the planner still receives the same message.
      */
-    @KafkaListener(topics = "job.events.plan", groupId = "orchestrator-plan-snoop-group",
+    @KafkaListener(topics = KafkaTopics.JOB_PLAN, groupId = "orchestrator-plan-snoop-group",
                    containerFactory = "stringValueKafkaListenerContainerFactory")
     @Transactional
     public void persistInvestigationResult(String rawJson) {
@@ -259,7 +262,7 @@ public class OrchestratorService {
      * regeneration) to move the job to FIXING. A separate consumer group, like the
      * plan snoop, so the fixer still receives every message.
      */
-    @KafkaListener(topics = "job.events.fix", groupId = "orchestrator-fix-snoop-group",
+    @KafkaListener(topics = KafkaTopics.JOB_FIX, groupId = "orchestrator-fix-snoop-group",
                    containerFactory = "stringValueKafkaListenerContainerFactory")
     @Transactional
     public void markFixing(String rawJson) {
@@ -479,13 +482,22 @@ public class OrchestratorService {
         // genuinely successful job's state with ESCALATED — losing the PR in the UI
         // and opening duplicate PRs on the target repo. If the PR is already open,
         // this event is a redelivery: acknowledge and stop.
+        //
+        // "Already has a PR" alone is not a redelivery, though: a dashboard
+        // "regenerate" sends a job that has a PR back through fix and test, and its
+        // passing result arrives here with the job in TESTING. Treating that as a
+        // duplicate silently discarded every regenerated fix — confirmed live on
+        // job 9e09ccf6, whose regenerated fix passed every test and was dropped.
+        // A redelivery finds the job already PR_OPENED; a regeneration doesn't.
         var existing = jobRepository.findById(UUID.fromString(jobIdStr));
-        if (existing.isPresent() && existing.get().getPrUrl() != null
-                && !existing.get().getPrUrl().isBlank()) {
+        boolean hasPr = existing.isPresent() && EscalationService.hasPullRequest(existing.get());
+        if (hasPr && !"TESTING".equals(existing.get().getState())) {
             logger.info("Job {} already has PR {} — ignoring duplicate TESTS_PASSED delivery.",
                         jobIdStr, existing.get().getPrUrl());
             return;
         }
+        // A regenerated fix updates the job's existing PR instead of opening a second one.
+        final String existingPrUrl = hasPr ? existing.get().getPrUrl() : null;
 
         existing.ifPresent(job -> {
             repoFullName[0] = job.getRepo().replace("https://github.com/", "").replace(".git", "");
@@ -503,7 +515,8 @@ public class OrchestratorService {
         // nothing here checked) — so a job whose PR creation threw an exception
         // (e.g. a clone DNS blip) still showed as PR_OPENED with prUrl=null forever.
         try {
-            logger.info("Calling GitHub Bot API at :8085 to open PR on {}...", prRepo);
+            logger.info("Calling GitHub Bot API at :8085 to {} PR on {}...",
+                        existingPrUrl != null ? "update the" : "open a", prRepo);
             Map<String, Object> prRequest = new HashMap<>();
             prRequest.put("jobId", jobIdStr);
             prRequest.put("repoFullName", prRepo);
@@ -524,6 +537,9 @@ public class OrchestratorService {
             prRequest.put("coverageDelta", parseDoubleOrDefault(event.get("coverageDelta"), 0.0));
             prRequest.put("qualityScore", parseDoubleOrDefault(event.get("qualityScore"), 1.0));
             prRequest.put("tokenBudgetUsed", 500);
+            if (existingPrUrl != null) {
+                prRequest.put("existingPrUrl", existingPrUrl);
+            }
 
             ResponseEntity<Map> response = restTemplate.postForEntity(
                 "http://localhost:8085/pull-request", withInternalAuth(prRequest), Map.class);
@@ -536,8 +552,13 @@ public class OrchestratorService {
 
             jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
                 if (finalSuccess) {
+                    // github-bot opens a new PR instead when the old one was closed
+                    // or merged, so the URL can change on a regeneration too.
+                    boolean updated = existingPrUrl != null && existingPrUrl.equals(prUrl);
                     job.setPrUrl(prUrl);
-                    jobState.transition(job, "PR_OPENED", "Pull request opened: " + prUrl, "github-bot");
+                    jobState.transition(job, "PR_OPENED",
+                        (updated ? "Pull request updated with the regenerated fix: " : "Pull request opened: ") + prUrl,
+                        "github-bot");
                     logger.info("Orchestrator pipeline complete for job: {} — PR: {}", jobIdStr, prUrl);
                 } else {
                     escalateUnlessAlreadySucceeded(job, prError);
@@ -564,6 +585,13 @@ public class OrchestratorService {
         if (job.getPrUrl() != null && !job.getPrUrl().isBlank()) {
             logger.warn("PR creation failed for job {} ({}), but it already has PR {} — keeping PR_OPENED.",
                         job.getId(), reason, job.getPrUrl());
+            // A failed update of a regenerated fix leaves the job in TESTING; return
+            // it to PR_OPENED (its PR is unchanged) with the reason. A no-op for a
+            // job that is already PR_OPENED.
+            jobState.transition(job, "PR_OPENED",
+                "Regenerated fix passed its tests, but updating the pull request failed: " + reason
+                    + " The existing pull request is unchanged: " + job.getPrUrl(),
+                "github-bot");
             return;
         }
         jobState.transition(job, "ESCALATED", "PR creation failed: " + reason, "github-bot");
@@ -575,7 +603,7 @@ public class OrchestratorService {
      * Calls the Reviewer Agent to evaluate the comment, then re-triggers
      * the Fixer Agent if the human's concern is valid (action_needed=true).
      */
-    @KafkaListener(topics = "job.events.review.received", groupId = "orchestrator-group")
+    @KafkaListener(topics = KafkaTopics.JOB_REVIEW_RECEIVED, groupId = "orchestrator-group")
     public void handleReviewReceived(Map<String, Object> event) {
         String jobIdStr  = (String) event.get("job_id");
         String comment   = (String) event.get("comment");
@@ -642,7 +670,7 @@ public class OrchestratorService {
                 plan.put("confidence",          1.0);
                 fixPayload.put("plan", plan);
 
-                kafkaTemplate.send("job.events.fix", fixPayload);
+                kafkaTemplate.send(KafkaTopics.JOB_FIX, fixPayload);
                 logger.info("Dispatched new fix cycle for job {} based on GitHub comment", jobIdStr);
             }
         } catch (Exception e) {
@@ -658,33 +686,18 @@ public class OrchestratorService {
         
         logger.warn("Orchestrator received JOB_ESCALATED event for job: {}", jobIdStr);
         
-        // 1. Update job state to ESCALATED — unless the job already finished. This
-        // used to overwrite unconditionally, so a late escalation (e.g. a token
-        // budget warning arriving after the PR opened) turned a successful job
-        // into ESCALATED and queued a pointless human review.
+        // ESCALATED — unless the job already finished. This used to overwrite
+        // unconditionally, so a late escalation (e.g. a token budget warning
+        // arriving after the PR opened) turned a successful job into ESCALATED
+        // and queued a pointless human review. EscalationService also keeps a
+        // failed regeneration of a job with an open PR out of the queue.
         String reason = String.valueOf(event.getOrDefault("reason", "Unknown escalation reason"));
-        jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
-            String actor = String.valueOf(event.getOrDefault("source", "agent"));
-            if (!jobState.transition(job, "ESCALATED", reason, actor)) {
-                return;
-            }
-
-            // 2. Create Escalation record for the frontend
-            ai.gitoracle.core.entity.Escalation escalation = new ai.gitoracle.core.entity.Escalation();
-            escalation.setId(UUID.randomUUID());
-            escalation.setJob(job);
-            escalation.setReason(reason);
-            
-            Object confObj = event.get("confidenceScore");
-            if (confObj instanceof Number) {
-                escalation.setConfidenceScore(((Number) confObj).doubleValue());
-            } else {
-                escalation.setConfidenceScore(0.0);
-            }
-            
-            escalation.setStatus("PENDING");
-            entityManager.persist(escalation);
-        });
+        String actor = String.valueOf(event.getOrDefault("source", "agent"));
+        // Null, not 0.0, when the agent sent none: a crash has no confidence,
+        // and 0.0 showed in the queue as "Conf: 0.00" on every row.
+        Double confidence = event.get("confidenceScore") instanceof Number n ? n.doubleValue() : null;
+        jobRepository.findById(UUID.fromString(jobIdStr))
+            .ifPresent(job -> escalations.escalate(job, reason, actor, confidence));
     }
 
     private double parseDoubleOrDefault(String value, double fallback) {

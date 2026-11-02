@@ -34,6 +34,10 @@ on:
         description: 'Minimum patch accuracy (0.0-1.0) to pass'
         required: false
         default: '0.75'
+      min_cause_score:
+        description: 'Minimum root-cause accuracy (0.0-1.0) to pass'
+        required: false
+        default: '0.5'
   schedule:
     - cron: '0 3 * * *'
 
@@ -48,13 +52,15 @@ jobs:
   eval:
     name: Golden Dataset Eval
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       MIN_SCORE: ${{ inputs.min_score || '0.75' }}
+      MIN_CAUSE_SCORE: ${{ inputs.min_cause_score || '0.5' }}
       # Per case. /trigger runs the full pipeline (investigate → plan → up to 3
       # fix attempts → Maven tests in Docker, cold cache on a fresh runner), which
-      # can outrun the script's 10-minute default. 2 cases × 15 min + ~5 min
-      # setup stays well inside the job's 60-minute timeout.
+      # can outrun the script's 10-minute default. 6 cases × 15 min worst case
+      # + ~10 min setup stays inside the job's 120-minute timeout; typical runs
+      # take far less.
       EVAL_POLL_TIMEOUT: '900'
       EVAL_FIXTURE_REPO: ${{ vars.EVAL_FIXTURE_REPO }}
     steps:
@@ -123,46 +129,17 @@ jobs:
           pip install -r ai_core/requirements.txt
 
       # Throwaway per-run credentials for everything internal; only the LLM
-      # settings come from secrets. Later lines override .env.example's
-      # placeholders when the file is sourced.
+      # settings come from secrets (shared with ci.yml's pipeline-e2e job).
       - name: Write .env
         env:
           LLM_URL: ${{ secrets.EVAL_LLM_BASE_URL }}
           LLM_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
           LLM_MODEL: ${{ secrets.EVAL_LLM_MODEL_NAME }}
-        run: |
-          rnd() { openssl rand -hex 24; }
-          API_KEY=$(rnd)
-          echo "::add-mask::$API_KEY"
-          cp .env.example .env
-          {
-            echo ""
-            echo "# ── CI overrides ──"
-            echo "GITORACLE_API_KEY=$API_KEY"
-            echo "GITORACLE_LEGACY_API_KEY_ENABLED=true"
-            echo "GITORACLE_INTERNAL_TOKEN=$(rnd)"
-            echo "POSTGRES_PASSWORD=$(rnd)"
-            echo "REDIS_PASSWORD=$(rnd)"
-            echo "QDRANT_API_KEY=$(rnd)"
-            echo "GRAFANA_ADMIN_PASSWORD=$(rnd)"
-            echo "LANGFUSE_NEXTAUTH_SECRET=$(rnd)"
-            echo "LANGFUSE_SALT=$(rnd)"
-            # Langfuse isn't started here; empty keys turn tracing off instead of
-            # failing (and blocking on a flush) on every LLM call.
-            echo "LANGFUSE_PUBLIC_KEY="
-            echo "LANGFUSE_SECRET_KEY="
-            echo "JWT_SECRET=$(rnd)$(rnd)"
-            echo "LLM_BASE_URL=$LLM_URL"
-            echo "LLM_API_KEY=$LLM_KEY"
-            echo "OPENAI_API_KEY=$LLM_KEY"
-            echo "LLM_MODEL=$LLM_MODEL"
-            echo "LLM_MODEL_NAME=$LLM_MODEL"
-          } >> .env
-          echo "GITORACLE_API_KEY=$API_KEY" >> "$GITHUB_ENV"
+        run: scripts/ci/write_env.sh
 
-      # github-bot and the orchestrator read App credentials from
-      # java-backend/github-bot/.env (deliberately not the root .env — see
-      # GitHubClient.java). The Java loader needs PKCS#8; GitHub issues PKCS#1.
+      # github-bot and the orchestrator read the App credentials from the root
+      # .env (GitHubAppCredentials). The Java loader needs PKCS#8; GitHub issues
+      # PKCS#1.
       - name: Write GitHub App credentials
         env:
           APP_ID: ${{ secrets.GITORACLE_APP_ID }}
@@ -174,47 +151,19 @@ jobs:
           printf '%s\n' "$APP_KEY" > "$RUNNER_TEMP/github-app.original.pem"
           openssl pkcs8 -topk8 -nocrypt -in "$RUNNER_TEMP/github-app.original.pem" -out "$KEY"
           rm -f "$RUNNER_TEMP/github-app.original.pem"
+          # Into the root .env like every other setting (GitHubAppCredentials);
+          # appended, so these lines override .env.example's empty ones.
           {
             echo "GITHUB_APP_ID=$APP_ID"
             echo "GITHUB_INSTALLATION_ID=$INSTALLATION_ID"
             echo "GITHUB_PRIVATE_KEY_PATH=$KEY"
-          } > java-backend/github-bot/.env
+            # Fail at boot, not at the PR step, if the above didn't take.
+            echo "GITORACLE_REQUIRE_GITHUB_APP=true"
+          } >> .env
 
-      # Only what the pipeline needs — prometheus/grafana/langfuse/kafka-ui are
-      # observability and would just eat runner memory.
-      - name: Start infrastructure
-        run: |
-          docker compose -f docker-compose.infra.yml up -d --wait postgres neo4j redis qdrant kafka
-          docker compose -f docker-compose.infra.yml up --no-deps --exit-code-from neo4j-init neo4j-init
-          docker compose -f docker-compose.infra.yml up --no-deps --exit-code-from kafka-init kafka-init
-
-      - name: Build and start services
-        env:
-          SKIP_DASHBOARD: '1'
-        run: ./start_local.sh
-
-      # Readiness by log line, not by curling ports (see CLAUDE.md).
-      - name: Wait for services
-        run: |
-          deadline=$((SECONDS + 300))
-          for svc in api-gateway error-ingestor orchestrator test-runner github-bot git-forensics; do
-            until grep -q "Started .*Application" "java-backend/$svc.log" 2>/dev/null; do
-              if [ $SECONDS -gt $deadline ]; then
-                echo "::error::$svc did not start within 5 minutes"; tail -50 "java-backend/$svc.log"; exit 1
-              fi
-              sleep 3
-            done
-            echo "✅ $svc"
-          done
-          for agent in fixer planner investigator reviewer prompt_registry guardrails commit_analyst; do
-            until grep -q "Uvicorn running" "ai_core/$agent.log" 2>/dev/null; do
-              if [ $SECONDS -gt $deadline ]; then
-                echo "::error::$agent did not start within 5 minutes"; tail -50 "ai_core/$agent.log"; exit 1
-              fi
-              sleep 3
-            done
-            echo "✅ $agent"
-          done
+      # Infra subset + all services + readiness by log line (scripts/ci/start_stack.sh).
+      - name: Start the stack
+        run: scripts/ci/start_stack.sh
 
       # Previous runs leave open PRs behind (their branches point at a history
       # this run is about to force-push away), so close them first.
@@ -240,7 +189,7 @@ jobs:
         run: python eval/run_evals.py --output eval_report.json
 
       - name: Check regression baseline
-        run: python eval/check_regression.py --report eval_report.json --min-score "$MIN_SCORE"
+        run: python eval/check_regression.py --report eval_report.json --min-score "$MIN_SCORE" --min-cause-score "$MIN_CAUSE_SCORE"
 
       - name: Summary
         if: always()

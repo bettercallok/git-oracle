@@ -1,5 +1,4 @@
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from enum import Enum
 import os
@@ -19,13 +18,9 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="GitOracle Reviewer Agent", version="1.0", dependencies=[Depends(require_internal_token)])
 app.add_middleware(BodySizeLimitMiddleware)
 add_health_route(app, "reviewer")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORS middleware: agents are called server-to-server only (orchestrator,
+# other agents), never from a browser. allow_origins=["*"] with
+# allow_credentials=True let any web page a developer visited call them.
 
 class ReviewStance(str, Enum):
     DEFEND            = "defend"            # reviewer concern is wrong
@@ -94,10 +89,12 @@ If stance is 'acknowledge' and severity > 0.7, set action_needed = True.
             # TODO (Layer 8): Publish 'fix-regeneration-needed' to Kafka here
             
         return reply
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — HTTP boundary: logged and returned as a 500
         logger.error(f"Review processing failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
+    from shared.config import check_startup_config
+    check_startup_config("reviewer", needs_llm=True)
     import uvicorn
     uvicorn.run(app, host=os.getenv("BIND_HOST", "127.0.0.1"), port=9003)

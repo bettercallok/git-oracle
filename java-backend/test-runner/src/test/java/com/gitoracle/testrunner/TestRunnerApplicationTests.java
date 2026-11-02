@@ -3,7 +3,7 @@ package com.gitoracle.testrunner;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
-@SpringBootTest
+@SpringBootTest(properties = "gitoracle.internal-token=test-internal-token")
 class TestRunnerApplicationTests {
 
 	@Test

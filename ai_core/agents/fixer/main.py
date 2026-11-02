@@ -1,6 +1,5 @@
 from fastapi import Depends, FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing import Any, List, Optional
 import os
 import logging
@@ -26,13 +25,9 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="GitOracle Fixer Agent", version="1.0", dependencies=[Depends(require_internal_token)])
 app.add_middleware(BodySizeLimitMiddleware)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORS middleware: agents are called server-to-server only (orchestrator,
+# other agents), never from a browser. allow_origins=["*"] with
+# allow_credentials=True let any web page a developer visited call them.
 
 class FixStrategy(str):
     pass
@@ -113,7 +108,7 @@ def build_unified_diff(repo_path: str, file_path: str, search: str, replace: str
     try:
         with open(full_path, "r") as f:
             original = f.read()
-    except Exception as e:
+    except OSError as e:
         logger.warning(f"Could not read {full_path} to build diff: {e}")
         return None
 
@@ -182,7 +177,7 @@ async def execute_fix(request: FixerRequest):
                 shutil.rmtree(fixer_src_path, ignore_errors=True)
                 git.Repo.clone_from(request.repo_url, fixer_src_path, **clone_kwargs)
             local_src_path = fixer_src_path
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — any clone failure falls back to a second clone below
             # request.repo_path is only populated when an earlier pipeline stage
             # (e.g. the investigator) already cloned it — jobs triggered via
             # "Ask to Fix" skip that stage, so repo_path can be an empty/nonexistent
@@ -196,7 +191,7 @@ async def execute_fix(request: FixerRequest):
                     shutil.rmtree(request.repo_path, ignore_errors=True)
                     git.Repo.clone_from(request.repo_url, request.repo_path, **clone_kwargs)
                 local_src_path = request.repo_path
-            except Exception as e2:
+            except Exception as e2:  # noqa: BLE001 — both clones failed; logged, and the attempt reports the files as unreadable
                 logger.warning(f"Fallback clone into {request.repo_path} also failed: {e2}")
 
     # 1. Fetch source code for context
@@ -270,7 +265,7 @@ async def execute_fix(request: FixerRequest):
             # itself rather than trusting an earlier filter to have run.
             logger.warning(f"Refusing to read unsafe path {file_path!r}: {e}")
             source_context += f"\n--- {file_path} ---\n[Rejected: path outside the repository]\n"
-        except Exception as e:
+        except (OSError, ValueError) as e:  # unreadable or not text
             logger.warning(f"Could not read {file_path}: {e}")
             source_context += f"\n--- {file_path} ---\n[File not found or unreadable]\n"
 
@@ -284,7 +279,7 @@ async def execute_fix(request: FixerRequest):
         try:
             memories = await memory.recall(request.tenant_id, request.repo_path, request.bug_description, "episodic", top_k=2)
             past_fixes = "\n".join([f"- {m['content']} (Score: {m['metadata'].get('quality_score', 1.0)})" for m in memories])
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — memory is optional context; it must not block the fix
             logger.warning(f"Could not retrieve episodic memory: {e}")
             past_fixes = "None"
             
@@ -344,7 +339,7 @@ Do not write a diff yourself — the unified diff is computed automatically from
                 job_id=request.job_id,
                 agent_name="fixer_agent"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — an LLM failure costs one attempt (reported to the timeline), not the job
             logger.error(f"LLM call failed: {e}")
             await report_event(request.job_id, "fixer", f"Attempt {attempt + 1}: LLM call failed: {e}",
                                type=ERROR, details={"attempt": attempt + 1})
@@ -415,7 +410,7 @@ Do not write a diff yourself — the unified diff is computed automatically from
                     if not passed:
                         logger.info(f"Test Logs: {data.get('logs', '')}")
                     return passed
-            except Exception as e:
+            except (httpx.HTTPError, ValueError) as e:  # unreachable/HTTP error, or a non-JSON reply
                 logger.error(f"Error calling real test runner: {e}")
                 return False
 
@@ -439,7 +434,7 @@ Do not write a diff yourself — the unified diff is computed automatically from
                 episode_text = f"Fixed bug '{request.bug_description}' using strategy {request.plan.strategy}. Key change: {patch.summary}."
                 await memory.remember(request.tenant_id, request.repo_path, "episodic", episode_text, metadata={"quality_score": 1.0})
                 logger.info("Saved success to Episodic Memory.")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — storing the success in memory is best-effort
                 logger.warning(f"Failed to store memory: {e}")
                 
             return PatchResult(patch=patch, attempts=attempt + 1, success=True)
@@ -449,9 +444,10 @@ Do not write a diff yourself — the unified diff is computed automatically from
     # Escalation
     return PatchResult(patch=None, attempts=3, success=False, escalation_report="Fixer Agent exhausted all attempts and could not fix the bug.")
 
-import asyncio
 from shared.kafka_consumer import KafkaEventConsumer
-from shared.kafka_producer import get_producer, close_producer
+from shared import topics
+from shared.kafka_producer import get_producer
+from shared.consumer_lifespan import run_consumer_with_app
 from shared.health import add_health_route
 
 async def handle_fix_job(payload: dict):
@@ -469,8 +465,8 @@ async def handle_fix_job(payload: dict):
         # Inside a try: a malformed plan used to raise straight out of the
         # handler — before any escalation code — and kill the consumer.
         plan = PlannerOutput(**plan_dict)
-    except Exception as e:
-        await _escalate(job_id, f"Fixer received an invalid plan: {e}", 0.0)
+    except (ValidationError, TypeError) as e:
+        await _escalate(job_id, f"Fixer received an invalid plan: {e}", None)
         return
 
     bug_desc = payload.get("bug_description", "Fixing error based on plan")
@@ -506,11 +502,11 @@ async def handle_fix_job(payload: dict):
                 "authorizedFiles": ",".join(result.patch.authorized_files),
                 "branch": branch or "",
             }
-            await producer.publish("fix-generated", fix_payload)
+            await producer.publish(topics.FIX_GENERATED, fix_payload)
             logger.info(f"Published fix-generated for job {job_id} (human_directed={bool(human_instructions)})")
         else:
             logger.warning(f"Fixer failed to produce a valid patch for job {job_id}")
-            await producer.publish("job-escalated", {
+            await producer.publish(topics.JOB_ESCALATED, {
                 "jobId": job_id,
                 "reason": result.escalation_report or "Fixer Agent exhausted all attempts and could not fix the bug.",
                 # Was hardcoded 0.0 regardless of the actual plan/investigation
@@ -529,30 +525,22 @@ async def handle_fix_job(payload: dict):
         await _escalate(job_id, f"Fixer Agent failed: {e}", request.plan.confidence)
 
 
-async def _escalate(job_id: str, reason: str, confidence: float) -> None:
+async def _escalate(job_id: str, reason: str, confidence: Optional[float]) -> None:
     try:
-        await get_producer().publish("job-escalated", {
+        await get_producer().publish(topics.JOB_ESCALATED, {
             "jobId": job_id, "reason": reason, "confidenceScore": confidence, "source": "fixer",
         })
         logger.info(f"Published job-escalated for job {job_id}")
-    except Exception as publish_error:
+    except Exception as publish_error:  # noqa: BLE001 — escalation publish failed; JobWatchdog still escalates the stalled job
         logger.error(f"Could not escalate job {job_id}: {publish_error}")
 
-# Created at import so /health can report on it. The task is kept on app.state:
-# asyncio holds only a weak reference to tasks, and this one used to be
-# fire-and-forget.
-_consumer = KafkaEventConsumer(topic="job.events.fix", group_id="fixer-agent-group")
+# Created at import so /health can report on it; runs for the app's lifetime.
+_consumer = KafkaEventConsumer(topic=topics.JOB_FIX, group_id="fixer-agent-group")
 add_health_route(app, "fixer", _consumer)
-
-@app.on_event("startup")
-async def startup_event():
-    app.state.consumer_task = asyncio.create_task(_consumer.consume(handle_fix_job))
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    app.state.consumer_task.cancel()
-    await close_producer()
+run_consumer_with_app(app, _consumer, handle_fix_job)
 
 if __name__ == "__main__":
+    from shared.config import check_startup_config
+    check_startup_config("fixer", needs_llm=True)
     import uvicorn
     uvicorn.run(app, host=os.getenv("BIND_HOST", "127.0.0.1"), port=9002)

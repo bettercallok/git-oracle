@@ -1,10 +1,8 @@
 package ai.gitoracle.orchestrator.service;
 
-import ai.gitoracle.core.entity.Escalation;
 import ai.gitoracle.core.model.postgres.AgentJob;
 import ai.gitoracle.orchestrator.token.AgentJobRepository;
 import io.micrometer.core.instrument.MeterRegistry;
-import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -15,7 +13,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.UUID;
 
 /**
  * Escalates jobs that have stopped moving.
@@ -38,17 +35,15 @@ public class JobWatchdog {
     private static final Logger logger = LoggerFactory.getLogger(JobWatchdog.class);
 
     private final AgentJobRepository jobRepository;
-    private final JobStateService jobState;
-    private final EntityManager entityManager;
+    private final EscalationService escalations;
     private final WatchdogProperties properties;
     private final MeterRegistry meterRegistry;
     private final Clock clock;
 
-    public JobWatchdog(AgentJobRepository jobRepository, JobStateService jobState, EntityManager entityManager,
+    public JobWatchdog(AgentJobRepository jobRepository, EscalationService escalations,
                        WatchdogProperties properties, MeterRegistry meterRegistry, Clock clock) {
         this.jobRepository = jobRepository;
-        this.jobState = jobState;
-        this.entityManager = entityManager;
+        this.escalations = escalations;
         this.properties = properties;
         this.meterRegistry = meterRegistry;
         this.clock = clock;
@@ -74,15 +69,7 @@ public class JobWatchdog {
             String state = job.getState();
             String reason = String.format("Stalled in %s for %s (limit %s) — no agent reported progress",
                                           state, human(stuck), human(limit));
-            if (!jobState.transition(job, "ESCALATED", reason, "watchdog")) continue;
-
-            Escalation escalation = new Escalation();
-            escalation.setId(UUID.randomUUID());
-            escalation.setJob(job);
-            escalation.setReason(reason);
-            escalation.setConfidenceScore(0.0);
-            escalation.setStatus("PENDING");
-            entityManager.persist(escalation);
+            if (!escalations.escalate(job, reason, "watchdog", null)) continue;
 
             meterRegistry.counter("gitoracle.watchdog.escalations", "state", state).increment();
             logger.warn("Watchdog escalated job {}: {}", job.getId(), reason);

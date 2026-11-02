@@ -22,6 +22,9 @@ OLLAMA_API_URL = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1/chat/
 OLLAMA_EMBED_URL = OLLAMA_API_URL.replace("/v1/chat/completions", "/api/embeddings")
 EMBEDDING_MODEL = "all-minilm"
 
+_embedding_warned = False
+
+
 async def embed_text(content: str) -> List[float]:
     """Convert text into a 384-dimensional vector using local Ollama model, or fallback to zero vector."""
     try:
@@ -36,8 +39,17 @@ async def embed_text(content: str) -> List[float]:
             response.raise_for_status()
             data = response.json()
             return data["embedding"]
-    except Exception as e:
-        logger.debug(f"Skipping vector embedding recall: {e}")
+    except Exception as e:  # noqa: BLE001 — embeddings are optional; falls back to a zero vector
+        # This was debug-only, so a deployment whose LLM provider has no
+        # embeddings endpoint (e.g. Groq) ran with useless all-zero vectors and
+        # nothing ever said so. Warn once per process; debug after that.
+        global _embedding_warned
+        if not _embedding_warned:
+            _embedding_warned = True
+            logger.warning(f"Embeddings unavailable ({e}); memory recall falls back to zero vectors "
+                           f"and won't find similar past fixes. Further failures are logged at debug.")
+        else:
+            logger.debug(f"Skipping vector embedding recall: {e}")
         return [0.0] * 384
 
 async def get_db_connection():
@@ -178,7 +190,7 @@ class SemanticMemory:
             )
         except httpx.HTTPStatusError as e:
             logger.warning(f"Skipping learn_fact due to embedding API error (likely using Groq): {e}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — memory is optional; never fail the caller
             logger.warning(f"Failed to learn fact: {e}")
 
     async def retrieve_facts(self, repo: str, query: str, top_k: int = 3) -> List[Dict]:
@@ -216,7 +228,7 @@ class SemanticMemory:
         except httpx.HTTPStatusError as e:
             logger.warning(f"Skipping retrieve_facts due to embedding API error: {e}")
             return []
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — memory is optional; never fail the caller
             logger.warning(f"Failed to retrieve facts: {e}")
             return []
 
