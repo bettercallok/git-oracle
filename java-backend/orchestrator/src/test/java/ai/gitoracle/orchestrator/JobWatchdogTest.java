@@ -3,6 +3,7 @@ package ai.gitoracle.orchestrator;
 import ai.gitoracle.core.entity.Escalation;
 import ai.gitoracle.core.model.postgres.AgentJob;
 import ai.gitoracle.orchestrator.repository.JobEventRepository;
+import ai.gitoracle.orchestrator.service.EscalationService;
 import ai.gitoracle.orchestrator.service.JobStateService;
 import ai.gitoracle.orchestrator.service.JobWatchdog;
 import ai.gitoracle.orchestrator.service.WatchdogProperties;
@@ -49,7 +50,8 @@ class JobWatchdogTest {
         meters = new SimpleMeterRegistry();
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         JobStateService jobState = new JobStateService(jobRepository, mock(JobEventRepository.class), clock);
-        watchdog = new JobWatchdog(jobRepository, jobState, entityManager, new WatchdogProperties(), meters, clock);
+        watchdog = new JobWatchdog(jobRepository, new EscalationService(jobState, entityManager),
+                                   new WatchdogProperties(), meters, clock);
     }
 
     private AgentJob job(String state, Duration ago) {
@@ -115,5 +117,29 @@ class JobWatchdogTest {
         watchdog.escalateStalledJobs();
 
         verify(entityManager, never()).persist(any());
+    }
+
+    @Test
+    void aStalledRegenerationOfAJobWithAnOpenPrGoesBackToPrOpenedNotTheQueue() {
+        AgentJob regenerating = job("FIXING", Duration.ofMinutes(25));   // limit 20m
+        regenerating.setPrUrl("https://github.com/bettercallok/chillcall/pull/18");
+        candidates(regenerating);
+
+        watchdog.escalateStalledJobs();
+
+        assertThat(regenerating.getState()).isEqualTo("PR_OPENED");
+        verify(entityManager, never()).persist(any());
+        assertThat(meters.find("gitoracle.watchdog.escalations").counter()).isNull();
+    }
+
+    @Test
+    void aWatchdogEscalationHasNoConfidenceScore() {
+        candidates(job("INVESTIGATING", Duration.ofMinutes(12)));
+
+        watchdog.escalateStalledJobs();
+
+        ArgumentCaptor<Escalation> escalation = ArgumentCaptor.forClass(Escalation.class);
+        verify(entityManager).persist(escalation.capture());
+        assertThat(escalation.getValue().getConfidenceScore()).isNull();
     }
 }

@@ -140,7 +140,8 @@ class KafkaEventConsumer:
             await get_producer().publish(ESCALATION_TOPIC, {
                 "jobId": job_id,
                 "reason": reason[:4000],
-                "confidenceScore": 0.0,
+                # No confidenceScore: a crash has none, and a placeholder 0.0
+                # showed in the Escalation Queue as a real, very low score.
                 "source": self.agent_name,
             })
         except Exception:

@@ -211,7 +211,9 @@ async def handle_planner_job(payload: dict):
             await get_producer().publish(topics.JOB_ESCALATED, {
                 "jobId": job_id,
                 "reason": f"Planner Agent failed: {e}",
-                "confidenceScore": float(getattr(investigation, "confidence_score", 0.0) or 0.0),
+                # The investigator's own confidence when it sent one; null, not a
+                # placeholder 0.0 (which the Escalation Queue showed as a real score).
+                "confidenceScore": (payload.get("investigation_result") or {}).get("confidence_score"),
             })
             logger.info(f"Published job-escalated for job {job_id}")
         except Exception as publish_error:  # noqa: BLE001 — escalation publish failed; JobWatchdog still escalates the stalled job

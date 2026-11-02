@@ -4,6 +4,7 @@ import ai.gitoracle.core.kafka.KafkaTopics;
 import ai.gitoracle.core.kafka.event.ErrorIngestedEvent;
 import ai.gitoracle.core.model.postgres.AgentJob;
 import ai.gitoracle.orchestrator.token.AgentJobRepository;
+import ai.gitoracle.orchestrator.service.EscalationService;
 import ai.gitoracle.orchestrator.service.JobStateService;
 import ai.gitoracle.orchestrator.service.WorkspaceService;
 import org.slf4j.Logger;
@@ -36,6 +37,7 @@ public class OrchestratorService {
     private final EntityManager entityManager;
     private final ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository;
     private final JobStateService jobState;
+    private final EscalationService escalations;
     private final RestTemplate restTemplate = new RestTemplate();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
@@ -48,13 +50,14 @@ public class OrchestratorService {
     public OrchestratorService(AgentJobRepository jobRepository, KafkaTemplate<String, Object> kafkaTemplate,
                                WorkspaceService workspaceService, EntityManager entityManager,
                                ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository,
-                               JobStateService jobState) {
+                               JobStateService jobState, EscalationService escalations) {
         this.jobRepository = jobRepository;
         this.kafkaTemplate = kafkaTemplate;
         this.workspaceService = workspaceService;
         this.entityManager = entityManager;
         this.prOutcomeRepository = prOutcomeRepository;
         this.jobState = jobState;
+        this.escalations = escalations;
     }
 
     /** Wraps a request body with the X-Internal-Token header every internal-service call needs. */
@@ -658,33 +661,18 @@ public class OrchestratorService {
         
         logger.warn("Orchestrator received JOB_ESCALATED event for job: {}", jobIdStr);
         
-        // 1. Update job state to ESCALATED — unless the job already finished. This
-        // used to overwrite unconditionally, so a late escalation (e.g. a token
-        // budget warning arriving after the PR opened) turned a successful job
-        // into ESCALATED and queued a pointless human review.
+        // ESCALATED — unless the job already finished. This used to overwrite
+        // unconditionally, so a late escalation (e.g. a token budget warning
+        // arriving after the PR opened) turned a successful job into ESCALATED
+        // and queued a pointless human review. EscalationService also keeps a
+        // failed regeneration of a job with an open PR out of the queue.
         String reason = String.valueOf(event.getOrDefault("reason", "Unknown escalation reason"));
-        jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
-            String actor = String.valueOf(event.getOrDefault("source", "agent"));
-            if (!jobState.transition(job, "ESCALATED", reason, actor)) {
-                return;
-            }
-
-            // 2. Create Escalation record for the frontend
-            ai.gitoracle.core.entity.Escalation escalation = new ai.gitoracle.core.entity.Escalation();
-            escalation.setId(UUID.randomUUID());
-            escalation.setJob(job);
-            escalation.setReason(reason);
-            
-            Object confObj = event.get("confidenceScore");
-            if (confObj instanceof Number) {
-                escalation.setConfidenceScore(((Number) confObj).doubleValue());
-            } else {
-                escalation.setConfidenceScore(0.0);
-            }
-            
-            escalation.setStatus("PENDING");
-            entityManager.persist(escalation);
-        });
+        String actor = String.valueOf(event.getOrDefault("source", "agent"));
+        // Null, not 0.0, when the agent sent none: a crash has no confidence,
+        // and 0.0 showed in the queue as "Conf: 0.00" on every row.
+        Double confidence = event.get("confidenceScore") instanceof Number n ? n.doubleValue() : null;
+        jobRepository.findById(UUID.fromString(jobIdStr))
+            .ifPresent(job -> escalations.escalate(job, reason, actor, confidence));
     }
 
     private double parseDoubleOrDefault(String value, double fallback) {

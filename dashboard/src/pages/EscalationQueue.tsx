@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, X, ShieldAlert } from 'lucide-react';
+import { Check, X, ShieldAlert, AlertCircle } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 
@@ -23,7 +24,9 @@ interface Escalation {
   id: string;
   job: Job;
   reason: string;
-  confidenceScore: number;
+  // Null when the escalating agent had no confidence to report (a crash, a
+  // rate limit) — not a score of zero.
+  confidenceScore: number | null;
   status: string;
   createdAt: string;
 }
@@ -33,10 +36,15 @@ const fetchEscalations = async (): Promise<Escalation[]> => {
   return data;
 };
 
-const resolveEscalation = async ({ id, action }: { id: string; action: 'approve' | 'reject' }) => {
+type Action = 'approve' | 'reject';
+
+const resolveEscalation = async ({ id, action }: { id: string; action: Action }) => {
   const { data } = await apiClient.post(`/escalations/${id}/resolve`, { action });
   return data;
 };
+
+const hasConfidence = (e: Escalation): e is Escalation & { confidenceScore: number } =>
+  typeof e.confidenceScore === 'number';
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -56,16 +64,39 @@ export default function EscalationQueue() {
     refetchInterval: 5000,
   });
 
+  const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+
+  // A resolved escalation leaves the list straight away. It used to stay on
+  // screen until — and after — the next poll, looking untouched, which is
+  // what made the buttons seem broken and invited repeated clicks.
   const mutation = useMutation({
     mutationFn: resolveEscalation,
-    onSuccess: () => {
+    onSuccess: (_data, { id, action }) => {
+      queryClient.setQueryData<Escalation[]>(['escalations'], (old) => old?.filter((e) => e.id !== id));
+      setNotice({
+        kind: 'success',
+        text: action === 'approve'
+          ? `Approved ${id.substring(0, 8)} — the job is back at planning. Follow it in the Job Feed.`
+          : `Rejected ${id.substring(0, 8)}.`,
+      });
+    },
+    onError: (err: any) => {
+      // 409 means the server refused on purpose (already resolved, or the job
+      // already has a PR) — show why instead of failing silently.
+      setNotice({ kind: 'error', text: err?.response?.data?.error || err?.message || 'Request failed' });
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['escalations'] });
     },
   });
 
-  const handleAction = (id: string, action: 'approve' | 'reject') => {
+  const handleAction = (id: string, action: Action) => {
+    setNotice(null);
     mutation.mutate({ id, action });
   };
+
+  const scored = escalations.filter(hasConfidence);
+  const pendingAction = mutation.isPending ? mutation.variables : undefined;
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
@@ -89,12 +120,28 @@ export default function EscalationQueue() {
         <div className="card">
           <div className="stat-label">Avg Confidence</div>
           <div className="stat-value">
-            {escalations.length > 0
-              ? (escalations.reduce((s, e) => s + (e.confidenceScore || 0), 0) / escalations.length).toFixed(2)
+            {scored.length > 0
+              ? (scored.reduce((s, e) => s + e.confidenceScore, 0) / scored.length).toFixed(2)
               : '—'}
           </div>
         </div>
       </motion.div>
+
+      {notice && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+          role={notice.kind === 'error' ? 'alert' : 'status'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '12px 16px', borderRadius: 8, marginBottom: 16, fontSize: '0.9rem',
+            background: notice.kind === 'error' ? 'var(--danger-bg)' : 'var(--success-bg)',
+            color: notice.kind === 'error' ? 'var(--danger)' : 'var(--success)',
+          }}
+        >
+          {notice.kind === 'error' ? <AlertCircle size={16} /> : <Check size={16} />}
+          {notice.text}
+        </motion.div>
+      )}
 
       <motion.div variants={itemVariants} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {isLoading && <p>Loading escalations...</p>}
@@ -129,7 +176,9 @@ export default function EscalationQueue() {
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                       <span className="mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{esc.id.substring(0,8)}</span>
-                      <span className="badge badge-warning">Conf: {esc.confidenceScore?.toFixed(2) || 'N/A'}</span>
+                      {hasConfidence(esc) && (
+                        <span className="badge badge-warning">Conf: {esc.confidenceScore.toFixed(2)}</span>
+                      )}
                       <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{formatTime(esc.createdAt)}</span>
                     </div>
                     <div style={{ fontWeight: 500, marginBottom: 4, color: 'var(--text-primary)' }}>{esc.job?.repo?.replace('https://github.com/','')}</div>
@@ -140,10 +189,10 @@ export default function EscalationQueue() {
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                     <motion.button disabled={mutation.isPending} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.95 }} className="btn btn-success" onClick={() => handleAction(esc.id, 'approve')}>
-                      <Check size={16} /> Approve
+                      <Check size={16} /> {pendingAction?.id === esc.id && pendingAction.action === 'approve' ? 'Approving…' : 'Approve'}
                     </motion.button>
                     <motion.button disabled={mutation.isPending} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.95 }} className="btn btn-outline" onClick={() => handleAction(esc.id, 'reject')} style={{ color: 'var(--danger)', borderColor: 'var(--danger-bg)' }}>
-                      <X size={16} /> Reject
+                      <X size={16} /> {pendingAction?.id === esc.id && pendingAction.action === 'reject' ? 'Rejecting…' : 'Reject'}
                     </motion.button>
                   </div>
                 </div>

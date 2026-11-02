@@ -466,7 +466,7 @@ async def handle_fix_job(payload: dict):
         # handler — before any escalation code — and kill the consumer.
         plan = PlannerOutput(**plan_dict)
     except (ValidationError, TypeError) as e:
-        await _escalate(job_id, f"Fixer received an invalid plan: {e}", 0.0)
+        await _escalate(job_id, f"Fixer received an invalid plan: {e}", None)
         return
 
     bug_desc = payload.get("bug_description", "Fixing error based on plan")
@@ -525,7 +525,7 @@ async def handle_fix_job(payload: dict):
         await _escalate(job_id, f"Fixer Agent failed: {e}", request.plan.confidence)
 
 
-async def _escalate(job_id: str, reason: str, confidence: float) -> None:
+async def _escalate(job_id: str, reason: str, confidence: Optional[float]) -> None:
     try:
         await get_producer().publish(topics.JOB_ESCALATED, {
             "jobId": job_id, "reason": reason, "confidenceScore": confidence, "source": "fixer",
