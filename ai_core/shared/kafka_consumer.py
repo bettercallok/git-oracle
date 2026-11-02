@@ -111,6 +111,13 @@ class KafkaEventConsumer:
             await self._dead_letter(raw.decode("utf-8", errors="replace") if raw else None,
                                     f"undecodable message: {e}", None)
             return
+        # A tombstone (no value) or JSON that isn't an object — `null`, a list, a
+        # string — has nothing a handler can read a job from. It used to be
+        # passed through and crash the handler on its first `.get`.
+        if not isinstance(payload, dict):
+            logger.error(f"Non-object message on {self.topic}: {type(payload).__name__}")
+            await self._dead_letter(payload, "message is not a JSON object", None)
+            return
 
         logger.debug(f"Received event: {payload}")
         try:

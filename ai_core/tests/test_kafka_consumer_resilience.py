@@ -105,6 +105,21 @@ def test_an_undecodable_message_is_dead_lettered_without_calling_the_handler(pro
     assert [t for t, _ in producer.published] == ["job.events.dlq"]   # no job id -> nothing to escalate
 
 
+def test_a_tombstone_or_non_object_message_is_dead_lettered_without_calling_the_handler(producer):
+    calls = []
+
+    async def handler(payload):
+        calls.append(payload)
+
+    consumer = _consumer([FakeAioConsumer([None, b"null", _raw(["a", "list"]), _raw({"job_id": "job-2"})])])
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(consumer.consume(handler))
+
+    assert calls == [{"job_id": "job-2"}]
+    assert [t for t, _ in producer.published] == ["job.events.dlq"] * 3
+    assert all(p["error"] == "message is not a JSON object" for _, p in producer.published)
+
+
 def test_a_consumer_that_dies_is_rebuilt_instead_of_ending_the_task(producer):
     handled = []
 
