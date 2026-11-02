@@ -70,6 +70,11 @@ jobs:
       - name: Run Ruff Lint
         run: ruff check ai_core cli/gitOracle eval --select E9,F
 
+      # A blanket `except Exception` must say why it's safe (`# noqa: BLE001 — <reason>`).
+      # Unexplained catch-alls are how failures in this pipeline went silent.
+      - name: No unexplained blanket excepts
+        run: ruff check ai_core/agents ai_core/shared --select BLE001
+
       # Blocking. This was `|| true`, so it could never fail a build; the 17
       # errors it was hiding have been fixed.
       - name: Run Mypy Typecheck

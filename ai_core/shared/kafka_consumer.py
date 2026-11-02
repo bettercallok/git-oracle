@@ -98,7 +98,7 @@ class KafkaEventConsumer:
                 if consumer is not None:
                     try:
                         await consumer.stop()
-                    except Exception:
+                    except Exception:  # noqa: BLE001 — cleanup of a consumer that has already died
                         logger.debug("Error stopping dead consumer", exc_info=True)
             await asyncio.sleep(delay)
             delay = min(delay * 2, self.max_backoff)
@@ -106,7 +106,7 @@ class KafkaEventConsumer:
     async def _handle(self, raw: Optional[bytes], message_handler: Handler) -> None:
         try:
             payload = json.loads(raw.decode("utf-8")) if raw is not None else None
-        except Exception as e:
+        except ValueError as e:  # bad UTF-8 or bad JSON (both ValueError)
             logger.error(f"Undecodable message on {self.topic}: {e}")
             await self._dead_letter(raw.decode("utf-8", errors="replace") if raw else None,
                                     f"undecodable message: {e}", None)

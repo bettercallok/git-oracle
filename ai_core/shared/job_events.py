@@ -43,5 +43,5 @@ async def report_event(
             )
             if resp.status_code >= 400:
                 logger.warning(f"Timeline event for job {job_id} rejected: HTTP {resp.status_code}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — timeline notes are best-effort by design (see module docstring)
         logger.warning(f"Failed to report timeline event for job {job_id}: {e}")

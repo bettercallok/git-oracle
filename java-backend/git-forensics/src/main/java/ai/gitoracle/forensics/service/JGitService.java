@@ -37,13 +37,14 @@ public class JGitService {
             throw new RuntimeException("Git clone failed", e);
         }
     }
-    public record CommitData(String sha, String author, String message, boolean isBugFix, java.util.List<String> filesModified) {}
+    public record CommitData(String sha, String author, String authorEmail, String message, boolean isBugFix, java.util.List<String> filesModified) {}
 
     public java.util.List<CommitData> extractHistory(File repoDir) {
         java.util.List<CommitData> commits = new java.util.ArrayList<>();
         try {
-            // git log --name-status --pretty=format:"COMMIT|%H|%an|%s"
-            ProcessBuilder pb = new ProcessBuilder("git", "log", "--name-status", "--pretty=format:COMMIT|%H|%an|%s");
+            // git log --name-status --pretty=format:"COMMIT|%H|%an|%ae|%s" — the email is the
+            // Developer node's identity (init.cypher's uniqueness constraint is on email).
+            ProcessBuilder pb = new ProcessBuilder("git", "log", "--name-status", "--pretty=format:COMMIT|%H|%an|%ae|%s");
             pb.directory(repoDir);
             Process process = pb.start();
             
@@ -51,6 +52,7 @@ public class JGitService {
                 String line;
                 String currentSha = null;
                 String currentAuthor = null;
+                String currentEmail = null;
                 String currentMessage = null;
                 boolean currentIsBugFix = false;
                 java.util.List<String> currentFiles = new java.util.ArrayList<>();
@@ -61,14 +63,15 @@ public class JGitService {
                     if (line.startsWith("COMMIT|")) {
                         // Save previous commit
                         if (currentSha != null) {
-                            commits.add(new CommitData(currentSha, currentAuthor, currentMessage, currentIsBugFix, new java.util.ArrayList<>(currentFiles)));
+                            commits.add(new CommitData(currentSha, currentAuthor, currentEmail, currentMessage, currentIsBugFix, new java.util.ArrayList<>(currentFiles)));
                         }
                         
-                        String[] parts = line.split("\\|", 4);
-                        if (parts.length >= 4) {
+                        String[] parts = line.split("\\|", 5);
+                        if (parts.length >= 5) {
                             currentSha = parts[1];
                             currentAuthor = parts[2];
-                            currentMessage = parts[3];
+                            currentEmail = parts[3];
+                            currentMessage = parts[4];
                             String msgLower = currentMessage.toLowerCase();
                             currentIsBugFix = msgLower.contains("fix") || msgLower.contains("bug") || msgLower.contains("issue") || msgLower.contains("patch");
                             currentFiles.clear();
@@ -83,7 +86,7 @@ public class JGitService {
                 }
                 // Save last commit
                 if (currentSha != null) {
-                    commits.add(new CommitData(currentSha, currentAuthor, currentMessage, currentIsBugFix, currentFiles));
+                    commits.add(new CommitData(currentSha, currentAuthor, currentEmail, currentMessage, currentIsBugFix, currentFiles));
                 }
             }
             process.waitFor();
