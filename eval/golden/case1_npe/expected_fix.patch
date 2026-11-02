@@ -2,7 +2,7 @@
 +++ b/src/main/java/com/example/UserService.java
 @@ -8,6 +8,9 @@
      }
-
+ 
      public void processPayment(User user, PaymentInfo payment) {
 +        if (user == null) {
 +            throw new IllegalArgumentException("User cannot be null");
