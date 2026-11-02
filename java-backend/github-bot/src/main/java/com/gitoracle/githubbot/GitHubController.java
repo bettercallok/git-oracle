@@ -13,9 +13,15 @@ import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GHRepository;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @RestController
 public class GitHubController {
@@ -70,7 +76,19 @@ public class GitHubController {
             String baseBranch = (requestedBranch != null && !requestedBranch.isBlank())
                 ? requestedBranch : defaultBranch;
 
+            // A regenerated fix for a job that already has an open PR goes onto that
+            // PR's branch. It used to never reach here: the orchestrator dropped the
+            // passing result as a duplicate delivery, so "Regenerate Fix" on a job
+            // with a PR produced nothing (job 9e09ccf6, chillcall#18).
+            GHPullRequest existingPr = findUpdatablePullRequest(repo, request);
+            boolean replacesClosedPr = existingPr == null
+                && request.getExistingPrUrl() != null && !request.getExistingPrUrl().isBlank();
+
             String newBranchName = "gitoracle-fix-" + request.getJobId().substring(0, 8);
+            if (replacesClosedPr) {
+                // The old PR's branch may still exist; don't collide with it.
+                newBranchName += "-r" + (System.currentTimeMillis() / 1000);
+            }
 
             // Stateful Git Operations
             String workDir = "/tmp/gitoracle-bot/" + UUID.randomUUID().toString();
@@ -102,11 +120,19 @@ public class GitHubController {
             runCommand(workDir, "git", "apply", "fix.patch");
             patchFile.delete(); // cleanup
             
-            logger.info("Committing and pushing...");
+            logger.info("Committing...");
             runCommand(workDir, "git", "config", "user.name", "GitOracle Bot");
             runCommand(workDir, "git", "config", "user.email", "bot@gitoracle.ai");
             runCommand(workDir, "git", "add", ".");
             runCommand(workDir, "git", "commit", "-m", "🤖 GitOracle Autonomous Fix: " + request.getCommitMessage());
+
+            if (existingPr != null) {
+                String prUrl = updatePullRequest(workDir, existingPr, request, markdown);
+                runCommand("/tmp", "rm", "-rf", workDir);
+                return ResponseEntity.ok(new PullRequestResult(true, prUrl, null));
+            }
+
+            logger.info("Pushing {}...", newBranchName);
             runCommand(workDir, "git", "-c", "credential.helper=", "push", "origin", newBranchName);
             
             // Open the Pull Request
@@ -133,8 +159,133 @@ public class GitHubController {
     }
 
     public record PullRequestResult(boolean success, String prUrl, String error) {}
+
+    private static final Pattern PR_URL = Pattern.compile("^https://github\\.com/([^/]+/[^/]+)/pull/(\\d+)/?$");
+
+    /**
+     * The PR number in {@code prUrl}, or null unless it is a pull request URL
+     * on exactly {@code repoFullName}. A URL from another repository is never
+     * followed, whatever the job record says.
+     */
+    static Integer pullRequestNumber(String prUrl, String repoFullName) {
+        if (prUrl == null || repoFullName == null) return null;
+        Matcher m = PR_URL.matcher(prUrl.trim());
+        if (!m.matches() || !m.group(1).equalsIgnoreCase(repoFullName)) return null;
+        return Integer.valueOf(m.group(2));
+    }
+
+    /**
+     * The job's existing PR, if it is still open and its branch lives in this
+     * repository (a fork's branch can't be pushed to). Null means: open a new PR.
+     */
+    private GHPullRequest findUpdatablePullRequest(GHRepository repo, PullRequestRequest request) throws IOException {
+        Integer number = pullRequestNumber(request.getExistingPrUrl(), request.getRepoFullName());
+        if (number == null) {
+            if (request.getExistingPrUrl() != null && !request.getExistingPrUrl().isBlank()) {
+                logger.warn("Job {}: existing PR {} is not a PR on {} — opening a new one",
+                    request.getJobId(), request.getExistingPrUrl(), request.getRepoFullName());
+            }
+            return null;
+        }
+        GHPullRequest pr = repo.getPullRequest(number);
+        if (pr.getState() != org.kohsuke.github.GHIssueState.OPEN) {
+            logger.info("Job {}: PR #{} is {} — opening a new one for the regenerated fix",
+                request.getJobId(), number, pr.getState());
+            return null;
+        }
+        if (pr.getHead().getRepository() == null
+                || !request.getRepoFullName().equalsIgnoreCase(pr.getHead().getRepository().getFullName())) {
+            logger.warn("Job {}: PR #{} comes from another repository — opening a new one", request.getJobId(), number);
+            return null;
+        }
+        return pr;
+    }
+
+    /**
+     * Puts the fix committed in {@code workDir} (on top of the base branch) onto
+     * {@code pr}'s branch as one new commit, without rewriting its history.
+     *
+     * <p>The patch was generated against the base branch, not the PR branch, so
+     * applying it there would conflict with the previous fix. Instead the new
+     * commit takes its tree straight from the base+patch commit, with the PR's
+     * head as parent — so the push is a fast-forward and the PR's total diff
+     * becomes exactly the new fix. When the base has moved on since the PR was
+     * opened, the base commit is a second parent, which keeps GitHub's diff
+     * (computed from the merge base) to the fix alone.
+     */
+    private String updatePullRequest(String workDir, GHPullRequest pr, PullRequestRequest request, String markdown)
+            throws Exception {
+        String headRef = RepoRefValidator.validateBranch(pr.getHead().getRef());
+        logger.info("Updating PR #{} (branch {}) for job {}", pr.getNumber(), headRef, request.getJobId());
+
+        String url = pr.getHtmlUrl().toString();
+        String newCommit = commitFixOntoBranch(workDir, headRef,
+            "🤖 GitOracle: regenerated fix — " + request.getCommitMessage());
+        if (newCommit == null) {
+            logger.info("Regenerated fix for job {} is identical to PR #{} — nothing to push", request.getJobId(), pr.getNumber());
+            pr.comment("🤖 GitOracle regenerated this fix and arrived at exactly the same change — no new commit.");
+            return url;
+        }
+
+        pr.setBody(markdown);
+        pr.comment("🤖 GitOracle regenerated this fix as requested, and the full test suite passed with it. "
+            + "The PR now contains only the new fix (commit " + newCommit.substring(0, 7) + ").");
+        logger.info("Updated PR {} for job {} with commit {}", url, request.getJobId(), newCommit);
+        return url;
+    }
+
+    /**
+     * The git half of {@link #updatePullRequest}: {@code workDir} is a clone of
+     * the base branch whose HEAD commit is base + fix. Pushes one commit with
+     * that tree onto {@code origin/<headRef>} and returns its sha, or null when
+     * the branch already has exactly that content.
+     */
+    static String commitFixOntoBranch(String workDir, String headRef, String message) throws Exception {
+        runCommand(workDir, "git", "-c", "credential.helper=", "fetch", "origin", "refs/heads/" + headRef);
+        String prHead = runCommandOutput(workDir, "git", "rev-parse", "FETCH_HEAD");
+        String baseHead = runCommandOutput(workDir, "git", "rev-parse", "HEAD~1");
+        String tree = runCommandOutput(workDir, "git", "rev-parse", "HEAD^{tree}");
+
+        if (tree.equals(runCommandOutput(workDir, "git", "rev-parse", prHead + "^{tree}"))) {
+            return null;
+        }
+
+        List<String> commitTree = new ArrayList<>(List.of("git", "commit-tree", tree, "-p", prHead));
+        if (exitCode(workDir, "git", "merge-base", "--is-ancestor", baseHead, prHead) != 0) {
+            commitTree.addAll(List.of("-p", baseHead));
+        }
+        commitTree.addAll(List.of("-m", message));
+        String newCommit = runCommandOutput(workDir, commitTree.toArray(String[]::new));
+
+        // A fast-forward push: if someone else pushed to the branch meanwhile, it
+        // is rejected rather than overwriting their work.
+        runCommand(workDir, "git", "-c", "credential.helper=", "push", "origin", newCommit + ":refs/heads/" + headRef);
+        return newCommit;
+    }
+
+    private static String runCommandOutput(String dir, String... command) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.directory(new File(dir));
+        Process p = pb.start();
+        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+        if (!p.waitFor(60, TimeUnit.SECONDS) || p.exitValue() != 0) {
+            String error = new String(p.getErrorStream().readAllBytes());
+            throw new RuntimeException("Command failed: " + String.join(" ", command) + " -> " + error);
+        }
+        return out;
+    }
+
+    private static int exitCode(String dir, String... command) throws Exception {
+        Process p = new ProcessBuilder(command).directory(new File(dir)).redirectErrorStream(true).start();
+        p.getInputStream().readAllBytes();
+        if (!p.waitFor(60, TimeUnit.SECONDS)) {
+            p.destroyForcibly();
+            throw new RuntimeException("Command timed out: " + String.join(" ", command));
+        }
+        return p.exitValue();
+    }
     
-    private void runCommand(String dir, String... command) throws Exception {
+    private static void runCommand(String dir, String... command) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(new File(dir));
         Process p = pb.start();

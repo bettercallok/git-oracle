@@ -24,8 +24,20 @@ public class PullRequestRequest {
     // against different file content, or landing the PR on the wrong branch
     // entirely.
     private String sourceBranch;
+    // Set when this fix replaces one that already has a PR (a dashboard
+    // "regenerate"): the new fix is committed onto that PR's branch instead of
+    // opening a second PR for the same job. Null = open a new PR.
+    private String existingPrUrl;
 
     public PullRequestRequest() {
+    }
+
+    public String getExistingPrUrl() {
+        return existingPrUrl;
+    }
+
+    public void setExistingPrUrl(String existingPrUrl) {
+        this.existingPrUrl = existingPrUrl;
     }
 
     public String getSourceBranch() {

@@ -173,6 +173,63 @@ class OrchestratorServiceTest {
         assertThat(job.getState()).isEqualTo("ESCALATED");
     }
 
+    // ── regenerated fixes on a job that already has a PR ──────────────────
+
+    @Test
+    void aRegeneratedFixThatPassedTestsUpdatesTheExistingPr() {
+        // Job 9e09ccf6: the regenerated fix passed every test and was then
+        // dropped as a "duplicate delivery" because the job already had a PR.
+        UUID jobId = UUID.randomUUID();
+        String pr = "https://github.com/bettercallok/chillcall/pull/18";
+        AgentJob job = jobWith(jobId, "TESTING", pr);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        mockGitHubBot.expect(requestTo("http://localhost:8085/pull-request"))
+            .andExpect(org.springframework.test.web.client.match.MockRestRequestMatchers
+                .jsonPath("$.existingPrUrl").value(pr))
+            .andRespond(withSuccess("{\"success\":true,\"prUrl\":\"" + pr + "\"}", MediaType.APPLICATION_JSON));
+
+        service.handleTestsPassed(Map.of("jobId", jobId.toString(), "patch", "diff", "isRegeneration", "true"));
+
+        mockGitHubBot.verify();
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+        assertThat(job.getPrUrl()).isEqualTo(pr);
+        assertThat(job.getStateReason()).startsWith("Pull request updated with the regenerated fix");
+    }
+
+    @Test
+    void aRegeneratedFixWhoseOldPrWasClosedRecordsTheNewPr() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "TESTING", "https://github.com/bettercallok/chillcall/pull/18");
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        mockGitHubBot.expect(requestTo("http://localhost:8085/pull-request"))
+            .andRespond(withSuccess(
+                "{\"success\":true,\"prUrl\":\"https://github.com/bettercallok/chillcall/pull/25\"}",
+                MediaType.APPLICATION_JSON));
+
+        service.handleTestsPassed(Map.of("jobId", jobId.toString(), "patch", "diff"));
+
+        assertThat(job.getPrUrl()).isEqualTo("https://github.com/bettercallok/chillcall/pull/25");
+        assertThat(job.getStateReason()).startsWith("Pull request opened");
+    }
+
+    @Test
+    void aFailedUpdateOfARegeneratedFixReturnsTheJobToPrOpenedWithTheReason() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "TESTING", "https://github.com/bettercallok/chillcall/pull/18");
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        mockGitHubBot.expect(requestTo("http://localhost:8085/pull-request"))
+            .andRespond(withSuccess("{\"success\":false,\"error\":\"push rejected\"}", MediaType.APPLICATION_JSON));
+
+        service.handleTestsPassed(Map.of("jobId", jobId.toString(), "patch", "diff"));
+
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+        assertThat(job.getPrUrl()).isEqualTo("https://github.com/bettercallok/chillcall/pull/18");
+        assertThat(job.getStateReason()).contains("updating the pull request failed: push rejected");
+    }
+
     // ── escalateUnlessAlreadySucceeded: the last line of defense ──────────
 
     @Test

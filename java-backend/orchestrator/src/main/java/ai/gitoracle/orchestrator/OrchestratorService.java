@@ -482,13 +482,22 @@ public class OrchestratorService {
         // genuinely successful job's state with ESCALATED — losing the PR in the UI
         // and opening duplicate PRs on the target repo. If the PR is already open,
         // this event is a redelivery: acknowledge and stop.
+        //
+        // "Already has a PR" alone is not a redelivery, though: a dashboard
+        // "regenerate" sends a job that has a PR back through fix and test, and its
+        // passing result arrives here with the job in TESTING. Treating that as a
+        // duplicate silently discarded every regenerated fix — confirmed live on
+        // job 9e09ccf6, whose regenerated fix passed every test and was dropped.
+        // A redelivery finds the job already PR_OPENED; a regeneration doesn't.
         var existing = jobRepository.findById(UUID.fromString(jobIdStr));
-        if (existing.isPresent() && existing.get().getPrUrl() != null
-                && !existing.get().getPrUrl().isBlank()) {
+        boolean hasPr = existing.isPresent() && EscalationService.hasPullRequest(existing.get());
+        if (hasPr && !"TESTING".equals(existing.get().getState())) {
             logger.info("Job {} already has PR {} — ignoring duplicate TESTS_PASSED delivery.",
                         jobIdStr, existing.get().getPrUrl());
             return;
         }
+        // A regenerated fix updates the job's existing PR instead of opening a second one.
+        final String existingPrUrl = hasPr ? existing.get().getPrUrl() : null;
 
         existing.ifPresent(job -> {
             repoFullName[0] = job.getRepo().replace("https://github.com/", "").replace(".git", "");
@@ -506,7 +515,8 @@ public class OrchestratorService {
         // nothing here checked) — so a job whose PR creation threw an exception
         // (e.g. a clone DNS blip) still showed as PR_OPENED with prUrl=null forever.
         try {
-            logger.info("Calling GitHub Bot API at :8085 to open PR on {}...", prRepo);
+            logger.info("Calling GitHub Bot API at :8085 to {} PR on {}...",
+                        existingPrUrl != null ? "update the" : "open a", prRepo);
             Map<String, Object> prRequest = new HashMap<>();
             prRequest.put("jobId", jobIdStr);
             prRequest.put("repoFullName", prRepo);
@@ -527,6 +537,9 @@ public class OrchestratorService {
             prRequest.put("coverageDelta", parseDoubleOrDefault(event.get("coverageDelta"), 0.0));
             prRequest.put("qualityScore", parseDoubleOrDefault(event.get("qualityScore"), 1.0));
             prRequest.put("tokenBudgetUsed", 500);
+            if (existingPrUrl != null) {
+                prRequest.put("existingPrUrl", existingPrUrl);
+            }
 
             ResponseEntity<Map> response = restTemplate.postForEntity(
                 "http://localhost:8085/pull-request", withInternalAuth(prRequest), Map.class);
@@ -539,8 +552,13 @@ public class OrchestratorService {
 
             jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
                 if (finalSuccess) {
+                    // github-bot opens a new PR instead when the old one was closed
+                    // or merged, so the URL can change on a regeneration too.
+                    boolean updated = existingPrUrl != null && existingPrUrl.equals(prUrl);
                     job.setPrUrl(prUrl);
-                    jobState.transition(job, "PR_OPENED", "Pull request opened: " + prUrl, "github-bot");
+                    jobState.transition(job, "PR_OPENED",
+                        (updated ? "Pull request updated with the regenerated fix: " : "Pull request opened: ") + prUrl,
+                        "github-bot");
                     logger.info("Orchestrator pipeline complete for job: {} — PR: {}", jobIdStr, prUrl);
                 } else {
                     escalateUnlessAlreadySucceeded(job, prError);
@@ -567,6 +585,13 @@ public class OrchestratorService {
         if (job.getPrUrl() != null && !job.getPrUrl().isBlank()) {
             logger.warn("PR creation failed for job {} ({}), but it already has PR {} — keeping PR_OPENED.",
                         job.getId(), reason, job.getPrUrl());
+            // A failed update of a regenerated fix leaves the job in TESTING; return
+            // it to PR_OPENED (its PR is unchanged) with the reason. A no-op for a
+            // job that is already PR_OPENED.
+            jobState.transition(job, "PR_OPENED",
+                "Regenerated fix passed its tests, but updating the pull request failed: " + reason
+                    + " The existing pull request is unchanged: " + job.getPrUrl(),
+                "github-bot");
             return;
         }
         jobState.transition(job, "ESCALATED", "PR creation failed: " + reason, "github-bot");
