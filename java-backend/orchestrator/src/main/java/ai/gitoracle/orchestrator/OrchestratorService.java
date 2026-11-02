@@ -188,7 +188,7 @@ public class OrchestratorService {
             event.getTargetRepo() != null ? event.getTargetRepo() : "");
         investigatorPayload.put("branch", branch != null ? branch : "");
 
-        kafkaTemplate.send("job.events.investigate", investigatorPayload);
+        kafkaTemplate.send(KafkaTopics.JOB_INVESTIGATE, investigatorPayload);
     }
 
     /**
@@ -197,7 +197,7 @@ public class OrchestratorService {
      * later resume planning with the real findings instead of fabricated context.
      * Uses a distinct consumer group so the planner still receives the same message.
      */
-    @KafkaListener(topics = "job.events.plan", groupId = "orchestrator-plan-snoop-group",
+    @KafkaListener(topics = KafkaTopics.JOB_PLAN, groupId = "orchestrator-plan-snoop-group",
                    containerFactory = "stringValueKafkaListenerContainerFactory")
     @Transactional
     public void persistInvestigationResult(String rawJson) {
@@ -259,7 +259,7 @@ public class OrchestratorService {
      * regeneration) to move the job to FIXING. A separate consumer group, like the
      * plan snoop, so the fixer still receives every message.
      */
-    @KafkaListener(topics = "job.events.fix", groupId = "orchestrator-fix-snoop-group",
+    @KafkaListener(topics = KafkaTopics.JOB_FIX, groupId = "orchestrator-fix-snoop-group",
                    containerFactory = "stringValueKafkaListenerContainerFactory")
     @Transactional
     public void markFixing(String rawJson) {
@@ -575,7 +575,7 @@ public class OrchestratorService {
      * Calls the Reviewer Agent to evaluate the comment, then re-triggers
      * the Fixer Agent if the human's concern is valid (action_needed=true).
      */
-    @KafkaListener(topics = "job.events.review.received", groupId = "orchestrator-group")
+    @KafkaListener(topics = KafkaTopics.JOB_REVIEW_RECEIVED, groupId = "orchestrator-group")
     public void handleReviewReceived(Map<String, Object> event) {
         String jobIdStr  = (String) event.get("job_id");
         String comment   = (String) event.get("comment");
@@ -642,7 +642,7 @@ public class OrchestratorService {
                 plan.put("confidence",          1.0);
                 fixPayload.put("plan", plan);
 
-                kafkaTemplate.send("job.events.fix", fixPayload);
+                kafkaTemplate.send(KafkaTopics.JOB_FIX, fixPayload);
                 logger.info("Dispatched new fix cycle for job {} based on GitHub comment", jobIdStr);
             }
         } catch (Exception e) {

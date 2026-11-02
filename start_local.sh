@@ -109,6 +109,14 @@ set -a
 source .env
 set +a
 
+# The Java services run from java-backend/, where a repo-root-relative key path
+# like ./secrets/github-app.pem doesn't resolve — the original reason the App
+# credentials lived in a second .env. Make it absolute once, here.
+case "${GITHUB_PRIVATE_KEY_PATH:-}" in
+  ""|/*) ;;
+  *) export GITHUB_PRIVATE_KEY_PATH="$ROOT_DIR/${GITHUB_PRIVATE_KEY_PATH#./}" ;;
+esac
+
 cd java-backend
 # IMPORTANT: services are run as plain `java -jar`, never `./gradlew bootRun`.
 # bootRun forks the app as a child of a Gradle build execution that blocks

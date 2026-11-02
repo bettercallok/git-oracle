@@ -153,16 +153,14 @@ jobs:
             echo "LANGFUSE_SECRET_KEY="
             echo "JWT_SECRET=$(rnd)$(rnd)"
             echo "LLM_BASE_URL=$LLM_URL"
-            echo "LLM_API_KEY=$LLM_KEY"
             echo "OPENAI_API_KEY=$LLM_KEY"
-            echo "LLM_MODEL=$LLM_MODEL"
             echo "LLM_MODEL_NAME=$LLM_MODEL"
           } >> .env
           echo "GITORACLE_API_KEY=$API_KEY" >> "$GITHUB_ENV"
 
-      # github-bot and the orchestrator read App credentials from
-      # java-backend/github-bot/.env (deliberately not the root .env — see
-      # GitHubClient.java). The Java loader needs PKCS#8; GitHub issues PKCS#1.
+      # github-bot and the orchestrator read the App credentials from the root
+      # .env (GitHubAppCredentials). The Java loader needs PKCS#8; GitHub issues
+      # PKCS#1.
       - name: Write GitHub App credentials
         env:
           APP_ID: ${{ secrets.GITORACLE_APP_ID }}
@@ -174,11 +172,15 @@ jobs:
           printf '%s\n' "$APP_KEY" > "$RUNNER_TEMP/github-app.original.pem"
           openssl pkcs8 -topk8 -nocrypt -in "$RUNNER_TEMP/github-app.original.pem" -out "$KEY"
           rm -f "$RUNNER_TEMP/github-app.original.pem"
+          # Into the root .env like every other setting (GitHubAppCredentials);
+          # appended, so these lines override .env.example's empty ones.
           {
             echo "GITHUB_APP_ID=$APP_ID"
             echo "GITHUB_INSTALLATION_ID=$INSTALLATION_ID"
             echo "GITHUB_PRIVATE_KEY_PATH=$KEY"
-          } > java-backend/github-bot/.env
+            # Fail at boot, not at the PR step, if the above didn't take.
+            echo "GITORACLE_REQUIRE_GITHUB_APP=true"
+          } >> .env
 
       # Only what the pipeline needs — prometheus/grafana/langfuse/kafka-ui are
       # observability and would just eat runner memory.

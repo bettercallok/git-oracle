@@ -99,5 +99,7 @@ If stance is 'acknowledge' and severity > 0.7, set action_needed = True.
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
+    from shared.config import check_startup_config
+    check_startup_config("reviewer", needs_llm=True)
     import uvicorn
     uvicorn.run(app, host=os.getenv("BIND_HOST", "127.0.0.1"), port=9003)

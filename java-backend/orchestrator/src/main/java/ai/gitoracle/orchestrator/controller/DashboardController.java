@@ -199,7 +199,7 @@ public class DashboardController {
         plan.put("confidence", 1.0);
         fixPayload.put("plan", plan);
 
-        kafkaTemplate.send("job.events.fix", fixPayload);
+        kafkaTemplate.send(KafkaTopics.JOB_FIX, fixPayload);
 
         return ResponseEntity.ok(Map.of("status", "REGENERATING", "jobId", jobId.toString()));
     }
@@ -321,7 +321,7 @@ public class DashboardController {
         plan.put("confidence", 1.0);
         fixPayload.put("plan", plan);
 
-        kafkaTemplate.send("job.events.fix", fixPayload);
+        kafkaTemplate.send(KafkaTopics.JOB_FIX, fixPayload);
 
         return ResponseEntity.ok(Map.of(
             "status", "QUEUED",
@@ -402,7 +402,7 @@ public class DashboardController {
                     }
                     plannerPayload.put("investigation_result", invResult);
 
-                    kafkaTemplate.send("job.events.plan", plannerPayload);
+                    kafkaTemplate.send(KafkaTopics.JOB_PLAN, plannerPayload);
                 } else {
                     jobState.transition(job, "FAILED", "Escalation rejected: " + escalation.getReason(),
                                         "dashboard");

@@ -15,6 +15,7 @@ public class PrOutcomeListener {
         this.feedbackService = feedbackService;
     }
 
+    // = KafkaTopics.GITHUB_PR_EVENTS; a literal because github-bot has no git-oracle-core dependency.
     @KafkaListener(topics = "github-pr-events", groupId = "github-bot-group")
     public void handlePrEvent(PrEvent event) {
         logger.info("Received PR Event for Job: {} (Type: {})", event.getJobId(), event.getType());

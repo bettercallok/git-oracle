@@ -66,4 +66,6 @@ async def validate_patch(payload: PatchPayload):
     return result
 
 if __name__ == "__main__":
+    from shared.config import check_startup_config
+    check_startup_config("guardrails", needs_llm=False)
     uvicorn.run(app, host=os.getenv("BIND_HOST", "127.0.0.1"), port=9006)

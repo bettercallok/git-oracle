@@ -211,7 +211,7 @@ public class WebhookController {
             reviewEvent.put("event_type",  eventType);
             reviewEvent.put("tenant_id",   tenantId.toString());
 
-            kafkaTemplate.send("job.events.review.received", reviewEvent);
+            kafkaTemplate.send(KafkaTopics.JOB_REVIEW_RECEIVED, reviewEvent);
         } else {
             logger.info("Review comment received but no GitOracle job ID found in PR body. Ignoring.");
         }

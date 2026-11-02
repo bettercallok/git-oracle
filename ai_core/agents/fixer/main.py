@@ -451,6 +451,7 @@ Do not write a diff yourself — the unified diff is computed automatically from
 
 import asyncio
 from shared.kafka_consumer import KafkaEventConsumer
+from shared import topics
 from shared.kafka_producer import get_producer, close_producer
 from shared.health import add_health_route
 
@@ -506,11 +507,11 @@ async def handle_fix_job(payload: dict):
                 "authorizedFiles": ",".join(result.patch.authorized_files),
                 "branch": branch or "",
             }
-            await producer.publish("fix-generated", fix_payload)
+            await producer.publish(topics.FIX_GENERATED, fix_payload)
             logger.info(f"Published fix-generated for job {job_id} (human_directed={bool(human_instructions)})")
         else:
             logger.warning(f"Fixer failed to produce a valid patch for job {job_id}")
-            await producer.publish("job-escalated", {
+            await producer.publish(topics.JOB_ESCALATED, {
                 "jobId": job_id,
                 "reason": result.escalation_report or "Fixer Agent exhausted all attempts and could not fix the bug.",
                 # Was hardcoded 0.0 regardless of the actual plan/investigation
@@ -531,7 +532,7 @@ async def handle_fix_job(payload: dict):
 
 async def _escalate(job_id: str, reason: str, confidence: float) -> None:
     try:
-        await get_producer().publish("job-escalated", {
+        await get_producer().publish(topics.JOB_ESCALATED, {
             "jobId": job_id, "reason": reason, "confidenceScore": confidence, "source": "fixer",
         })
         logger.info(f"Published job-escalated for job {job_id}")
@@ -541,7 +542,7 @@ async def _escalate(job_id: str, reason: str, confidence: float) -> None:
 # Created at import so /health can report on it. The task is kept on app.state:
 # asyncio holds only a weak reference to tasks, and this one used to be
 # fire-and-forget.
-_consumer = KafkaEventConsumer(topic="job.events.fix", group_id="fixer-agent-group")
+_consumer = KafkaEventConsumer(topic=topics.JOB_FIX, group_id="fixer-agent-group")
 add_health_route(app, "fixer", _consumer)
 
 @app.on_event("startup")
@@ -554,5 +555,7 @@ async def shutdown_event():
     await close_producer()
 
 if __name__ == "__main__":
+    from shared.config import check_startup_config
+    check_startup_config("fixer", needs_llm=True)
     import uvicorn
     uvicorn.run(app, host=os.getenv("BIND_HOST", "127.0.0.1"), port=9002)

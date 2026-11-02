@@ -132,6 +132,7 @@ Rank them and provide a causal_effect_score (0.0 to 1.0) and reasoning for each.
 # ==========================================
 import asyncio
 from shared.kafka_consumer import KafkaEventConsumer
+from shared import topics
 from shared.kafka_producer import get_producer, close_producer
 from shared.health import add_health_route
 
@@ -198,7 +199,7 @@ async def handle_investigate_job(payload: dict):
             "target_repo": target_repo,
             "branch": branch,
         }
-        await producer.publish("job.events.plan", plan_payload)
+        await producer.publish(topics.JOB_PLAN, plan_payload)
         logger.info(f"Published job.events.plan for job {job_id}")
     except Exception as e:
         # Escalate rather than just logging. The orchestrator moves a job to
@@ -209,7 +210,7 @@ async def handle_investigate_job(payload: dict):
         # quota was exhausted, with no indication anywhere in the UI that they were dead.
         logger.error(f"Investigation event failed for job {job_id}: {e}")
         try:
-            await get_producer().publish("job-escalated", {
+            await get_producer().publish(topics.JOB_ESCALATED, {
                 "jobId": job_id,
                 "reason": f"Investigator Agent failed: {e}",
                 "confidenceScore": 0.0,
@@ -221,7 +222,7 @@ async def handle_investigate_job(payload: dict):
 # Created at import so /health can report on it. The task is kept on app.state:
 # asyncio holds only a weak reference to tasks, and this one used to be
 # fire-and-forget.
-_consumer = KafkaEventConsumer(topic="job.events.investigate", group_id="investigator-agent-group")
+_consumer = KafkaEventConsumer(topic=topics.JOB_INVESTIGATE, group_id="investigator-agent-group")
 add_health_route(app, "investigator", _consumer)
 
 @app.on_event("startup")
@@ -234,6 +235,8 @@ async def shutdown_event():
     await close_producer()
 
 if __name__ == "__main__":
+    from shared.config import check_startup_config
+    check_startup_config("investigator", needs_llm=True)
     import uvicorn
     # Loopback by default — this agent used to bind 0.0.0.0 (network-reachable)
     # regardless of the internal-token dependency wired in below. Override only
