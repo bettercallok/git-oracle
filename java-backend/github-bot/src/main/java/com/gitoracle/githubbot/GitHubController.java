@@ -180,14 +180,18 @@ public class GitHubController {
         }
         try {
             RepoRefValidator.validateRepoUrl("https://github.com/" + repoFullName);
-            GHPullRequest pr = githubClient.getAuthenticatedGitHub().getRepository(repoFullName).getPullRequest(number);
+            GHRepository repo = githubClient.getAuthenticatedGitHub().getRepository(repoFullName);
+            GHPullRequest pr = repo.getPullRequest(number);
             boolean open = pr.getState() == org.kohsuke.github.GHIssueState.OPEN;
             boolean merged = !open && pr.isMerged();
             String by = null;
             if (merged && pr.getMergedBy() != null) {
                 by = pr.getMergedBy().getLogin();
-            } else if (!open && pr.getClosedBy() != null) {
-                by = pr.getClosedBy().getLogin();
+            } else if (!open) {
+                // closed_by is only in the issues API; on a PR fetched from the
+                // pulls API it is always null.
+                var closer = repo.getIssue(number).getClosedBy();
+                by = closer != null ? closer.getLogin() : null;
             }
             return ResponseEntity.ok(new PullRequestStatus(prUrl, open ? "open" : "closed", merged, by));
         } catch (RepoRefValidator.InvalidRepoRefException e) {

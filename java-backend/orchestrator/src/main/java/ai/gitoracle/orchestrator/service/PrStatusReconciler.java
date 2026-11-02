@@ -5,6 +5,7 @@ import ai.gitoracle.orchestrator.OrchestratorService;
 import ai.gitoracle.orchestrator.token.AgentJobRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpEntity;
@@ -40,6 +41,7 @@ public class PrStatusReconciler {
     private final String githubBotUrl;
     private final String internalToken;
 
+    @Autowired
     public PrStatusReconciler(AgentJobRepository jobRepository, OrchestratorService orchestrator,
                               @Value("${gitoracle.github-bot-url:http://localhost:8085}") String githubBotUrl,
                               @Value("${gitoracle.internal-token:}") String internalToken) {
