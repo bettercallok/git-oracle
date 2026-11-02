@@ -453,12 +453,15 @@ services:
       # was the root cause of "No key found for public key" / "Invalid
       # credentials" on every LLM call: the keys in .env were well-formed but
       # never registered anywhere, because no project had ever been created.
+      # `?` (unset is an error), not `:?` (empty is too): compose interpolates
+      # this whole file even when only other services are started, and CI sets
+      # both keys empty to turn tracing off — `:?` made every CI `up` fail.
       LANGFUSE_INIT_ORG_ID: gitoracle-org
       LANGFUSE_INIT_ORG_NAME: GitOracle
       LANGFUSE_INIT_PROJECT_ID: gitoracle-project
       LANGFUSE_INIT_PROJECT_NAME: GitOracle
-      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?LANGFUSE_PUBLIC_KEY is required}
-      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?LANGFUSE_SECRET_KEY is required}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY?LANGFUSE_PUBLIC_KEY is required}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY?LANGFUSE_SECRET_KEY is required}
       LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@gitoracle.local}
       LANGFUSE_INIT_USER_NAME: GitOracle Admin
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_NEXTAUTH_SECRET}

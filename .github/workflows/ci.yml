@@ -260,7 +260,7 @@ jobs:
       - name: Start the mock LLM
         run: |
           nohup ai_core/.venv/bin/python ai_core/tests/mock_llm_server.py > mock_llm.log 2>&1 &
-          for i in $(seq 1 30); do grep -q "Uvicorn running" mock_llm.log && break; sleep 1; done
+          for _ in $(seq 1 30); do grep -q "Uvicorn running" mock_llm.log && break; sleep 1; done
           grep -q "Uvicorn running" mock_llm.log || { cat mock_llm.log; exit 1; }
 
       - name: Start the stack

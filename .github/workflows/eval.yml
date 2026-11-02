@@ -128,6 +128,28 @@ jobs:
           ai_core/.venv/bin/pip install -r ai_core/requirements.txt
           pip install -r ai_core/requirements.txt
 
+      # Publishing the fixture needs only git and the App token, so it runs before
+      # the stack: a stack that fails to boot must not also keep the case/* branches
+      # unpublished — ci.yml's pipeline-e2e job clones case/npe from them.
+      #
+      # Previous runs leave open PRs behind (their branches point at a history
+      # this run is about to force-push away), so close them first.
+      - name: Close stale fixture PRs
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          api="https://api.github.com/repos/$EVAL_FIXTURE_REPO"
+          for n in $(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$api/pulls?state=open&per_page=100" \
+                     | python -c 'import json,sys; print(" ".join(str(p["number"]) for p in json.load(sys.stdin)))'); do
+            curl -fsS -X PATCH -H "Authorization: Bearer $GH_TOKEN" "$api/pulls/$n" -d '{"state":"closed"}' >/dev/null
+            echo "closed #$n"
+          done
+
+      - name: Build and publish golden repo
+        env:
+          EVAL_FIXTURE_PUSH_URL: https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/${{ vars.EVAL_FIXTURE_REPO }}.git
+        run: python eval/setup_test_repo.py
+
       # Throwaway per-run credentials for everything internal; only the LLM
       # settings come from secrets (shared with ci.yml's pipeline-e2e job).
       - name: Write .env
@@ -164,24 +186,6 @@ jobs:
       # Infra subset + all services + readiness by log line (scripts/ci/start_stack.sh).
       - name: Start the stack
         run: scripts/ci/start_stack.sh
-
-      # Previous runs leave open PRs behind (their branches point at a history
-      # this run is about to force-push away), so close them first.
-      - name: Close stale fixture PRs
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          api="https://api.github.com/repos/$EVAL_FIXTURE_REPO"
-          for n in $(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$api/pulls?state=open&per_page=100" \
-                     | python -c 'import json,sys; print(" ".join(str(p["number"]) for p in json.load(sys.stdin)))'); do
-            curl -fsS -X PATCH -H "Authorization: Bearer $GH_TOKEN" "$api/pulls/$n" -d '{"state":"closed"}' >/dev/null
-            echo "closed #$n"
-          done
-
-      - name: Build and publish golden repo
-        env:
-          EVAL_FIXTURE_PUSH_URL: https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/${{ vars.EVAL_FIXTURE_REPO }}.git
-        run: python eval/setup_test_repo.py
 
       - name: Run evals
         env:
