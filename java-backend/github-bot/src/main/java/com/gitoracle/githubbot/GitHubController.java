@@ -19,7 +19,9 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
@@ -39,6 +41,10 @@ public class GitHubController {
     public ResponseEntity<PullRequestResult> createPullRequest(@RequestBody PullRequestRequest request) {
         logger.info("Received request to open PR for job: {}", request.getJobId());
 
+        // Declared outside the try so the catch can redact it and the finally
+        // can remove the clone, whichever step fails.
+        String token = null;
+        String workDir = null;
         try {
             // repoFullName and sourceBranch flow from upstream pipeline events into
             // a `git clone`/`git checkout` invocation below. Before this validation,
@@ -66,7 +72,8 @@ public class GitHubController {
 
             // Connect to GitHub
             GitHub github = githubClient.getAuthenticatedGitHub();
-            String token = githubClient.getLatestInstallationToken();
+            token = githubClient.getLatestInstallationToken();
+            Map<String, String> auth = gitAuthEnv(token);
             GHRepository repo = github.getRepository(request.getRepoFullName());
             String defaultBranch = repo.getDefaultBranch();
             // The branch the fix was actually read from and tested against — falls
@@ -93,10 +100,20 @@ public class GitHubController {
             }
 
             // Stateful Git Operations
-            String workDir = "/tmp/gitoracle-bot/" + UUID.randomUUID().toString();
+            workDir = "/tmp/gitoracle-bot/" + UUID.randomUUID().toString();
             new File(workDir).mkdirs();
 
-            String cloneUrl = "https://x-access-token:" + token + "@github.com/" + request.getRepoFullName() + ".git";
+            // No credentials in the URL. It used to be
+            // https://x-access-token:<TOKEN>@github.com/..., which put the
+            // installation token (write access to every repo the App is
+            // installed on, for an hour) into this process's argv, into the
+            // clone's .git/config, and into the "Command failed: git clone ..."
+            // message of every failed clone. That message was returned to the
+            // orchestrator as the PR error and stored as the job's state
+            // reason, i.e. shown to the tenant on its job timeline. The token
+            // now travels only in the child process's environment (see
+            // gitAuthEnv), the way actions/checkout supplies it.
+            String cloneUrl = "https://github.com/" + request.getRepoFullName() + ".git";
 
             logger.info("Cloning repository (branch: {}) into {}", baseBranch, workDir);
             // One retry on a transient network failure — confirmed live: a git-bot
@@ -104,11 +121,11 @@ public class GitHubController {
             // that resolved DNS fine a moment before and after (the same blip hit
             // the fixer's clone and test-runner's clone earlier in the pipeline).
             try {
-                runCommand(workDir, "git", "clone", "-c", "credential.helper=", "--branch", baseBranch, "--", cloneUrl, ".");
+                runCommand(workDir, auth, "git", "clone", "-c", "credential.helper=", "--branch", baseBranch, "--", cloneUrl, ".");
             } catch (Exception e) {
                 logger.warn("Clone failed for job {}, retrying once: {}", request.getJobId(), e.getMessage());
                 Thread.sleep(2000);
-                runCommand(workDir, "git", "clone", "-c", "credential.helper=", "--branch", baseBranch, "--", cloneUrl, ".");
+                runCommand(workDir, auth, "git", "clone", "-c", "credential.helper=", "--branch", baseBranch, "--", cloneUrl, ".");
             }
 
             logger.info("Creating branch {}", newBranchName);
@@ -129,13 +146,12 @@ public class GitHubController {
             runCommand(workDir, "git", "commit", "-m", "🤖 GitOracle Autonomous Fix: " + request.getCommitMessage());
 
             if (existingPr != null) {
-                String prUrl = updatePullRequest(workDir, existingPr, request, markdown);
-                runCommand("/tmp", "rm", "-rf", workDir);
+                String prUrl = updatePullRequest(workDir, auth, existingPr, request, markdown);
                 return ResponseEntity.ok(new PullRequestResult(true, prUrl, null));
             }
 
             logger.info("Pushing {}...", newBranchName);
-            runCommand(workDir, "git", "-c", "credential.helper=", "push", "origin", newBranchName);
+            runCommand(workDir, auth, "git", "-c", "credential.helper=", "push", "origin", newBranchName);
             
             // Open the Pull Request
             GHPullRequest pr = repo.createPullRequest(
@@ -146,19 +162,64 @@ public class GitHubController {
             );
             logger.info("Successfully opened Pull Request on {}: {}", request.getRepoFullName(), pr.getHtmlUrl());
 
-            // Cleanup
-            runCommand("/tmp", "rm", "-rf", workDir);
-
             return ResponseEntity.ok(new PullRequestResult(true, pr.getHtmlUrl().toString(), null));
         } catch (Exception e) {
-            logger.error("Failed to process PR request", e);
+            // Redacted before it is logged or returned: this message becomes the
+            // job's visible state reason in the orchestrator.
+            String message = redactCredentials(e.getMessage(), token);
+            logger.error("Failed to process PR request for job {}: {}", request.getJobId(), message);
             // Distinguishable from success at the HTTP layer (was previously a 200
             // with an "Error: " string body — the orchestrator never checked the
             // body, so it recorded the job as PR_OPENED regardless of outcome).
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(new PullRequestResult(false, null, e.getMessage()));
+                .body(new PullRequestResult(false, null, message));
+        } finally {
+            // Cleanup ran only on success, so every failed attempt left a full
+            // clone behind under /tmp/gitoracle-bot.
+            if (workDir != null) {
+                try {
+                    runCommand("/tmp", "rm", "-rf", workDir);
+                } catch (Exception cleanup) {
+                    logger.warn("Could not remove PR workspace {}: {}", workDir, cleanup.getMessage());
+                }
+            }
         }
     }
+
+    /**
+     * Environment for a git child process that authenticates to github.com as
+     * the App installation without the token appearing in argv, in the remote
+     * URL, or in {@code .git/config}. {@code GIT_CONFIG_COUNT}/{@code KEY_n}/
+     * {@code VALUE_n} (git 2.31+) inject config for that one process only.
+     */
+    static Map<String, String> gitAuthEnv(String token) {
+        String basic = Base64.getEncoder()
+            .encodeToString(("x-access-token:" + token).getBytes(StandardCharsets.UTF_8));
+        return Map.of(
+            "GIT_CONFIG_COUNT", "1",
+            "GIT_CONFIG_KEY_0", "http.https://github.com/.extraheader",
+            "GIT_CONFIG_VALUE_0", "AUTHORIZATION: basic " + basic,
+            "GIT_TERMINAL_PROMPT", "0");
+    }
+
+    /**
+     * Removes anything credential-shaped from a message bound for a log or an
+     * API response. The token no longer enters any command line, so this is
+     * the backstop for git or a library echoing it some other way.
+     */
+    static String redactCredentials(String message, String token) {
+        if (message == null) return null;
+        String out = message;
+        if (token != null && !token.isBlank()) {
+            out = out.replace(token, "***");
+            String basic = Base64.getEncoder()
+                .encodeToString(("x-access-token:" + token).getBytes(StandardCharsets.UTF_8));
+            out = out.replace(basic, "***");
+        }
+        return CREDENTIALS_IN_URL.matcher(out).replaceAll("$1***@");
+    }
+
+    private static final Pattern CREDENTIALS_IN_URL = Pattern.compile("(https?://[^/\\s:@]+:)[^@\\s/]+@");
 
     public record PullRequestResult(boolean success, String prUrl, String error) {}
 
@@ -262,13 +323,13 @@ public class GitHubController {
      * opened, the base commit is a second parent, which keeps GitHub's diff
      * (computed from the merge base) to the fix alone.
      */
-    private String updatePullRequest(String workDir, GHPullRequest pr, PullRequestRequest request, String markdown)
-            throws Exception {
+    private String updatePullRequest(String workDir, Map<String, String> auth, GHPullRequest pr,
+                                     PullRequestRequest request, String markdown) throws Exception {
         String headRef = RepoRefValidator.validateBranch(pr.getHead().getRef());
         logger.info("Updating PR #{} (branch {}) for job {}", pr.getNumber(), headRef, request.getJobId());
 
         String url = pr.getHtmlUrl().toString();
-        String newCommit = commitFixOntoBranch(workDir, headRef,
+        String newCommit = commitFixOntoBranch(workDir, auth, headRef,
             "🤖 GitOracle: regenerated fix — " + request.getCommitMessage());
         if (newCommit == null) {
             logger.info("Regenerated fix for job {} is identical to PR #{} — nothing to push", request.getJobId(), pr.getNumber());
@@ -290,7 +351,12 @@ public class GitHubController {
      * the branch already has exactly that content.
      */
     static String commitFixOntoBranch(String workDir, String headRef, String message) throws Exception {
-        runCommand(workDir, "git", "-c", "credential.helper=", "fetch", "origin", "refs/heads/" + headRef);
+        return commitFixOntoBranch(workDir, Map.of(), headRef, message);
+    }
+
+    static String commitFixOntoBranch(String workDir, Map<String, String> auth, String headRef, String message)
+            throws Exception {
+        runCommand(workDir, auth, "git", "-c", "credential.helper=", "fetch", "origin", "refs/heads/" + headRef);
         String prHead = runCommandOutput(workDir, "git", "rev-parse", "FETCH_HEAD");
         String baseHead = runCommandOutput(workDir, "git", "rev-parse", "HEAD~1");
         String tree = runCommandOutput(workDir, "git", "rev-parse", "HEAD^{tree}");
@@ -308,7 +374,7 @@ public class GitHubController {
 
         // A fast-forward push: if someone else pushed to the branch meanwhile, it
         // is rejected rather than overwriting their work.
-        runCommand(workDir, "git", "-c", "credential.helper=", "push", "origin", newCommit + ":refs/heads/" + headRef);
+        runCommand(workDir, auth, "git", "-c", "credential.helper=", "push", "origin", newCommit + ":refs/heads/" + headRef);
         return newCommit;
     }
 
@@ -335,8 +401,13 @@ public class GitHubController {
     }
     
     private static void runCommand(String dir, String... command) throws Exception {
+        runCommand(dir, Map.of(), command);
+    }
+
+    private static void runCommand(String dir, Map<String, String> env, String... command) throws Exception {
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(new File(dir));
+        pb.environment().putAll(env);
         Process p = pb.start();
         if (!p.waitFor(60, TimeUnit.SECONDS) || p.exitValue() != 0) {
             String error = new String(p.getErrorStream().readAllBytes());
