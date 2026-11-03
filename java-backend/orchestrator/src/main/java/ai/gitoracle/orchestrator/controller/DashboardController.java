@@ -101,7 +101,10 @@ public class DashboardController {
     @PostMapping("/jobs/{id}/events")
     public ResponseEntity<Void> recordJobEvent(@PathVariable UUID id,
                                                @Valid @RequestBody Requests.RecordJobEvent request) {
-        AgentJob job = TenantContext.tenantId() != null
+        // isAssertedByGateway, not tenantId() != null: TenantContextFilter fills
+        // in the default tenant when no header is sent, so tenantId() is never
+        // null here and every agent's note on a non-default-tenant job 404'd.
+        AgentJob job = TenantContext.isAssertedByGateway()
             ? findOwnedJob(id).orElse(null)
             : entityManager.find(AgentJob.class, id);
         if (job == null) return ResponseEntity.notFound().build();
@@ -518,6 +521,13 @@ public class DashboardController {
         // was wrong. Constraints on the record produce a field-level problem
         // detail instead.
         String agentName = request.agentName();
+
+        // Agents call this directly; through the gateway the caller must own
+        // the job, or any tenant could attribute prompt versions to (and so
+        // skew the prompt statistics of) another tenant's jobs.
+        if (TenantContext.isAssertedByGateway() && findOwnedJob(jobId).isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
 
         if (jobPromptVersionRepository.findByJobIdAndAgentName(jobId, agentName).isPresent()) {
             return ResponseEntity.ok().build();

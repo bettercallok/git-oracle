@@ -103,7 +103,7 @@ public class TenantContextFilter extends OncePerRequestFilter {
         try {
             UUID tenantId = resolveTenant(request);
             Set<String> scopes = ApiKey.Scopes.parse(request.getHeader("X-Scopes"));
-            TenantContext.set(tenantId, scopes);
+            TenantContext.set(tenantId, scopes, isAsserted(request));
 
             if (RequestPaths.isUnderPrefix(path, ADMIN_PATH_PREFIX)
                     && !scopes.contains(ApiKey.Scopes.PLATFORM_ADMIN)) {
@@ -153,6 +153,18 @@ public class TenantContextFilter extends OncePerRequestFilter {
             // a partially-parsed identity.
             logger.warn("Ignoring malformed X-Tenant-ID on path={}", request.getRequestURI());
             return defaultTenant();
+        }
+    }
+
+    /** The gateway sets a well-formed X-Tenant-ID on every API-key-authenticated request. */
+    private static boolean isAsserted(HttpServletRequest request) {
+        String header = request.getHeader("X-Tenant-ID");
+        if (header == null || header.isBlank()) return false;
+        try {
+            UUID.fromString(header.trim());
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
         }
     }
 
