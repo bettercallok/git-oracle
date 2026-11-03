@@ -21,6 +21,72 @@ class LLMUnavailableError(Exception):
     """Raised when the primary LLM (and fallback, if configured) is unreachable."""
     pass
 
+
+class LLMRequestError(Exception):
+    """
+    The provider answered, but refused the request (a 4xx other than 429).
+
+    Carries the provider's own explanation. This used to surface as httpx's
+    "Client error '400 Bad Request' for url ... For more information check:
+    https://developer.mozilla.org/..." — the status code and a generic MDN
+    link, with the body that says *what* was wrong thrown away.
+    """
+
+    def __init__(self, status_code: int, provider_message: str):
+        self.status_code = status_code
+        self.provider_message = provider_message
+        super().__init__(f"LLM provider rejected the request ({status_code}): {provider_message}")
+
+
+# Ceiling for the one automatic retry after a reply was cut off mid-JSON.
+LLM_MAX_TOKENS_CEILING = int(os.environ.get("LLM_MAX_TOKENS_CEILING", "8192"))
+
+
+def _provider_error(response: httpx.Response) -> tuple[str, str]:
+    """(code, message) from an OpenAI-style error body; best effort, never raises."""
+    try:
+        err = response.json().get("error", {})
+        if isinstance(err, dict):
+            return str(err.get("code") or err.get("type") or ""), str(err.get("message") or "")
+        return "", str(err)
+    except Exception:  # noqa: BLE001 — a non-JSON error body is still worth reporting as text
+        return "", response.text[:500]
+
+
+def _is_json_validation_failure(response: httpx.Response) -> bool:
+    """
+    Groq (and some OpenAI-compatible servers) validate JSON-mode output
+    themselves and answer 400 "json_validate_failed" when the model's reply
+    isn't valid JSON — most often because max_tokens cut it off mid-object.
+    """
+    if response.status_code != 400:
+        return False
+    code, message = _provider_error(response)
+    return code == "json_validate_failed" or "failed to generate json" in message.lower()
+
+
+def _recover_failed_generation(response: httpx.Response) -> Optional[str]:
+    """
+    The JSON object inside Groq's rejected ``failed_generation``, when there
+    is a complete one. Models often wrap valid JSON in a ```json fence or a
+    sentence, which JSON mode rejects even though the object itself is fine.
+    """
+    try:
+        text = response.json().get("error", {}).get("failed_generation")
+    except Exception:  # noqa: BLE001 — no recoverable body
+        return None
+    if not isinstance(text, str):
+        return None
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    candidate = text[start:end + 1]
+    try:
+        json.loads(candidate)
+    except ValueError:
+        return None
+    return candidate
+
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8083")
 
 # ─── LLM Backend Configuration ────────────────────────────────────────────────
@@ -244,6 +310,7 @@ async def llm_structured(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
+    answered_by: str = base_url   # whichever endpoint actually answers
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
             # 1. Primary Attempt
@@ -256,6 +323,7 @@ async def llm_structured(
                 try:
                     # 2. Fallback Attempt
                     response = await _execute_with_rate_limit_backoff(client, LLM_FALLBACK_BASE_URL, payload, headers=headers)
+                    answered_by = LLM_FALLBACK_BASE_URL
                 except Exception as fallback_e:
                     logger.error(f"Fallback LLM also failed: {fallback_e}")
                     raise LLMUnavailableError("Both primary and fallback LLM servers are unavailable.") from fallback_e
@@ -263,13 +331,42 @@ async def llm_structured(
                 raise LLMUnavailableError(f"Primary LLM server is unavailable and no fallback configured: {primary_e}") from primary_e
 
         # 3. Process Response
+        recovered: Optional[str] = None
+        if _is_json_validation_failure(response):
+            recovered = _recover_failed_generation(response)
+            if recovered is None and max_tokens < LLM_MAX_TOKENS_CEILING:
+                # Cut off mid-JSON: one more try with room to finish, on the
+                # endpoint that just answered (the fallback, if the primary was down).
+                max_tokens = min(max_tokens * 2, LLM_MAX_TOKENS_CEILING)
+                payload["max_tokens"] = max_tokens
+                logger.warning(
+                    f"{agent_name}: provider rejected a reply that was not valid JSON; "
+                    f"retrying once with max_tokens={max_tokens}")
+                response = await _execute_with_rate_limit_backoff(client, answered_by, payload, headers=headers)
+                if _is_json_validation_failure(response):
+                    recovered = _recover_failed_generation(response)
+
+        if recovered is None and 400 <= response.status_code < 500:
+            code, message = _provider_error(response)
+            if _is_json_validation_failure(response):
+                message = (f"{message} The model's reply was not valid JSON even with "
+                           f"max_tokens={max_tokens} — try a narrower question, "
+                           f"or a model that follows JSON mode more reliably.")
+            raise LLMRequestError(response.status_code, f"{message}{f' [{code}]' if code else ''}".strip()[:1000])
+
         try:
-            response.raise_for_status()
-            
+            if recovered is None:
+                response.raise_for_status()
+
             end_time    = datetime.now(timezone.utc)
-            data        = response.json()
-            raw_content = data["choices"][0]["message"]["content"]
-            usage       = data.get("usage", {})
+            if recovered is not None:
+                logger.info(f"{agent_name}: recovered a valid JSON object from the provider's rejected reply")
+                raw_content = recovered
+                usage: Dict = {}
+            else:
+                data        = response.json()
+                raw_content = data["choices"][0]["message"]["content"]
+                usage       = data.get("usage", {})
             tokens_used = usage.get("total_tokens", 0)
 
             # 4. Report tokens to the Java Orchestrator budget tracker
