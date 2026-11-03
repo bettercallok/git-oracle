@@ -1,11 +1,18 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Activity, ShieldAlert, GitMerge, FileWarning, BarChart2, BrainCircuit, Settings, TerminalSquare, Wand2, GitFork, GitCommit, Sun, Moon } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import {
+  ShieldAlert, GitMerge, Flame, BarChart3, BrainCircuit, Settings, TerminalSquare,
+  Wand2, FolderGit2, GitCommitHorizontal, Sun, Moon, LogOut, Menu, X, Plus,
+} from 'lucide-react';
 import Login from './pages/Login';
 import { RepoProvider, useRepos } from './context/RepoContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
+import { Logo } from './components/Logo';
+import { LoadingState } from './components/ui';
+import { apiClient } from './api/client';
 
 // Pages load on first visit instead of all up front: every page used to be in
 // one 548 KB bundle. Login stays eager — the auth guard renders it immediately.
@@ -22,6 +29,21 @@ const RepoManager = lazy(() => import('./pages/RepoManager'));
 const CommitExplorer = lazy(() => import('./pages/CommitExplorer'));
 const CommitDetail = lazy(() => import('./pages/CommitDetail'));
 
+const PAGE_TITLES: [RegExp, string][] = [
+  [/^\/$/, 'Jobs'],
+  [/^\/job\//, 'Job'],
+  [/^\/fix/, 'Ask to fix'],
+  [/^\/repos/, 'Repositories'],
+  [/^\/commits\/.+/, 'Commit'],
+  [/^\/commits/, 'Commits'],
+  [/^\/escalations/, 'Escalations'],
+  [/^\/risk/, 'Risk heatmap'],
+  [/^\/eval/, 'Evaluations'],
+  [/^\/langfuse/, 'LLM traces'],
+  [/^\/simulator/, 'Webhook simulator'],
+  [/^\/settings/, 'Settings'],
+];
+
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
   const location = useLocation();
@@ -29,7 +51,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated && location.pathname !== '/login') {
     return <Login />;
   }
-  
+
   if (isAuthenticated && location.pathname === '/login') {
     window.location.href = '/';
     return null;
@@ -41,12 +63,12 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 function PageWrapper({ children }: { children: React.ReactNode }) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
+      initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -10 }}
-      transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+      exit={{ opacity: 0, y: -4 }}
+      transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
     >
-      <Suspense fallback={<div style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</div>}>
+      <Suspense fallback={<LoadingState />}>
         {children}
       </Suspense>
     </motion.div>
@@ -55,6 +77,12 @@ function PageWrapper({ children }: { children: React.ReactNode }) {
 
 function AnimatedRoutes() {
   const location = useLocation();
+
+  useEffect(() => {
+    const match = PAGE_TITLES.find(([re]) => re.test(location.pathname));
+    document.title = match ? `${match[1]} · GitOracle` : 'GitOracle';
+  }, [location.pathname]);
+
   return (
     <AnimatePresence mode="wait">
       <Routes location={location} key={location.pathname}>
@@ -78,123 +106,152 @@ function AnimatedRoutes() {
 
 function ActiveRepoPill() {
   const { activeRepo } = useRepos();
-  if (!activeRepo) return (
-    <NavLink to="/repos" style={{ textDecoration: 'none' }}>
-      <div style={{
-        margin: '12px 12px 0', padding: '8px 12px', borderRadius: 8,
-        background: 'rgba(99,102,241,0.08)', border: '1px dashed rgba(99,102,241,0.3)',
-        fontSize: '0.75rem', color: 'var(--text-muted)', cursor: 'pointer',
-        display: 'flex', alignItems: 'center', gap: 6
-      }}>
-        <GitFork size={12} /> Add a repo to get started
-      </div>
-    </NavLink>
-  );
+  if (!activeRepo) {
+    return (
+      <NavLink to="/repos" className="repo-pill empty">
+        <div className="repo-pill-name" style={{ color: 'var(--text-secondary)', fontWeight: 450 }}>
+          <Plus size={14} /> Connect a repository
+        </div>
+      </NavLink>
+    );
+  }
   return (
-    <NavLink to="/repos" style={{ textDecoration: 'none' }}>
-      <div style={{
-        margin: '12px 12px 0', padding: '8px 12px', borderRadius: 8,
-        background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)',
-        cursor: 'pointer', transition: 'background 0.2s'
-      }}>
-        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>
-          Active Repo
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--success)', boxShadow: '0 0 6px var(--success)' }} />
-          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {activeRepo.fullName}
-          </span>
-        </div>
+    <NavLink to="/repos" className="repo-pill" title="Change the active repository">
+      <div className="repo-pill-label">Active repository</div>
+      <div className="repo-pill-name">
+        <span className="status-dot live" />
+        <span className="truncate">{activeRepo.fullName}</span>
       </div>
     </NavLink>
   );
 }
 
-function ThemeToggle() {
+/** Live count for the Escalations nav item — same query the page itself uses. */
+function useEscalationCount(enabled: boolean) {
+  const { data } = useQuery({
+    queryKey: ['escalations'],
+    queryFn: async () => (await apiClient.get('/escalations')).data as unknown[],
+    refetchInterval: 15000,
+    enabled,
+  });
+  return Array.isArray(data) ? data.length : 0;
+}
+
+const linkClass = ({ isActive }: { isActive: boolean }) => `nav-link ${isActive ? 'active' : ''}`;
+
+function Sidebar({ open }: { open: boolean }) {
   const { theme, toggleTheme } = useTheme();
+  const { logout, isAuthenticated } = useAuth();
+  const escalations = useEscalationCount(isAuthenticated);
+
   return (
-    <button
-      onClick={toggleTheme}
-      title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-      style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        gap: 8, width: '100%', padding: '8px 10px', marginTop: 8,
-        background: 'transparent', border: '1px solid var(--border-subtle)',
-        borderRadius: 'var(--radius-md)', color: 'var(--text-muted)',
-        cursor: 'pointer', fontSize: '0.8rem',
-      }}
-    >
-      {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
-      {theme === 'dark' ? 'Light mode' : 'Dark mode'}
-    </button>
+    <aside className={`sidebar ${open ? 'open' : ''}`} aria-label="Main navigation">
+      <NavLink to="/" className="sidebar-logo hide-mobile"><Logo size={26} /></NavLink>
+
+      <ActiveRepoPill />
+
+      <div className="sidebar-section">
+        <div className="sidebar-section-label">Pipeline</div>
+        <nav className="sidebar-nav">
+          <NavLink to="/" end className={linkClass}><GitMerge size={16} /> Jobs</NavLink>
+          <NavLink to="/fix" className={linkClass}><Wand2 size={16} /> Ask to fix</NavLink>
+          <NavLink to="/escalations" className={linkClass}>
+            <ShieldAlert size={16} /> Escalations
+            {escalations > 0 && <span className="nav-hint" style={{ color: 'var(--warning)', background: 'var(--warning-bg)' }}>{escalations}</span>}
+          </NavLink>
+        </nav>
+      </div>
+
+      <div className="sidebar-section">
+        <div className="sidebar-section-label">Code</div>
+        <nav className="sidebar-nav">
+          <NavLink to="/repos" className={linkClass}><FolderGit2 size={16} /> Repositories</NavLink>
+          <NavLink to="/commits" className={linkClass}><GitCommitHorizontal size={16} /> Commits</NavLink>
+          <NavLink to="/risk" className={linkClass}><Flame size={16} /> Risk heatmap</NavLink>
+        </nav>
+      </div>
+
+      <div className="sidebar-section">
+        <div className="sidebar-section-label">Quality</div>
+        <nav className="sidebar-nav">
+          <NavLink to="/eval" className={linkClass}><BarChart3 size={16} /> Evaluations</NavLink>
+          <NavLink to="/langfuse" className={linkClass}><BrainCircuit size={16} /> LLM traces</NavLink>
+        </nav>
+      </div>
+
+      <div className="sidebar-section">
+        <div className="sidebar-section-label">System</div>
+        <nav className="sidebar-nav">
+          <NavLink to="/simulator" className={linkClass}><TerminalSquare size={16} /> Webhook simulator</NavLink>
+          <NavLink to="/settings" className={linkClass}><Settings size={16} /> Settings</NavLink>
+        </nav>
+      </div>
+
+      <div className="sidebar-footer">
+        <button
+          className="btn btn-ghost btn-sm"
+          style={{ flex: 1, justifyContent: 'flex-start' }}
+          onClick={logout}
+          title="Forget the API key held by this tab"
+        >
+          <LogOut size={14} /> Sign out
+        </button>
+        <button
+          className="btn btn-ghost btn-sm btn-icon"
+          onClick={toggleTheme}
+          title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+        >
+          {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function Shell() {
+  const location = useLocation();
+  // The drawer is open for the page it was opened on, so navigating closes it.
+  const [openOn, setOpenOn] = useState<string | null>(null);
+  const drawerOpen = openOn === location.pathname;
+  const setDrawerOpen = (open: boolean) => setOpenOn(open ? location.pathname : null);
+
+  return (
+    <div className="app-layout">
+      <header className="topbar">
+        <NavLink to="/" className="sidebar-logo"><Logo size={24} /></NavLink>
+        <button
+          className="btn btn-ghost btn-icon"
+          onClick={() => setDrawerOpen(!drawerOpen)}
+          aria-label={drawerOpen ? 'Close navigation' : 'Open navigation'}
+          aria-expanded={drawerOpen}
+        >
+          {drawerOpen ? <X size={18} /> : <Menu size={18} />}
+        </button>
+      </header>
+      <div className={`sidebar-scrim ${drawerOpen ? 'open' : ''}`} onClick={() => setDrawerOpen(false)} />
+      <Sidebar open={drawerOpen} />
+      <main className="main-content">
+        <div className="main-inner">
+          <AnimatedRoutes />
+        </div>
+      </main>
+    </div>
   );
 }
 
 function App() {
   return (
     <ThemeProvider>
-    <AuthProvider>
-      <RepoProvider>
-        <BrowserRouter>
-          <AuthGuard>
-            <div className="app-layout">
-          <aside className="sidebar">
-            <NavLink to="/" className="sidebar-logo">
-              <Activity size={26} color="var(--accent)" /> Git<span>Oracle</span>
-            </NavLink>
-
-            <ActiveRepoPill />
-
-            <nav className="sidebar-nav" style={{ marginTop: 16 }}>
-              <NavLink to="/" end className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                <GitMerge size={16} /> Job Feed
-              </NavLink>
-              <NavLink to="/fix" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                style={({ isActive }) => isActive ? {} : { background: 'linear-gradient(90deg,rgba(99,102,241,0.08),transparent)', borderLeft: '2px solid var(--accent)', paddingLeft: 10 }}
-              >
-                <Wand2 size={16} /> Ask to Fix
-              </NavLink>
-              <NavLink to="/repos" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                <GitFork size={16} /> My Repos
-              </NavLink>
-              <NavLink to="/commits" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                <GitCommit size={16} /> Commit Explorer
-              </NavLink>
-              <NavLink to="/escalations" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                <ShieldAlert size={16} /> Escalation Queue
-              </NavLink>
-              <NavLink to="/risk" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                <FileWarning size={16} /> Risk Heatmap
-              </NavLink>
-              <NavLink to="/eval" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                <BarChart2 size={16} /> Eval Dashboard
-              </NavLink>
-              <NavLink to="/langfuse" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                <BrainCircuit size={16} /> Langfuse Traces
-              </NavLink>
-              <NavLink to="/simulator" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                <TerminalSquare size={16} /> Simulator
-              </NavLink>
-              <div style={{ margin: '16px 0', height: 1, background: 'var(--border-subtle)' }} />
-              <NavLink to="/settings" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-                <Settings size={16} /> Admin Settings
-              </NavLink>
-            </nav>
-
-            <div style={{ padding: '0 12px 12px' }}>
-              <ThemeToggle />
-            </div>
-          </aside>
-
-              <main className="main-content">
-                <AnimatedRoutes />
-              </main>
-            </div>
-          </AuthGuard>
-        </BrowserRouter>
-      </RepoProvider>
-    </AuthProvider>
+      <AuthProvider>
+        <RepoProvider>
+          <BrowserRouter>
+            <AuthGuard>
+              <Shell />
+            </AuthGuard>
+          </BrowserRouter>
+        </RepoProvider>
+      </AuthProvider>
     </ThemeProvider>
   );
 }
