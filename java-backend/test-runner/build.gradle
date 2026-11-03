@@ -1,7 +1,7 @@
 plugins {
 	id 'java'
-	id 'org.springframework.boot' version '3.2.4'
-	id 'io.spring.dependency-management' version '1.1.6'
+	id 'org.springframework.boot' version '3.5.16'
+	id 'io.spring.dependency-management' version '1.1.7'
 }
 
 group = 'com.gitoracle'
@@ -25,8 +25,8 @@ dependencies {
 	// these two the endpoint 404'd, so JavaServiceDown fired for this service forever.
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'io.micrometer:micrometer-registry-prometheus'
-	implementation 'com.github.docker-java:docker-java:3.3.6'
-	implementation 'com.github.docker-java:docker-java-transport-httpclient5:3.3.6'
+	implementation 'com.github.docker-java:docker-java:3.7.1'
+	implementation 'com.github.docker-java:docker-java-transport-httpclient5:3.7.1'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
