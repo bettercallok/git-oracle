@@ -1,17 +1,11 @@
 import { motion } from 'framer-motion';
-import { ExternalLink, Activity } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ExternalLink, BrainCircuit, Hash, Layers, Timer } from 'lucide-react';
+import { containerVariants, itemVariants } from '../utils/motion';
+import { PageHeader } from '../components/ui';
 
-// Same source as JobDetail's "View LLM trace" link.
+// Same source as JobDetail's "LLM trace" link.
 const LANGFUSE_URL = import.meta.env.VITE_LANGFUSE_URL || 'http://localhost:3002';
-
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.05 } }
-};
-const itemVariants = {
-  hidden: { opacity: 0, y: 10 },
-  show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 300, damping: 24 } }
-};
 
 /**
  * This page used to embed Langfuse in an iframe pointed at :3000, where
@@ -22,27 +16,47 @@ const itemVariants = {
  */
 export default function LangfuseEmbed() {
   return (
-    <motion.div variants={containerVariants} initial="hidden" animate="show">
-      <motion.div variants={itemVariants} className="page-header">
-        <h1 className="page-title">Langfuse Traces</h1>
-        <p className="page-description">Deep observability for LLM calls and agent reasoning</p>
-      </motion.div>
+    <motion.div variants={containerVariants} initial="hidden" animate="show" style={{ maxWidth: 820 }}>
+      <PageHeader
+        title="LLM traces"
+        description="Every model call an agent makes is recorded in Langfuse — prompts, responses, token counts and latency."
+        actions={
+          <a href={LANGFUSE_URL} target="_blank" rel="noreferrer" className="btn btn-primary">
+            Open Langfuse <ExternalLink size={14} />
+          </a>
+        }
+      />
 
-      <motion.div variants={itemVariants} className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
-        <div style={{ display: 'inline-flex', padding: 12, borderRadius: '50%', background: 'var(--info-bg)', color: 'var(--info)', marginBottom: 16 }}>
-          <Activity size={28} />
+      <motion.div variants={itemVariants} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ padding: '28px 28px 24px', display: 'flex', gap: 18, alignItems: 'flex-start' }}>
+          <div className="empty-icon accent" style={{ margin: 0, flexShrink: 0 }}><BrainCircuit size={20} /></div>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: '1.02rem' }}>One trace per job</div>
+            <p style={{ color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.6 }}>
+              Traces are keyed by job id, so the quickest way in is <strong>LLM trace</strong> on a job's page.
+              Langfuse can't be embedded here — its own security headers forbid it — so it opens in a new tab.
+            </p>
+          </div>
         </div>
-        <p style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>
-          Every LLM call is traced in Langfuse, one trace per job
-        </p>
-        <p style={{ color: 'var(--text-secondary)', maxWidth: 560, margin: '0 auto 24px' }}>
-          Langfuse can't be shown inside this page, so it opens in its own tab. To see one job's
-          calls, use <strong>View LLM trace</strong> on that job's page.
-        </p>
-        <a href={LANGFUSE_URL} target="_blank" rel="noreferrer" className="btn btn-primary" style={{ textDecoration: 'none' }}>
-          Open Langfuse <ExternalLink size={16} />
-        </a>
-        <p className="mono" style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginTop: 16 }}>{LANGFUSE_URL}</p>
+        <div className="grid-2" style={{ gap: 0, borderTop: '1px solid var(--border-subtle)' }}>
+          {[
+            { icon: <Hash size={14} />, title: 'Find a job', body: <>Search Langfuse for the job id shown on <Link to="/" className="link">Jobs</Link>.</> },
+            { icon: <Layers size={14} />, title: 'Follow the agents', body: 'Investigator, planner and fixer calls nest under the same trace.' },
+            { icon: <Timer size={14} />, title: 'Spot slow steps', body: 'Latency and token usage are recorded for every call.' },
+            { icon: <ExternalLink size={14} />, title: 'Endpoint', body: <span className="mono" style={{ wordBreak: 'break-all' }}>{LANGFUSE_URL}</span> },
+          ].map((item, i) => (
+            <div key={item.title} style={{
+              padding: '16px 28px',
+              borderTop: i > 1 ? '1px solid var(--border-subtle)' : undefined,
+              borderLeft: i % 2 === 1 ? '1px solid var(--border-subtle)' : undefined,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 500, color: 'var(--text-primary)', fontSize: '0.9rem' }}>
+                <span className="muted">{item.icon}</span> {item.title}
+              </div>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 3 }}>{item.body}</div>
+            </div>
+          ))}
+        </div>
       </motion.div>
     </motion.div>
   );
