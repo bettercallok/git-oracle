@@ -67,6 +67,12 @@ class UnsafePathError(ValueError):
 DENIED_GLOBS = [
     ".git/**", "**/.git/**",
     ".github/workflows/**", "**/.github/workflows/**",
+    # Local actions (`uses: ./.github/actions/x`) execute inside those same
+    # workflows with the same secrets, so editing one is editing CI — denying
+    # only workflows/ left that door open. .gitmodules re-points a submodule
+    # at any URL, which CI then checks out and builds.
+    ".github/actions/**", "**/.github/actions/**",
+    ".gitmodules", "**/.gitmodules",
     "*.pem", "**/*.pem",
     ".env", ".env.*", "**/.env", "**/.env.*",
     "package-lock.json", "**/package-lock.json",

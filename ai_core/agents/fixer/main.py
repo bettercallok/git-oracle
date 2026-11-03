@@ -20,6 +20,7 @@ from shared.internal_auth import require_internal_token
 from shared.job_events import report_event, ERROR
 from shared.body_limit import BodySizeLimitMiddleware
 from shared.safe_paths import UnsafePathError, partition_safe, resolve_within, safe_read_text
+from shared.repo_refs import InvalidRepoRefError, is_within_workspace_root, validate_branch, validate_repo_url
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ class FixerRequest(BaseModel):
     job_id: str = "debug-job"
     human_instructions: Optional[str] = None  # Set when triggered via dashboard or GitHub comment
     target_repo: Optional[str] = None          # GitHub repo to open PR against (owner/repo)
-    repo_url: Optional[str] = None             # Git remote to clone for self-testing (GitHub or file://)
+    repo_url: Optional[str] = None             # https://github.com/<owner>/<repo> to clone; anything else is ignored (see shared/repo_refs)
     branch: Optional[str] = None               # Branch to check out; None/empty = repo's default branch
 
 class PatchOutput(BaseModel):
@@ -242,13 +243,33 @@ async def execute_fix(request: FixerRequest):
     # git.Repo.clone_from's branch kwarg must be omitted (not passed as None) to
     # get the repo's default branch — passing branch=None explicitly is not the
     # same as not passing it.
-    clone_kwargs: dict[str, Any] = {"branch": request.branch} if request.branch else {}
+    #
+    # repo_url/branch/repo_path are validated before any of them reaches git or
+    # rmtree: an unchecked repo_url could be file:// (a local repository read
+    # into the LLM prompt), and repo_path names a directory deleted below
+    # whenever it lacks a .git — so it must be one of the pipeline's own
+    # workspaces, never an arbitrary path from a request body.
+    clone_url: Optional[str] = None
+    clone_kwargs: dict[str, Any] = {}
     if request.repo_url:
+        try:
+            clone_url = validate_repo_url(request.repo_url)
+            branch = validate_branch(request.branch)
+            if branch:
+                clone_kwargs["branch"] = branch
+        except InvalidRepoRefError as e:
+            logger.warning(f"Not cloning for job {request.job_id}: {e}")
+            clone_url = None
+        if clone_url and not is_within_workspace_root(request.repo_path):
+            logger.warning(f"Not cloning for job {request.job_id}: repo_path {request.repo_path!r} "
+                           "is outside the workspace root")
+            clone_url = None
+    if clone_url:
         fixer_src_path = request.repo_path.rstrip("/") + "-fixer-src"
         try:
             if not os.path.isdir(os.path.join(fixer_src_path, ".git")):
                 shutil.rmtree(fixer_src_path, ignore_errors=True)
-                git.Repo.clone_from(request.repo_url, fixer_src_path, **clone_kwargs)
+                git.Repo.clone_from(clone_url, fixer_src_path, **clone_kwargs)
             local_src_path = fixer_src_path
         except Exception as e:  # noqa: BLE001 — any clone failure falls back to a second clone below
             # request.repo_path is only populated when an earlier pipeline stage
@@ -262,7 +283,7 @@ async def execute_fix(request: FixerRequest):
             try:
                 if not os.path.isdir(os.path.join(request.repo_path, ".git")):
                     shutil.rmtree(request.repo_path, ignore_errors=True)
-                    git.Repo.clone_from(request.repo_url, request.repo_path, **clone_kwargs)
+                    git.Repo.clone_from(clone_url, request.repo_path, **clone_kwargs)
                 local_src_path = request.repo_path
             except Exception as e2:  # noqa: BLE001 — both clones failed; logged, and the attempt reports the files as unreadable
                 logger.warning(f"Fallback clone into {request.repo_path} also failed: {e2}")
