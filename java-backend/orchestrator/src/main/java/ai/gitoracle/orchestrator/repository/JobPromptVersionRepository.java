@@ -21,7 +21,8 @@ public interface JobPromptVersionRepository extends JpaRepository<JobPromptVersi
      * Columns: agent_name, prompt_version, jobs, successes, avg_tokens, is_active.
      *
      * "Success" is defined as the job reaching PR_OPENED — i.e. the fix survived
-     * guardrails, passed tests, and produced a real pull request. Jobs still in
+     * guardrails, passed tests, and produced a real pull request — or PR_MERGED.
+     * A PR a human closed without merging (PR_CLOSED) is finished but not a success. Jobs still in
      * flight (QUEUED / INVESTIGATING / PLANNING / TESTING) are excluded entirely
      * rather than counted as failures, so a version isn't penalised for work that
      * simply hasn't finished yet.
@@ -34,7 +35,7 @@ public interface JobPromptVersionRepository extends JpaRepository<JobPromptVersi
             jpv.agent_name,
             jpv.prompt_version,
             COUNT(*)                                                        AS jobs,
-            COUNT(*) FILTER (WHERE j.state = 'PR_OPENED')                   AS successes,
+            COUNT(*) FILTER (WHERE j.state IN ('PR_OPENED', 'PR_MERGED'))   AS successes,
             AVG(NULLIF(j.token_budget_used, 0))                             AS avg_tokens,
             COALESCE(bool_or(pv.is_active), false)                          AS is_active
         FROM job_prompt_versions jpv
@@ -43,7 +44,7 @@ public interface JobPromptVersionRepository extends JpaRepository<JobPromptVersi
                ON pv.agent_name = jpv.agent_name
               AND pv.version    = jpv.prompt_version
               AND pv.prompt_key = 'system'
-        WHERE j.state IN ('PR_OPENED', 'ESCALATED', 'FAILED')
+        WHERE j.state IN ('PR_OPENED', 'PR_MERGED', 'PR_CLOSED', 'ESCALATED', 'FAILED')
           AND j.tenant_id = :tenantId
         GROUP BY jpv.agent_name, jpv.prompt_version
         ORDER BY jpv.agent_name, jpv.prompt_version DESC

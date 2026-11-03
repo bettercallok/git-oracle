@@ -2,6 +2,7 @@ package ai.gitoracle.orchestrator.service;
 
 import ai.gitoracle.core.entity.Escalation;
 import ai.gitoracle.core.model.postgres.AgentJob;
+import ai.gitoracle.orchestrator.repository.PrOutcomeRepository;
 import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,10 +30,12 @@ public class EscalationService {
 
     private final JobStateService jobState;
     private final EntityManager entityManager;
+    private final PrOutcomeRepository prOutcomes;
 
-    public EscalationService(JobStateService jobState, EntityManager entityManager) {
+    public EscalationService(JobStateService jobState, EntityManager entityManager, PrOutcomeRepository prOutcomes) {
         this.jobState = jobState;
         this.entityManager = entityManager;
+        this.prOutcomes = prOutcomes;
     }
 
     /**
@@ -45,9 +48,9 @@ public class EscalationService {
      */
     public boolean escalate(AgentJob job, String reason, String actor, Double confidence) {
         if (hasPullRequest(job)) {
-            // Also covers a late escalation for a job still in PR_OPENED: the
+            // Also covers a late escalation for a job still in its PR state: the
             // transition is a no-op there, and nothing is queued either way.
-            if (jobState.transition(job, "PR_OPENED",
+            if (jobState.transition(job, stateForExistingPr(job),
                     "Regeneration failed — " + reason + " The existing pull request is unchanged: " + job.getPrUrl(),
                     actor)) {
                 logger.warn("Job {}: regeneration failed, returned to PR_OPENED instead of escalating: {}",
@@ -67,6 +70,17 @@ public class EscalationService {
         escalation.setStatus("PENDING");
         entityManager.persist(escalation);
         return true;
+    }
+
+    /**
+     * The state that describes a job's existing PR: PR_MERGED or PR_CLOSED once
+     * that outcome is recorded for this PR URL, else PR_OPENED. What a job with a
+     * PR returns to when a later fix cycle (a regeneration) doesn't succeed.
+     */
+    public String stateForExistingPr(AgentJob job) {
+        if (prOutcomes.existsByJobIdAndOutcomeAndPrUrl(job.getId(), "MERGED", job.getPrUrl())) return "PR_MERGED";
+        if (prOutcomes.existsByJobIdAndOutcomeAndPrUrl(job.getId(), "CLOSED", job.getPrUrl())) return "PR_CLOSED";
+        return "PR_OPENED";
     }
 
     public static boolean hasPullRequest(AgentJob job) {

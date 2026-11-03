@@ -50,7 +50,8 @@ class JobWatchdogTest {
         meters = new SimpleMeterRegistry();
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         JobStateService jobState = new JobStateService(jobRepository, mock(JobEventRepository.class), clock);
-        watchdog = new JobWatchdog(jobRepository, new EscalationService(jobState, entityManager),
+        watchdog = new JobWatchdog(jobRepository, new EscalationService(jobState, entityManager,
+                                       mock(ai.gitoracle.orchestrator.repository.PrOutcomeRepository.class)),
                                    new WatchdogProperties(), meters, clock);
     }
 

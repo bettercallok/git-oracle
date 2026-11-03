@@ -14,6 +14,12 @@ public interface PrOutcomeRepository extends JpaRepository<PrOutcome, UUID> {
     boolean existsByJobIdAndOutcome(UUID jobId, String outcome);
 
     /**
+     * Per PR, not per job: a regenerated fix for a job whose PR was closed opens
+     * a new PR, and that one being closed or merged later is a new outcome.
+     */
+    boolean existsByJobIdAndOutcomeAndPrUrl(UUID jobId, String outcome, String prUrl);
+
+    /**
      * One row per job, collapsed to that job's most significant outcome, so a PR
      * that was approved and later merged counts once (as MERGED) rather than
      * twice. Ranking: REVERTED > MERGED > CLOSED > APPROVED — a revert is the
