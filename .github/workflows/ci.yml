@@ -80,6 +80,42 @@ jobs:
       - name: Run Mypy Typecheck
         run: mypy ai_core/agents --ignore-missing-imports
 
+  # Prometheus config, alert rules and their unit tests, and the Grafana
+  # dashboard. All of these were broken without anything noticing: scrape
+  # targets nothing served, rules no metric fed, a dashboard of queries over
+  # metrics that didn't exist.
+  monitoring-config:
+    name: Prometheus & Grafana Config
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PROM_VERSION: '2.52.0'   # the version docker-compose.infra.yml runs
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Install promtool
+        run: |
+          curl -sSL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz" \
+            | tar xz --strip-components=1 -C /usr/local/bin "prometheus-${PROM_VERSION}.linux-amd64/promtool"
+
+      - name: Check config and rules
+        run: |
+          # The config names the rules by their path inside the container.
+          sed "s#/etc/prometheus/rules#$PWD/infrastructure/prometheus/rules#" \
+            infrastructure/prometheus/prometheus.yml > /tmp/prometheus.yml
+          promtool check config /tmp/prometheus.yml
+          promtool check rules infrastructure/prometheus/rules/*.yml
+
+      - name: Alert rule unit tests
+        run: promtool test rules infrastructure/prometheus/tests/*.yml
+
+      - name: Dashboard matches its generator
+        run: |
+          python3 infrastructure/grafana/scripts/build_dashboard.py
+          git diff --exit-code infrastructure/grafana/dashboards/ \
+            || { echo "::error::gitOracle-pipeline.json is out of date — run infrastructure/grafana/scripts/build_dashboard.py"; exit 1; }
+
   python-agent-tests:
     name: AI Agent Tests
     runs-on: ubuntu-latest

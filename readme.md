@@ -2,7 +2,7 @@
 
 gitoracle is an event-driven, multi-agent autonomous coding system. point it at a bug — a github webhook, a plain-english description, or a sentry-style error report — and it investigates the root cause across your git history, plans a scoped fix, writes a patch, runs it against your real test suite, and opens a pull request. every step is a durable kafka event, every unsafe or low-confidence outcome is escalated to a human review queue instead of silently failing, and every job's outcome (root cause, prompt version, token spend, PR result) is measured and shown on a live dashboard rather than asserted.
 
-**contents:** [overview](#project-overview) · [features](#key-features) · [tech stack](#tech-stack) · [architecture](#architecture-at-a-glance) · [job lifecycle](#job-lifecycle) · [escalations](#escalations) · [security model](#security-model) · [LLM traces](#llm-traces) · [dashboard metrics](#how-the-dashboard-numbers-are-computed) · [project structure](#project-structure) · [setup](#deployment--setup) · [interaction flow](#system-interaction-flow) · [API](#core-api-endpoints) · [dashboard](#frontend-dashboard) · [CLI](#cli-reference) · [testing & CI](#testing--ci) · [dev guidelines](#development-guidelines) · [contributing](#contributing) · [license](#license)
+**contents:** [overview](#project-overview) · [features](#key-features) · [tech stack](#tech-stack) · [architecture](#architecture-at-a-glance) · [job lifecycle](#job-lifecycle) · [escalations](#escalations) · [security model](#security-model) · [LLM traces](#llm-traces) · [dashboard metrics](#how-the-dashboard-numbers-are-computed) · [monitoring](#monitoring-prometheus--grafana) · [project structure](#project-structure) · [setup](#deployment--setup) · [interaction flow](#system-interaction-flow) · [API](#core-api-endpoints) · [dashboard](#frontend-dashboard) · [CLI](#cli-reference) · [testing & CI](#testing--ci) · [dev guidelines](#development-guidelines) · [contributing](#contributing) · [license](#license)
 
 ## project overview
 
@@ -23,7 +23,7 @@ the system is deliberately decoupled: 6 java spring boot microservices and 7 pyt
 - **LLM traces inside the dashboard.** every prompt, response, token count and latency is traced to langfuse and drawn on the job's page and the LLM traces page — labelled by agent, on one time axis, with failed calls flagged — without leaving gitoracle.
 - **commit explorer** with a `commit_analyst` agent you can ask questions about any commit, and a one-click "apply fix as PR" when it spots a regression.
 - **dynamic prompt registry** with version history — every job records which exact prompt version each agent ran on, so per-version results are a real join, not a guess.
-- **full observability**: langfuse (LLM calls), prometheus/grafana (service health, `JobsStalling` alert), kafka UI (topic backlogs).
+- **full observability**: langfuse (every LLM call), prometheus + grafana (pipeline, LLM, agent, kafka and service metrics, with alert rules covered by unit tests), kafka UI (topic backlogs).
 
 ## tech stack
 
@@ -227,7 +227,7 @@ flowchart LR
 
     subgraph observability
         lf["langfuse · :3002<br/>one trace per job,<br/>one generation per LLM call"]
-        prom["prometheus + grafana<br/>scrapes :8080-8085, :9001-9007"]
+        prom["prometheus + grafana<br/>scrapes :8080-8085, :9001-9007<br/>+ redis / postgres / kafka exporters"]
         kui["kafka UI<br/>topic backlogs"]
     end
 
@@ -418,6 +418,34 @@ when a provider refuses a JSON-mode request, the agent surfaces the provider's o
 | evaluations | prompt success rate | finished jobs on that prompt version that opened or merged a PR; running and escalated jobs aren't counted until they finish |
 | evaluations | avg tokens / job | that **agent's own** tokens on the job (`job_prompt_versions.tokens_used`, from each LLM call's token report) — not the job's total; "—" for jobs recorded before per-agent tracking |
 
+## monitoring (prometheus & grafana)
+
+`make infra-up` starts prometheus (`http://localhost:9090`) and grafana (`http://localhost:3001`, `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`), with the **GitOracle — Pipeline Health** dashboard provisioned. prometheus scrapes:
+
+| target | endpoint | what it adds |
+|---|---|---|
+| 6 java services | `/actuator/prometheus` | HTTP, JVM, kafka client metrics; the orchestrator's pipeline metrics below |
+| 7 python agents | `/metrics` (no token needed, like `/health`) | LLM calls, latency and tokens per agent; kafka messages and consumer liveness; process memory |
+| `redis-exporter`, `postgres-exporter`, `kafka-exporter` | containers in `docker-compose.infra.yml` | redis memory, postgres connections, kafka consumer-group lag |
+
+the pipeline metrics the dashboard and alerts are built on:
+
+| metric | from | meaning |
+|---|---|---|
+| `gitoracle_job_transitions_total{from_state,to_state}` | orchestrator | every job state change |
+| `gitoracle_jobs{state}` · `gitoracle_escalations_pending` | orchestrator | jobs per state and the escalation queue, from the database every 30s |
+| `gitoracle_escalations_total{source}` · `gitoracle_watchdog_escalations_total{state}` | orchestrator | escalations queued, and which were stalls |
+| `gitoracle_test_runs_total{result}` | orchestrator | `passed` / `failed` / `unverified` (no test suite) / `error` |
+| `gitoracle_pr_outcomes_total{outcome}` · `gitoracle_causal_score` | orchestrator | what humans did with PRs; investigator confidence |
+| `gitoracle_llm_requests_total{agent,outcome}` · `gitoracle_llm_latency_seconds` · `gitoracle_llm_tokens_total` | agents | every LLM call: `ok` / `schema_error` / `provider_error` / `unavailable` |
+| `gitoracle_kafka_messages_total` · `gitoracle_kafka_consumer_up` | agents | consumed messages by result; 1 while a consumer loop is alive |
+
+alerts (`infrastructure/prometheus/rules/gitoracle.yml`, visible at `:9090/alerts`; no alertmanager receiver is configured yet): `JavaServiceDown`, `AgentDown`, `InfrastructureTargetDown`, `AgentConsumerDown`, `JobsStalling`, `LLMCallsFailing`, `EscalationsWaiting`. they are unit-tested with `promtool test rules infrastructure/prometheus/tests/*.yml`.
+
+the dashboard JSON is generated — edit `infrastructure/grafana/scripts/build_dashboard.py` and re-run it; CI fails if the two drift.
+
+**docker on linux:** prometheus reaches the services as `host.docker.internal`, and they bind to `127.0.0.1`. docker desktop (macOS/Windows) forwards that to the host's loopback; docker engine on linux does not, so there either bind the services to `0.0.0.0` behind a host firewall (`SERVER_BIND_HOST` / `BIND_HOST`) or run prometheus with `network_mode: host`.
+
 ## project structure
 
 - `java-backend/`: all 6 java microservices, each its own gradle subproject, plus the shared `git-oracle-core` library (JPA entities, kafka topic constants, event DTOs, validators — the single source of truth for cross-service contracts).
@@ -573,6 +601,7 @@ every push and PR to `main` runs [`.github/workflows/ci.yml`](.github/workflows/
 | `java-tests` | `./gradlew test` across all modules (unit + testcontainers) |
 | `dashboard-build` | `npm ci`, `npm run lint` (oxlint), `npm run build` |
 | `cli-check` | installs the CLI and runs `gitOracle --help` |
+| `monitoring-config` | `promtool check config` / `check rules`, the alert-rule unit tests, and a check that the grafana dashboard JSON matches its generator |
 | `pipeline-e2e` | brings up the real stack with the LLM replaced by `ai_core/tests/mock_llm_server.py`, runs eval case 1 end to end against the fixture repo's `case/npe` branch, and asserts the timeline and patch (`scripts/ci/e2e_check.py`); skipped for PRs from forks |
 
 [`.github/workflows/eval.yml`](.github/workflows/eval.yml) runs the golden dataset eval nightly (03:00 UTC) and on demand against a real LLM: it publishes the 6-case fixture repo as the GitOracle github app, runs every case through `POST /trigger` (the full pipeline), and gates on patch accuracy (LLM judge ≥ 7/10 vs the golden patch) and cause accuracy (the investigator's top commit is the bug commit). it is configured by the `EVAL_LLM_*`, `GITORACLE_APP_ID` and `GITORACLE_APP_PRIVATE_KEY` secrets and the `EVAL_FIXTURE_REPO` variable.

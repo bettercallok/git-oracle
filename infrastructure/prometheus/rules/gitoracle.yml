@@ -2,7 +2,7 @@
 # No Alertmanager is configured yet: these show up as firing alerts in the
 # Prometheus UI (/alerts) and can be wired to a receiver later.
 groups:
-  - name: gitoracle
+  - name: gitoracle-targets
     rules:
       - alert: JavaServiceDown
         expr: up{layer="java-service"} == 0
@@ -13,6 +13,28 @@ groups:
           summary: "{{ $labels.service }} is down"
           description: "Prometheus has not been able to scrape {{ $labels.service }} for 2 minutes."
 
+      # Possible now that every agent serves /metrics; before, all seven
+      # targets were down by design and couldn't be alerted on.
+      - alert: AgentDown
+        expr: up{layer=~"ai-agent|ai-infra"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} agent is down"
+          description: "Prometheus has not been able to scrape the {{ $labels.service }} agent for 2 minutes. Check supervisor.log."
+
+      - alert: InfrastructureTargetDown
+        expr: up{layer="infrastructure"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} metrics are unavailable"
+          description: "The {{ $labels.service }} exporter has not answered for 5 minutes (make infra-up starts it)."
+
+  - name: gitoracle-pipeline
+    rules:
       # JobWatchdog escalates jobs stuck in a working state past their limit.
       # One is an incident; a burst usually means an agent or Kafka is broken.
       - alert: JobsStalling
@@ -22,3 +44,35 @@ groups:
         annotations:
           summary: "Jobs stalled in {{ $labels.state }}"
           description: "The watchdog escalated {{ $value | humanize }} job(s) stuck in {{ $labels.state }} in the last 15 minutes. Check that state's agent (/health) and supervisor.log."
+
+      # The investigator, planner and fixer do their work from Kafka; an HTTP
+      # server that answers while its consumer is dead is a zombie.
+      - alert: AgentConsumerDown
+        expr: gitoracle_kafka_consumer_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.agent }} is not consuming {{ $labels.topic }}"
+          description: "The {{ $labels.agent }} agent's Kafka consumer has been down for 2 minutes; jobs will stall at that stage."
+
+      - alert: LLMCallsFailing
+        expr: |
+          sum by (agent) (rate(gitoracle_llm_requests_total{outcome!="ok"}[10m]))
+            / sum by (agent) (rate(gitoracle_llm_requests_total[10m])) > 0.5
+          and sum by (agent) (increase(gitoracle_llm_requests_total[10m])) >= 4
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Most of {{ $labels.agent }}'s LLM calls are failing"
+          description: "{{ $value | humanizePercentage }} of {{ $labels.agent }}'s LLM calls failed over 10 minutes. Check the provider (LLM_BASE_URL, key, rate limit) and the error in the job's LLM trace."
+
+      - alert: EscalationsWaiting
+        expr: gitoracle_escalations_pending > 0
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $value }} escalation(s) waiting on a human for over an hour"
+          description: "Jobs are paused in the escalation queue (dashboard → Escalations)."

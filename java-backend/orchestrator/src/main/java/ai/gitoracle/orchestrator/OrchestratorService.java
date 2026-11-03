@@ -60,6 +60,15 @@ public class OrchestratorService {
         this.escalations = escalations;
     }
 
+    private ai.gitoracle.orchestrator.service.PipelineMetrics metrics =
+        ai.gitoracle.orchestrator.service.PipelineMetrics.noop();
+
+    /** Optional, so tests that construct this directly don't need a registry. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMetrics(ai.gitoracle.orchestrator.service.PipelineMetrics metrics) {
+        this.metrics = metrics;
+    }
+
     /** Wraps a request body with the X-Internal-Token header every internal-service call needs. */
     private <T> HttpEntity<T> withInternalAuth(T body) {
         HttpHeaders headers = new HttpHeaders();
@@ -157,6 +166,7 @@ public class OrchestratorService {
         row.setReviewer(reviewer == null ? "unknown" : reviewer);
         row.setPrUrl(url);
         prOutcomeRepository.save(row);
+        metrics.prOutcome(outcome);
         logger.info("Recorded PR outcome {} for job {} (by {})", outcome, jobId, row.getReviewer());
 
         String toState = switch (outcome) {
@@ -287,6 +297,7 @@ public class OrchestratorService {
                 cause.ifPresent(c -> {
                     job.setRootCommit(c.sha());
                     job.setCausalScore(c.score());
+                    metrics.causalScore(c.score());
                     logger.info("Job {} root cause set from investigation: {} (score {})",
                                 jobIdStr, c.sha(), c.score());
                 });
@@ -487,6 +498,8 @@ public class OrchestratorService {
             var response = restTemplate.postForObject("http://localhost:8084/test", withInternalAuth(testRequest), Map.class);
 
             if (response != null && Boolean.TRUE.equals(response.get("allPassed"))) {
+                // "verified": false is the runner's safe-pass — no test suite ran at all.
+                metrics.testRun(Boolean.FALSE.equals(response.get("verified")) ? "unverified" : "passed");
                 logger.info("Tests passed! Publishing to {}...", KafkaTopics.TESTS_PASSED);
                 Map<String, String> testsPassedPayload = new HashMap<>();
                 testsPassedPayload.put("jobId",          jobIdStr);
@@ -510,12 +523,14 @@ public class OrchestratorService {
                 String testLogs = response != null ? String.valueOf(response.get("logs")) : "no response";
                 String excerpt = testLogs.length() > 500 ? testLogs.substring(0, 500) + "..." : testLogs;
                 logger.warn("Tests FAILED for job {}. Logs:\n{}", jobIdStr, excerpt);
+                metrics.testRun(response == null ? "error" : "failed");
                 fail(jobIdStr, "Tests failed with the patch applied: " + excerpt, "test-runner");
             }
         } catch (Exception e) {
             logger.error("Failed to contact Test Runner. Is it running on port 8084?", e);
             // This used to only log, leaving the job in TESTING forever with nothing
             // to say why.
+            metrics.testRun("error");
             fail(jobIdStr, "Test runner unreachable or errored: " + e.getMessage(), "orchestrator");
         }
     }

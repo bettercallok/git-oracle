@@ -18,9 +18,16 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from shared.kafka_consumer import KafkaEventConsumer
+from shared.metrics import KAFKA_CONSUMER_UP, add_metrics_route, canonical_agent, preregister_agent
 
 
 def add_health_route(app: FastAPI, agent: str, consumer: Optional[KafkaEventConsumer] = None) -> None:
+    # Every agent calls this, so it is also where /metrics is added (shared/metrics.py).
+    add_metrics_route(app)
+    preregister_agent(agent, consumer.topic if consumer is not None else None)
+    if consumer is not None:
+        KAFKA_CONSUMER_UP.labels(agent=canonical_agent(agent), topic=consumer.topic).set_function(lambda: 1 if consumer.alive else 0)
+
     @app.get("/health")
     async def health() -> JSONResponse:
         body: dict = {"status": "ok", "agent": agent}

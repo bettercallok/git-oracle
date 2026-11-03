@@ -68,6 +68,14 @@ public class JobStateService {
         this.clock = clock;
     }
 
+    private PipelineMetrics metrics = PipelineMetrics.noop();
+
+    /** Optional, so the many tests that build this directly don't need a registry. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMetrics(PipelineMetrics metrics) {
+        this.metrics = metrics;
+    }
+
     /**
      * Moves {@code job} to {@code to}. Returns false (and changes nothing) if the
      * job is already there, or is finished and {@code to} isn't one of the ways
@@ -104,6 +112,7 @@ public class JobStateService {
         job.setStateReason(truncate(reason));
         job.setStateChangedAt(now);
         jobRepository.save(job);
+        metrics.transition(from, to);
 
         JobEvent event = newEvent(job.getId(), job.getTenantId(), JobEvent.Type.STATE_CHANGE, actor, reason, null);
         event.setFromState(from);

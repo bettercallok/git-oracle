@@ -19,7 +19,7 @@ import os
 
 from fastapi import Header, HTTPException, Request
 
-EXEMPT_PATHS = frozenset({"/health"})
+EXEMPT_PATHS = frozenset({"/health", "/metrics"})
 
 
 def require_internal_token(
