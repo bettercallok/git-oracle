@@ -32,13 +32,15 @@ class BudgetRecordAuthorizationTest {
     private TokenBudgetManager budget;
     private AgentJobRepository jobs;
     private BudgetController controller;
+    private ai.gitoracle.orchestrator.repository.JobPromptVersionRepository promptVersions;
     private UUID jobId;
 
     @BeforeEach
     void setUp() {
         budget = mock(TokenBudgetManager.class);
         jobs = mock(AgentJobRepository.class);
-        controller = new BudgetController(budget, jobs);
+        promptVersions = mock(ai.gitoracle.orchestrator.repository.JobPromptVersionRepository.class);
+        controller = new BudgetController(budget, jobs, promptVersions);
         jobId = UUID.randomUUID();
         AgentJob job = new AgentJob();
         job.setId(jobId);
@@ -54,7 +56,7 @@ class BudgetRecordAuthorizationTest {
     private static RecordUsageRequest usage(int tokens) {
         RecordUsageRequest r = new RecordUsageRequest();
         r.setTokensUsed(tokens);
-        r.setAgentName("fixer");
+        r.setAgentName("fixer_agent");
         return r;
     }
 
@@ -78,6 +80,14 @@ class BudgetRecordAuthorizationTest {
         TestTenantContext.setInternalCaller(DEFAULT);
         assertThat(controller.recordUsage(jobId, usage(500)).getStatusCode().value()).isEqualTo(200);
         verify(budget).recordUsage(jobId, 500);
+    }
+
+    /** "fixer_agent" (how agents report usage) is the "fixer" row (how they report prompt versions). */
+    @Test
+    void usageIsAlsoAddedToTheAgentsOwnPromptVersionRow() {
+        TestTenantContext.setInternalCaller(DEFAULT);
+        controller.recordUsage(jobId, usage(500));
+        verify(promptVersions).addTokens(jobId, "fixer", 500);
     }
 
     @Test

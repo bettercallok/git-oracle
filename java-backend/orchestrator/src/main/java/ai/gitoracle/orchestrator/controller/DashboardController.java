@@ -74,6 +74,40 @@ public class DashboardController {
         return ResponseEntity.ok(jobs);
     }
 
+    /**
+     * Job counts for the jobs page's headline numbers, over ALL the caller's
+     * jobs. The page counted the /jobs list, which is the latest 50 — so every
+     * figure stopped growing at 50 and drifted as older jobs fell off the list.
+     *
+     * <p>{@code escalationsPending} is exactly what the escalation queue lists
+     * (same predicate as {@link #getEscalations}), so the two can't disagree.
+     */
+    @GetMapping("/jobs/stats")
+    public ResponseEntity<Map<String, Object>> getJobStats() {
+        UUID tenantId = TenantContext.requireTenantId();
+        Map<String, Long> byState = new HashMap<>();
+        long total = 0;
+        for (Object[] row : entityManager.createQuery(
+                "SELECT j.state, COUNT(j) FROM AgentJob j WHERE j.tenantId = :tenantId GROUP BY j.state", Object[].class)
+                .setParameter("tenantId", tenantId)
+                .getResultList()) {
+            long n = ((Number) row[1]).longValue();
+            byState.put(String.valueOf(row[0]), n);
+            total += n;
+        }
+        Long pending = entityManager.createQuery(
+                "SELECT COUNT(e) FROM Escalation e WHERE e.job.tenantId = :tenantId"
+                    + " AND e.status = 'PENDING' AND e.job.state = 'ESCALATED'", Long.class)
+            .setParameter("tenantId", tenantId)
+            .getSingleResult();
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("total", total);
+        body.put("byState", byState);
+        body.put("escalationsPending", pending == null ? 0L : pending);
+        return ResponseEntity.ok(body);
+    }
+
     @GetMapping("/jobs/{id}")
     public ResponseEntity<AgentJob> getJob(@PathVariable UUID id) {
         return findOwnedJob(id)
@@ -507,10 +541,35 @@ public class DashboardController {
         }
 
         long total = counts.values().stream().mapToLong(Long::longValue).sum();
+
+        // The headline merge rate, from what happened to each job's CURRENT pull
+        // request. It was MERGED over every job with any outcome — including PRs
+        // only approved (still open), and jobs counted CLOSED because an older PR
+        // was closed when a regeneration replaced it, even though the job's
+        // current PR is still open or was merged.
+        long merged = 0, closed = 0, open = 0;
+        for (Object[] row : entityManager.createQuery(
+                "SELECT j.state, COUNT(j) FROM AgentJob j WHERE j.tenantId = :tenantId"
+                    + " AND j.prUrl IS NOT NULL AND j.prUrl <> '' GROUP BY j.state", Object[].class)
+                .setParameter("tenantId", TenantContext.requireTenantId())
+                .getResultList()) {
+            long n = ((Number) row[1]).longValue();
+            switch (String.valueOf(row[0])) {
+                case "PR_MERGED" -> merged += n;
+                case "PR_CLOSED" -> closed += n;
+                default -> open += n;   // PR_OPENED, or regenerating with its PR still open
+            }
+        }
+        long decided = merged + closed;
+
         Map<String, Object> body = new HashMap<>();
         body.put("counts", counts);
         body.put("total", total);
-        body.put("mergeRate", total == 0 ? null : (double) counts.get("MERGED") / total);
+        body.put("merged", merged);
+        body.put("closed", closed);
+        body.put("open", open);
+        body.put("decided", decided);
+        body.put("mergeRate", decided == 0 ? null : (double) merged / decided);
         return ResponseEntity.ok(body);
     }
 

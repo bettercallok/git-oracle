@@ -63,6 +63,7 @@ class OrchestratorServiceTest {
     private PrOutcomeRepository prOutcomeRepository;
     private JobEventRepository jobEventRepository;
     private EntityManager entityManager;
+    private ai.gitoracle.orchestrator.repository.EscalationRepository escalationRows;
     private OrchestratorService service;
     private MockRestServiceServer mockGitHubBot;
     private KafkaTemplate<String, Object> kafkaTemplate;
@@ -74,6 +75,7 @@ class OrchestratorServiceTest {
         kafkaTemplate = mock(KafkaTemplate.class);
         WorkspaceService workspaceService = mock(WorkspaceService.class);
         entityManager = mock(EntityManager.class);
+        escalationRows = mock(ai.gitoracle.orchestrator.repository.EscalationRepository.class);
         jobEventRepository = mock(JobEventRepository.class);
         // The real state service over mocked repositories: these tests assert on
         // the job's resulting state, which is exactly what it decides.
@@ -82,7 +84,7 @@ class OrchestratorServiceTest {
 
         service = new OrchestratorService(jobRepository, kafkaTemplate, workspaceService,
                                            entityManager, prOutcomeRepository, jobState,
-                                           new EscalationService(jobState, entityManager, prOutcomeRepository));
+                                           new EscalationService(jobState, entityManager, prOutcomeRepository, escalationRows));
 
         // OrchestratorService constructs its own `new RestTemplate()` rather than
         // taking one as a constructor argument, so the only way to intercept the
@@ -158,6 +160,33 @@ class OrchestratorServiceTest {
 
         assertThat(job.getState()).isEqualTo("ESCALATED");
         assertThat(job.getPrUrl()).isNull();
+        // ...and queued for a human. This used to be a bare state change with no
+        // Escalation row: escalated on the jobs page, absent from the queue.
+        var row = org.mockito.ArgumentCaptor.forClass(Object.class);
+        verify(entityManager).persist(row.capture());
+        assertThat(row.getValue()).isInstanceOf(ai.gitoracle.core.entity.Escalation.class);
+        ai.gitoracle.core.entity.Escalation escalation = (ai.gitoracle.core.entity.Escalation) row.getValue();
+        assertThat(escalation.getStatus()).isEqualTo("PENDING");
+        assertThat(escalation.getReason()).startsWith("PR creation failed: Repository name must be");
+        verify(escalationRows).supersedePending(org.mockito.ArgumentMatchers.eq(jobId), any());
+    }
+
+    @Test
+    void anEscalatedJobWithNoPendingRowGetsOneButOneWithARowIsLeftAlone() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "ESCALATED", null);
+        EscalationService escalationService = new EscalationService(
+            new JobStateService(jobRepository, jobEventRepository, java.time.Clock.systemUTC()),
+            entityManager, prOutcomeRepository, escalationRows);
+
+        when(escalationRows.existsByJob_IdAndStatus(jobId, "PENDING")).thenReturn(true);
+        assertThat(escalationService.escalate(job, "again", "watchdog", null)).isFalse();
+        verify(entityManager, never()).persist(any());
+
+        when(escalationRows.existsByJob_IdAndStatus(jobId, "PENDING")).thenReturn(false);
+        assertThat(escalationService.escalate(job, "PR creation failed: boom", "orchestrator", null)).isTrue();
+        verify(entityManager).persist(any(ai.gitoracle.core.entity.Escalation.class));
+        assertThat(job.getState()).isEqualTo("ESCALATED");
     }
 
     @Test

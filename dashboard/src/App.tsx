@@ -134,7 +134,9 @@ function useEscalationCount(enabled: boolean) {
   const { data } = useQuery({
     queryKey: ['escalations'],
     queryFn: async () => (await apiClient.get('/escalations')).data as unknown[],
-    refetchInterval: 15000,
+    // Was 15s against the jobs page's 2s, so the badge visibly lagged the
+    // page's own escalation count after anything changed.
+    refetchInterval: 5000,
     enabled,
   });
   return Array.isArray(data) ? data.length : 0;

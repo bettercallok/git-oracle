@@ -14,6 +14,15 @@ public interface JobPromptVersionRepository extends JpaRepository<JobPromptVersi
 
     Optional<JobPromptVersion> findByJobIdAndAgentName(UUID jobId, String agentName);
 
+    /** Adds one LLM call's tokens to the agent's row for the job; 0 when the agent never registered a version. */
+    @org.springframework.transaction.annotation.Transactional
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE JobPromptVersion v SET v.tokensUsed = COALESCE(v.tokensUsed, 0) + :tokens "
+         + "WHERE v.jobId = :jobId AND v.agentName = :agentName")
+    int addTokens(@org.springframework.data.repository.query.Param("jobId") UUID jobId,
+                  @org.springframework.data.repository.query.Param("agentName") String agentName,
+                  @org.springframework.data.repository.query.Param("tokens") int tokens);
+
     /**
      * Real per-(agent, version) performance, joined from the jobs that actually ran
      * on each prompt revision.
@@ -27,8 +36,13 @@ public interface JobPromptVersionRepository extends JpaRepository<JobPromptVersi
      * rather than counted as failures, so a version isn't penalised for work that
      * simply hasn't finished yet.
      *
-     * avg_tokens is NULL — not 0 — when no finished job on that version recorded
-     * any token usage, so the UI can distinguish "not measured" from "free".
+     * ESCALATED is not finished either: a human can still approve it and the
+     * job go on to open a PR. It was counted as a failure here while the jobs
+     * page (rightly) treated it as still open.
+     *
+     * avg_tokens is this AGENT's tokens per job (job_prompt_versions.tokens_used),
+     * not the job's total — which put the same figure on every agent's row. NULL,
+     * not 0, when nothing was measured, so the UI can show "—" rather than "free".
      */
     @Query(value = """
         SELECT
@@ -36,7 +50,7 @@ public interface JobPromptVersionRepository extends JpaRepository<JobPromptVersi
             jpv.prompt_version,
             COUNT(*)                                                        AS jobs,
             COUNT(*) FILTER (WHERE j.state IN ('PR_OPENED', 'PR_MERGED'))   AS successes,
-            AVG(NULLIF(j.token_budget_used, 0))                             AS avg_tokens,
+            AVG(NULLIF(jpv.tokens_used, 0))                                 AS avg_tokens,
             COALESCE(bool_or(pv.is_active), false)                          AS is_active
         FROM job_prompt_versions jpv
         JOIN agent_job j ON j.id = jpv.job_id
@@ -44,7 +58,7 @@ public interface JobPromptVersionRepository extends JpaRepository<JobPromptVersi
                ON pv.agent_name = jpv.agent_name
               AND pv.version    = jpv.prompt_version
               AND pv.prompt_key = 'system'
-        WHERE j.state IN ('PR_OPENED', 'PR_MERGED', 'PR_CLOSED', 'ESCALATED', 'FAILED')
+        WHERE j.state IN ('PR_OPENED', 'PR_MERGED', 'PR_CLOSED', 'FAILED')
           AND j.tenant_id = :tenantId
         GROUP BY jpv.agent_name, jpv.prompt_version
         ORDER BY jpv.agent_name, jpv.prompt_version DESC

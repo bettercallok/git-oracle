@@ -666,7 +666,10 @@ public class OrchestratorService {
                 "github-bot");
             return;
         }
-        jobState.transition(job, "ESCALATED", "PR creation failed: " + reason, "github-bot");
+        // Through EscalationService, not a bare state change: that used to set
+        // ESCALATED with no Escalation row, so the job counted as escalated on
+        // the jobs page but never reached the queue where it can be approved.
+        escalations.escalate(job, "PR creation failed: " + reason, "github-bot", null);
         logger.error("GitHub Bot failed to open PR for job {}: {}", job.getId(), reason);
     }
 
