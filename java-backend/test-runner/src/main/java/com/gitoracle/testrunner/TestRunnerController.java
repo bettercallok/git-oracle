@@ -632,7 +632,8 @@ public class TestRunnerController {
             }
 
             boolean passed = result.success();
-            double score   = computeQualityScore(result.output(), config.framework());
+            TestCounts counts = parseTestCounts(result.output());
+            double score   = qualityScore(counts, passed);
 
             // pytest exits 5 ("no tests ran") when the repo/target dir has no test
             // suite at all — not a failure of the patch under test, just nothing to
@@ -658,6 +659,7 @@ public class TestRunnerController {
                             jobId, result.exitCode());
                 passed = true;
                 score = 1.0;
+                counts = null;
                 // The distinction allPassed alone cannot carry: this patch is
                 // not failing, but nothing checked it either. A repository with
                 // no test suite — or one whose suite was deleted — reaches this
@@ -671,7 +673,7 @@ public class TestRunnerController {
             return new TestResult(passed, score, 0.0,
                 (verified ? "" : "[WARNING: no test suite ran — this patch was not verified]\n")
                 + "[exit=" + result.exitCode() + "]\n" + result.output(),
-                verified);
+                verified).withCounts(counts);
 
         } catch (Exception e) {
             // Docker failed for this specific job (daemon down, image pull
@@ -755,9 +757,35 @@ public class TestRunnerController {
     private static final Pattern SUMMARY_LINE =
         Pattern.compile("\\b\\d+\\s+(passed|failed|error|skipped)\\b.*\\bin\\s+[\\d.]+s");
 
+    /** Tests a framework reported running, and how many of them failed or errored. */
+    public record TestCounts(int total, int failed) {}
+
     /**
-     * Parse test output for pass/fail counts to produce a normalised quality score.
-     * Falls back to 1.0 on pass / 0.0 on fail if counts can't be parsed.
+     * The fraction of tests that passed, from the framework's own counts. When
+     * there are none to read, the exit code is all there is: 1.0 for a pass, 0.0
+     * for a failure. This used to return 0.5 for "unknown format" — so a green
+     * Maven run under -q, which prints no summary, showed "Fix Quality: 50%".
+     */
+    static double qualityScore(TestCounts counts, boolean passed) {
+        if (counts == null) return passed ? 1.0 : 0.0;
+        return counts.total() > 0 ? (double) (counts.total() - counts.failed()) / counts.total() : 1.0;
+    }
+
+    /** Maven prefixes every line with its log level. */
+    private static final Pattern LOG_LEVEL_PREFIX = Pattern.compile("^\\[(INFO|WARNING|WARN|ERROR)\\]\\s*");
+    /** Surefire's run total. Per-class lines end in ", Time elapsed: …" and are skipped. */
+    private static final Pattern SUREFIRE_TOTAL = Pattern.compile(
+        "^Tests run: (\\d+), Failures: (\\d+), Errors: (\\d+)(?:, Skipped: \\d+)?$");
+    /** pytest's closing "==== 3 passed, 1 failed, 2 errors in 0.4s ====". */
+    private static final Pattern PYTEST_SUMMARY = Pattern.compile("^=+ .*\\bin [\\d.]+s.* =+$");
+    /** jest's "Tests:       1 failed, 4 passed, 5 total". */
+    private static final Pattern JEST_SUMMARY = Pattern.compile("^Tests:\\s+.*\\b(\\d+) total$");
+    /** cargo's "test result: ok. 5 passed; 0 failed; …", one per test binary. */
+    private static final Pattern CARGO_RESULT = Pattern.compile("^test result: \\w+\\. (\\d+) passed; (\\d+) failed;");
+
+    /**
+     * Test counts from a framework's own summary line, or null when there is none
+     * we recognise (Gradle, go test, or a run that printed nothing).
      *
      * <h2>This is evidence, not proof — and cannot be made into proof here</h2>
      * Every input to this method is produced by the repository under test. The
@@ -766,54 +794,69 @@ public class TestRunnerController {
      * whoever wrote that repository. A repo that prints "5 passed" scores 1.0
      * without running anything.
      *
-     * <p>The plan's suggestion — parse --junitxml / surefire XML / jest --json
-     * instead of stdout — is a real improvement in ROBUSTNESS (structured
-     * output cannot be matched by accident, and the counts are unambiguous) but
-     * it is NOT a trust boundary: those files are written into the workspace by
+     * <p>Parsing --junitxml / surefire XML / jest --json instead of stdout would
+     * be more robust (structured output cannot be matched by accident) but it
+     * is NOT a trust boundary: those files are written into the workspace by
      * the same untrusted process, so a repo that wants to fake a green run can
      * write a green report just as easily as it can print one.
      *
-     * <p>What this change does do is remove the accidental and one-line-trivial
-     * matches: the patterns are anchored to lines that actually look like a
-     * framework summary, rather than matching "(\\d+) passed" anywhere in
-     * megabytes of build output. What actually contains a malicious repository
-     * is the sandbox it runs in (C2/C3/H9), the authorized-files allowlist, and
-     * human review of the resulting pull request — not this parser, and the
-     * documentation should not imply otherwise.
+     * <p>What the anchoring does do is remove the accidental and
+     * one-line-trivial matches: only a line in a framework's exact summary shape
+     * counts, never "(\\d+) passed" anywhere in megabytes of build output. (An
+     * earlier version fell back to searching the whole output when it found no
+     * summary line, which undid that.) What actually contains a malicious
+     * repository is the sandbox it runs in (C2/C3/H9), the authorized-files
+     * allowlist, and human review of the resulting pull request — not this
+     * parser, and the documentation should not imply otherwise.
+     *
+     * <p>When a framework prints its summary more than once, the last one wins:
+     * Surefire's run total comes after every per-class line, and it is the total
+     * that matters. Reading the first "Tests run:" line used to score a whole run
+     * by its first test class.
      */
-    private double computeQualityScore(String output, TestFramework framework) {
-        if (output == null) return 0.5;
+    static TestCounts parseTestCounts(String output) {
+        if (output == null) return null;
+        TestCounts surefire = null, pytest = null, jest = null;
+        int cargoTotal = 0, cargoFailed = 0;
+        boolean cargo = false;
 
-        // Only consider lines that look like a framework summary, so counts are
-        // not picked up from arbitrary build chatter.
-        String summary = output.lines()
-            .map(String::trim)
-            .filter(l -> l.startsWith("=") || l.endsWith("=")
-                      || l.startsWith("Tests:") || l.startsWith("Tests run:")
-                      || SUMMARY_LINE.matcher(l).find())
-            .reduce("", (a, b) -> a + "\n" + b);
-        if (summary.isBlank()) summary = output; // no recognisable summary; fall back
+        for (String raw : output.split("\\R")) {
+            String line = LOG_LEVEL_PREFIX.matcher(raw.trim()).replaceFirst("");
 
-        // pytest / jest: "3 passed, 1 failed"
-        Matcher pm = Pattern.compile("(\\d+) passed").matcher(summary);
-        Matcher fm = Pattern.compile("(\\d+) failed").matcher(summary);
-        if (pm.find()) {
-            int passed = Integer.parseInt(pm.group(1));
-            int failed = fm.find() ? Integer.parseInt(fm.group(1)) : 0;
-            int total  = passed + failed;
-            return total > 0 ? (double) passed / total : 1.0;
+            Matcher m = SUREFIRE_TOTAL.matcher(line);
+            if (m.matches()) {
+                surefire = new TestCounts(Integer.parseInt(m.group(1)),
+                    Integer.parseInt(m.group(2)) + Integer.parseInt(m.group(3)));
+                continue;
+            }
+            if (PYTEST_SUMMARY.matcher(line).matches()) {
+                int passed = count(line, "passed"), failed = count(line, "failed"), errors = count(line, "errors?");
+                if (passed + failed + errors > 0) pytest = new TestCounts(passed + failed + errors, failed + errors);
+                continue;
+            }
+            m = JEST_SUMMARY.matcher(line);
+            if (m.matches()) {
+                jest = new TestCounts(Integer.parseInt(m.group(1)), count(line, "failed"));
+                continue;
+            }
+            m = CARGO_RESULT.matcher(line);
+            if (m.find()) {
+                cargo = true;
+                int passed = Integer.parseInt(m.group(1)), failed = Integer.parseInt(m.group(2));
+                cargoTotal += passed + failed;
+                cargoFailed += failed;
+            }
         }
+        if (surefire != null) return surefire;
+        if (pytest != null) return pytest;
+        if (jest != null) return jest;
+        return cargo ? new TestCounts(cargoTotal, cargoFailed) : null;
+    }
 
-        // JUnit / Surefire: "Tests run: 5, Failures: 1"
-        Matcher jm = Pattern.compile("Tests run: (\\d+)").matcher(summary);
-        Matcher jf = Pattern.compile("Failures: (\\d+)").matcher(summary);
-        if (jm.find()) {
-            int run  = Integer.parseInt(jm.group(1));
-            int fail = jf.find() ? Integer.parseInt(jf.group(1)) : 0;
-            return run > 0 ? (double)(run - fail) / run : 1.0;
-        }
-
-        return 0.5; // unknown output format
+    /** The number before {@code word} in a summary line ("3 passed"), or 0. */
+    private static int count(String line, String word) {
+        Matcher m = Pattern.compile("\\b(\\d+) " + word + "\\b").matcher(line);
+        return m.find() ? Integer.parseInt(m.group(1)) : 0;
     }
 
     // ─── Docker Image + Command Mapping ───────────────────────────────────────

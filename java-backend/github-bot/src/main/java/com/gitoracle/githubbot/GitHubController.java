@@ -344,37 +344,75 @@ public class GitHubController {
         }
     }
     
-    private String generateMarkdown(PullRequestRequest req) {
-        return String.format(
+    /**
+     * The fixer's attempt limit (ai_core/agents/fixer: "Attempt N of 3"). The
+     * header said "/5", which the fixer has never allowed.
+     */
+    static final int MAX_FIX_ATTEMPTS = 3;
+
+    /**
+     * The PR description. Every number in it is the job's own — or "n/a" when
+     * there is none. It used to print a constant 95% causal confidence, "1/1
+     * passed" whatever ran, "/5" attempts, and the literal word "null" for the
+     * root cause and change summary the orchestrator never sent.
+     */
+    static String generateMarkdown(PullRequestRequest req) {
+        Double causal = req.getCausalScore();
+        boolean investigated = causal != null;
+        String rootCommit = req.getRootCommit() == null || req.getRootCommit().isBlank()
+            || "unknown".equals(req.getRootCommit()) ? null : req.getRootCommit();
+        Integer passed = req.getTestsPassed(), total = req.getTestsTotal();
+        boolean counted = passed != null && total != null;
+
+        String metadata = String.format(java.util.Locale.ROOT,
             "<!-- gitoracle:job_id:%s -->\n" +
             "<!-- gitOracle:metadata\n" +
             "{\n" +
             "  \"job_id\": \"%s\",\n" +
             "  \"agent_version\": \"1.0.0\",\n" +
-            "  \"root_commit\": \"%s\",\n" +
-            "  \"causal_score\": %.2f,\n" +
+            "  \"root_commit\": %s,\n" +
+            "  \"causal_score\": %s,\n" +
             "  \"fix_strategy\": \"%s\",\n" +
             "  \"fix_attempts\": %d,\n" +
-            "  \"tests_passed\": %d,\n" +
-            "  \"tests_total\": %d,\n" +
-            "  \"coverage_delta\": %+.2f,\n" +
+            "  \"tests_passed\": %s,\n" +
+            "  \"tests_total\": %s,\n" +
+            "  \"coverage_delta\": %.2f,\n" +   // not %+: "+0.00" is not valid JSON
             "  \"quality_score\": %.2f,\n" +
             "  \"token_budget_used\": %d,\n" +
             "  \"escalated\": false\n" +
             "}\n" +
-            "-->\n\n" +
-            "## \uD83E\uDD16 GitOracle Autonomous Fix\n\n" +
-            "**Root Commit:** `%s` · **Causal Confidence:** %.0f%% · **Fix Quality:** %.0f%% · **Attempts:** %d/5\n\n" +
-            "### Root Cause\n%s\n\n" +
-            "### What Changed\n%s\n\n" +
-            "### Test Results\n✅ %d/%d passed · Coverage %+.2f%%\n\n" +
-            "---\n*This PR was generated autonomously by GitOracle. Not satisfied? Use the [GitOracle Dashboard](http://localhost:5173) to regenerate with your instructions.*",
-            req.getJobId(),
-            req.getJobId(), req.getRootCommit(), req.getCausalScore(), req.getFixStrategy(), req.getFixAttempts(),
-            req.getTestsPassed(), req.getTestsTotal(), req.getCoverageDelta(), req.getQualityScore(), req.getTokenBudgetUsed(),
-            req.getRootCommit(), req.getCausalScore() * 100, req.getQualityScore() * 100, req.getFixAttempts(),
-            req.getCausalChainNarrative(), req.getPatchSummary(),
-            req.getTestsPassed(), req.getTestsTotal(), req.getCoverageDelta() * 100
-        );
+            "-->\n\n",
+            req.getJobId(), req.getJobId(),
+            rootCommit == null ? "null" : "\"" + rootCommit + "\"",
+            investigated ? String.format(java.util.Locale.ROOT, "%.2f", causal) : "null",
+            req.getFixStrategy(), req.getFixAttempts(),
+            counted ? passed.toString() : "null", counted ? total.toString() : "null",
+            req.getCoverageDelta(), req.getQualityScore(), req.getTokenBudgetUsed());
+
+        String header = String.format(java.util.Locale.ROOT,
+            "**Root Commit:** %s · **Causal Confidence:** %s · **Fix Quality:** %.0f%% · **Attempts:** %d/%d\n\n",
+            rootCommit == null ? "n/a" : "`" + rootCommit + "`",
+            investigated ? String.format(java.util.Locale.ROOT, "%.0f%%", causal * 100) : "n/a",
+            req.getQualityScore() * 100, req.getFixAttempts(), MAX_FIX_ATTEMPTS);
+
+        String rootCause = present(req.getCausalChainNarrative()) ? req.getCausalChainNarrative()
+            : investigated ? "_The investigator gave no explanation._"
+            : "_Not investigated — this fix was requested directly._";
+        String changed = present(req.getPatchSummary()) ? req.getPatchSummary() : "_See the diff._";
+        String tests = counted ? String.format(java.util.Locale.ROOT, "✅ %d/%d passed", passed, total) : "✅ Passed";
+
+        return metadata
+            + "## \uD83E\uDD16 GitOracle Autonomous Fix\n\n"
+            + header
+            + "### Root Cause\n" + rootCause + "\n\n"
+            + "### What Changed\n" + changed + "\n\n"
+            + "### Test Results\n" + tests
+            + String.format(java.util.Locale.ROOT, " · Coverage %+.2f%%\n\n", req.getCoverageDelta() * 100)
+            + "---\n*This PR was generated autonomously by GitOracle. Not satisfied? Use the "
+            + "[GitOracle Dashboard](http://localhost:5173) to regenerate with your instructions.*";
+    }
+
+    private static boolean present(String s) {
+        return s != null && !s.isBlank() && !"null".equals(s);
     }
 }

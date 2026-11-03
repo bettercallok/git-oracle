@@ -39,6 +39,26 @@ public class TestResult {
         this.verified = verified;
     }
 
+    /**
+     * Test counts from the framework's own summary line; null when the output had
+     * none we recognise (and always null when no suite ran). Reported on the PR
+     * as "N/M passed" — it used to say "1/1 passed" whatever ran.
+     */
+    private Integer testsTotal;
+    private Integer testsFailed;
+
+    public Integer getTestsTotal() { return testsTotal; }
+    public Integer getTestsFailed() { return testsFailed; }
+
+    /** Sets both counts from a parsed summary; null leaves them unknown. */
+    public TestResult withCounts(TestRunnerController.TestCounts counts) {
+        if (counts != null) {
+            this.testsTotal = counts.total();
+            this.testsFailed = counts.failed();
+        }
+        return this;
+    }
+
     public boolean isVerified() { return verified; }
     public void setVerified(boolean verified) { this.verified = verified; }
 
