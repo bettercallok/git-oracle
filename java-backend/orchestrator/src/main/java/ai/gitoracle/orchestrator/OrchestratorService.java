@@ -481,6 +481,12 @@ public class OrchestratorService {
                 testsPassedPayload.put("qualityScore",   String.valueOf(response.get("qualityScore")));
                 testsPassedPayload.put("coverageDelta",  String.valueOf(response.get("coverageDelta")));
                 testsPassedPayload.put("fixAttempts",    String.valueOf(attempts[0]));
+                // Absent when the runner found no summary line it recognises.
+                if (response.get("testsTotal") instanceof Number total) {
+                    testsPassedPayload.put("testsTotal",  String.valueOf(total.intValue()));
+                    Object failed = response.get("testsFailed");
+                    testsPassedPayload.put("testsFailed", String.valueOf(failed instanceof Number f ? f.intValue() : 0));
+                }
                 kafkaTemplate.send(KafkaTopics.TESTS_PASSED, testsPassedPayload);
             } else {
                 String testLogs = response != null ? String.valueOf(response.get("logs")) : "no response";
@@ -565,14 +571,26 @@ public class OrchestratorService {
             prRequest.put("commitMessage", "Fix " + errorId[0]);
             prRequest.put("agentVersion", "1.0");
             prRequest.put("rootCommit", event.get("rootCommit"));
-            prRequest.put("causalScore", 0.95);
+            // The job's own numbers. These were constants — causal confidence
+            // 0.95, "1/1 tests passed" and 500 tokens on every PR — so the PR
+            // header showed 95% for a job whose investigator said 0.90, and for
+            // direct-fix jobs where no investigation ran at all. Null (shown as
+            // "n/a") wherever there is no real value.
+            AgentJob jobRow = existing.orElse(null);
+            prRequest.put("causalScore", jobRow != null ? jobRow.getCausalScore() : null);
             prRequest.put("fixStrategy", "patch");
             prRequest.put("fixAttempts", (int) parseDoubleOrDefault(event.get("fixAttempts"), 1));
-            prRequest.put("testsPassed", 1);
-            prRequest.put("testsTotal", 1);
+            Integer testsTotal = parseIntOrNull(event.get("testsTotal"));
+            Integer testsFailed = parseIntOrNull(event.get("testsFailed"));
+            prRequest.put("testsTotal", testsTotal);
+            prRequest.put("testsPassed", testsTotal == null ? null : testsTotal - (testsFailed == null ? 0 : testsFailed));
             prRequest.put("coverageDelta", parseDoubleOrDefault(event.get("coverageDelta"), 0.0));
             prRequest.put("qualityScore", parseDoubleOrDefault(event.get("qualityScore"), 1.0));
-            prRequest.put("tokenBudgetUsed", 500);
+            prRequest.put("tokenBudgetUsed", jobRow != null && jobRow.getTokenBudgetUsed() != null
+                ? jobRow.getTokenBudgetUsed() : 0);
+            // The PR's "Root Cause" section printed the literal word "null": this
+            // field was never sent. The investigator's own explanation is on the job.
+            prRequest.put("causalChainNarrative", investigationNarrative(jobRow));
             if (existingPrUrl != null) {
                 prRequest.put("existingPrUrl", existingPrUrl);
             }
@@ -734,6 +752,26 @@ public class OrchestratorService {
         Double confidence = event.get("confidenceScore") instanceof Number n ? n.doubleValue() : null;
         jobRepository.findById(UUID.fromString(jobIdStr))
             .ifPresent(job -> escalations.escalate(job, reason, actor, confidence));
+    }
+
+    /** The investigator's narrative stored on the job, or null (direct fix, or unparseable). */
+    private String investigationNarrative(AgentJob job) {
+        if (job == null || job.getInvestigationResult() == null) return null;
+        try {
+            Object narrative = objectMapper.readValue(job.getInvestigationResult(), Map.class).get("narrative");
+            return narrative instanceof String n && !n.isBlank() ? n : null;
+        } catch (Exception e) {
+            logger.warn("Could not read the stored investigation for job {}: {}", job.getId(), e.getMessage());
+            return null;
+        }
+    }
+
+    private static Integer parseIntOrNull(String value) {
+        try {
+            return value != null ? Integer.valueOf(value) : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private double parseDoubleOrDefault(String value, double fallback) {

@@ -6,11 +6,11 @@ public class PullRequestRequest {
     private String patchDiff;
     private String commitMessage;
     private String rootCommit;
-    private double causalScore;
+    private Double causalScore;      // null: no investigation ran (direct fix)
     private String fixStrategy;
     private int fixAttempts;
-    private int testsPassed;
-    private int testsTotal;
+    private Integer testsPassed;     // null: the runner found no test counts to read
+    private Integer testsTotal;
     private double coverageDelta;
     private double qualityScore;
     private int tokenBudgetUsed;
@@ -88,11 +88,11 @@ public class PullRequestRequest {
         this.rootCommit = rootCommit;
     }
 
-    public double getCausalScore() {
+    public Double getCausalScore() {
         return causalScore;
     }
 
-    public void setCausalScore(double causalScore) {
+    public void setCausalScore(Double causalScore) {
         this.causalScore = causalScore;
     }
 
@@ -112,19 +112,19 @@ public class PullRequestRequest {
         this.fixAttempts = fixAttempts;
     }
 
-    public int getTestsPassed() {
+    public Integer getTestsPassed() {
         return testsPassed;
     }
 
-    public void setTestsPassed(int testsPassed) {
+    public void setTestsPassed(Integer testsPassed) {
         this.testsPassed = testsPassed;
     }
 
-    public int getTestsTotal() {
+    public Integer getTestsTotal() {
         return testsTotal;
     }
 
-    public void setTestsTotal(int testsTotal) {
+    public void setTestsTotal(Integer testsTotal) {
         this.testsTotal = testsTotal;
     }
 

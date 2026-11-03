@@ -65,12 +65,13 @@ class OrchestratorServiceTest {
     private EntityManager entityManager;
     private OrchestratorService service;
     private MockRestServiceServer mockGitHubBot;
+    private KafkaTemplate<String, Object> kafkaTemplate;
 
     @BeforeEach
     void setUp() throws Exception {
         jobRepository = mock(AgentJobRepository.class);
         prOutcomeRepository = mock(PrOutcomeRepository.class);
-        KafkaTemplate<String, Object> kafkaTemplate = mock(KafkaTemplate.class);
+        kafkaTemplate = mock(KafkaTemplate.class);
         WorkspaceService workspaceService = mock(WorkspaceService.class);
         entityManager = mock(EntityManager.class);
         jobEventRepository = mock(JobEventRepository.class);
@@ -629,5 +630,78 @@ class OrchestratorServiceTest {
 
         assertThat(job.getState()).isEqualTo("PR_CLOSED");
         verify(entityManager, never()).persist(any());
+    }
+
+    // ── the PR description carries the job's real numbers ─────────────────
+
+    private static org.springframework.test.web.client.RequestMatcher json(String path, Object value) {
+        return org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath(path).value(value);
+    }
+
+    @Test
+    void thePrRequestCarriesTheJobsRealScoreTokensTestCountsAndRootCause() {
+        // Job 9e09ccf6's PR said "Causal Confidence: 95%" while its investigator
+        // had scored 0.90 — the 0.95 was a constant, as were "1/1 passed" and
+        // 500 tokens, and the root-cause section read "null".
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "TESTING", null);
+        job.setCausalScore(0.9);
+        job.setTokenBudgetUsed(5365);
+        job.setInvestigationResult("{\"narrative\": \"The NPE comes from an unchecked user.\"}");
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        mockGitHubBot.expect(requestTo("http://localhost:8085/pull-request"))
+            .andExpect(json("$.causalScore", 0.9))
+            .andExpect(json("$.tokenBudgetUsed", 5365))
+            .andExpect(json("$.testsTotal", 6))
+            .andExpect(json("$.testsPassed", 5))
+            .andExpect(json("$.causalChainNarrative", "The NPE comes from an unchecked user."))
+            .andRespond(withSuccess("{\"success\":true,\"prUrl\":\"https://github.com/o/r/pull/1\"}",
+                                    MediaType.APPLICATION_JSON));
+
+        service.handleTestsPassed(Map.of("jobId", jobId.toString(), "patch", "diff",
+                                         "testsTotal", "6", "testsFailed", "1"));
+
+        mockGitHubBot.verify();
+    }
+
+    @Test
+    void aDirectFixJobSendsNoCausalScoreAndUnknownTestCountsRatherThanMadeUpOnes() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "TESTING", null);   // never investigated: no causal score
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        mockGitHubBot.expect(requestTo("http://localhost:8085/pull-request"))
+            .andExpect(json("$.causalScore", null))
+            .andExpect(json("$.testsTotal", null))
+            .andExpect(json("$.testsPassed", null))
+            .andExpect(json("$.causalChainNarrative", null))
+            .andRespond(withSuccess("{\"success\":true,\"prUrl\":\"https://github.com/o/r/pull/1\"}",
+                                    MediaType.APPLICATION_JSON));
+
+        service.handleTestsPassed(Map.of("jobId", jobId.toString(), "patch", "diff"));
+
+        mockGitHubBot.verify();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void theTestRunnersCountsAreForwardedOnTheTestsPassedEvent() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "FIXING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+        mockGitHubBot.expect(requestTo("http://localhost:9006/validate/patch"))
+            .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        mockGitHubBot.expect(requestTo("http://localhost:8084/test"))
+            .andRespond(withSuccess("{\"allPassed\":true,\"qualityScore\":1.0,\"coverageDelta\":0.0,"
+                + "\"testsTotal\":6,\"testsFailed\":0}", MediaType.APPLICATION_JSON));
+
+        service.handleFixGenerated(Map.of("jobId", jobId.toString(), "patch", "diff"));
+
+        org.mockito.ArgumentCaptor<Object> payload = org.mockito.ArgumentCaptor.forClass(Object.class);
+        verify(kafkaTemplate).send(org.mockito.ArgumentMatchers.eq(ai.gitoracle.core.kafka.KafkaTopics.TESTS_PASSED),
+                                   payload.capture());
+        Map<String, String> event = (Map<String, String>) payload.getValue();
+        assertThat(event).containsEntry("testsTotal", "6").containsEntry("testsFailed", "0");
     }
 }
