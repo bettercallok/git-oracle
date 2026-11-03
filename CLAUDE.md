@@ -71,6 +71,8 @@ Note: `run_evals.py` drives cases through `POST /trigger`, which **defaults to `
 
 `ci.yml`'s `pipeline-e2e` job runs eval case1 through the real stack with the LLM replaced by `ai_core/tests/mock_llm_server.py` (port 18089; it answers by the schema `title` that `llm_structured` puts in the system message) and asserts the timeline and patch (`scripts/ci/e2e_check.py`). It needs the fixture repo's `case/npe` branch, which the Golden Dataset Eval publishes. Both workflows share `scripts/ci/write_env.sh` and `scripts/ci/start_stack.sh`.
 
+Kafka's host listener (`localhost:9092`) requires **SASL/PLAIN** (`KAFKA_SASL_USERNAME`/`KAFKA_SASL_PASSWORD`; `start_local.sh` generates the password, exports `KAFKA_SECURITY_PROTOCOL=SASL_PLAINTEXT`, and recreates a pre-SASL broker container); the internal `kafka:9094` listener used by containers stays PLAINTEXT. Java clients read it from `spring.kafka.properties` (copy them into any hand-built factory, as `OrchestratorApplication` does); Python clients from `shared/kafka_security.py`.
+
 The Kafka broker stores every topic **lz4-compressed** (`KAFKA_COMPRESSION_TYPE`, `create-topics.sh`) regardless of producer settings, so Python consumers need `aiokafka[lz4]` (cramjam on aiokafka ≥0.14 — a bare `lz4` package does nothing). Without it an agent's consumer can't decode a single message; `tests/test_kafka_codecs.py` guards this.
 
 ## Architecture

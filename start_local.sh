@@ -6,6 +6,13 @@ if [ ! -f .env ]; then
   make env-setup
 fi
 
+# Kafka's host listener requires SASL (security audit D4). Generate the
+# password once, into .env, if there isn't one yet.
+if ! grep -qE '^KAFKA_SASL_PASSWORD=.+' .env; then
+  echo "🔑 Generating KAFKA_SASL_PASSWORD in .env (Kafka's host listener now requires it)"
+  printf '\nKAFKA_SASL_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env
+fi
+
 # ─── Clear zombie processes on all service ports ───────────────
 # IMPORTANT: Only kill Java/Python/Node processes — never Docker processes.
 #
@@ -48,6 +55,14 @@ echo "🚀 Starting GitOracle Infrastructure (Docker)..."
 # triggered by 'docker compose up' events in certain Docker Desktop versions.
 if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "git-oracle-postgres"; then
   echo "✅ Infrastructure already running — skipping make infra-up"
+  # A broker started before the SASL change still has an unauthenticated host
+  # listener, and the services below would fail to log in to it. Recreate just
+  # that container (its data volume is kept).
+  if ! docker inspect git-oracle-kafka --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+       | grep -q 'EXTERNAL:SASL_PLAINTEXT'; then
+    echo "🔐 Recreating Kafka with SASL on its host listener..."
+    docker compose -f docker-compose.infra.yml up -d --wait kafka
+  fi
 else
   make infra-up
 fi
@@ -108,6 +123,9 @@ echo "☕ Building Java Microservices..."
 set -a
 source .env
 set +a
+# Everything started below runs on this host, so it reaches Kafka through the
+# SASL listener (containers use the internal PLAINTEXT one and keep the default).
+export KAFKA_SECURITY_PROTOCOL="${KAFKA_SECURITY_PROTOCOL:-SASL_PLAINTEXT}"
 
 # The Java services run from java-backend/, where a repo-root-relative key path
 # like ./secrets/github-app.pem doesn't resolve — the original reason the App

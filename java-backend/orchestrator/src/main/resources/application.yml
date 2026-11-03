@@ -41,6 +41,13 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
   kafka:
     bootstrap-servers: ${KAFKA_HOST:127.0.0.1}:${KAFKA_PORT:9092}
+    # SASL on the broker's host listener (security audit D4): host processes set
+    # KAFKA_SECURITY_PROTOCOL=SASL_PLAINTEXT (start_local.sh does); containers on
+    # the internal listener keep the PLAINTEXT default.
+    properties:
+      security.protocol: ${KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
+      sasl.mechanism: PLAIN
+      sasl.jaas.config: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="${KAFKA_SASL_USERNAME:gitoracle}" password="${KAFKA_SASL_PASSWORD:}";'
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
