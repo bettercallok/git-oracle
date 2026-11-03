@@ -9,6 +9,7 @@ import hashlib
 import difflib
 import shutil
 import git
+import httpx
 
 # Ensure ai_core modules can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -150,6 +151,74 @@ def extract_file_paths_from_text(text: str) -> List[str]:
     return list(dict.fromkeys(_FILE_PATH_RE.findall(text)))
 
 
+# A retry used to be told only "your patch failed the tests", never which test or
+# why. Eval case1 (job acce7f8e): the plan suggested Objects.requireNonNull, which
+# still throws a NullPointerException; the test said exactly that ("must not let a
+# raw NullPointerException escape ... validate explicitly instead"), but the model
+# never saw it, regenerated the identical patch twice, and the job escalated.
+# These pick the lines of a test run that say why it failed, for any framework.
+_FAILURE_LINE_RE = re.compile(r"fail|error|exception|assert|expected|traceback|^E\s", re.IGNORECASE)
+_FAILURE_NOISE = (
+    "Failures: 0, Errors: 0",          # a passing test class's summary line
+    "Please refer to", "[Help 1]", "-> [Help", "full stack trace", "Re-run Maven",
+    "For more information about the errors", "Failed to execute goal",
+)
+
+
+def summarize_test_failure(logs: str, max_chars: int = 1500) -> str:
+    """The failing tests and their messages from a test run's output — what the
+    model needs to change its approach — without stack frames, download progress
+    or build-tool boilerplate. Falls back to the end of the log when no line looks
+    like a failure (e.g. a crash with an unusual message)."""
+    picked: List[str] = []
+    for raw in (logs or "").splitlines():
+        line = raw.strip()
+        if line in ("", "[ERROR]", "[INFO]") or line.startswith("at "):
+            continue
+        if any(noise in line for noise in _FAILURE_NOISE):
+            continue
+        if _FAILURE_LINE_RE.search(line) and line not in picked:
+            picked.append(line)
+    summary = "\n".join(picked) or (logs or "").strip()[-max_chars:]
+    return summary[:max_chars]
+
+
+async def run_real_test(job_id: str, repo_path: str, repo_url: str, patch_diff: str,
+                        branch: str = "") -> tuple[bool, str]:
+    """Run the repo's test suite with the patch applied (Test Runner). Returns
+    (passed, test output) — the output is what the next attempt is shown."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "http://localhost:8084/test",
+                json={
+                    "jobId": job_id,
+                    "repoUrl": repo_url,
+                    "repoPath": repo_path,
+                    "patchDiff": patch_diff,
+                    "branch": branch,
+                    "framework": "UNKNOWN"  # let Test Runner auto-detect (pom.xml/package.json/etc.)
+                },
+                headers={"X-Internal-Token": os.environ.get("GITORACLE_INTERNAL_TOKEN", "")},
+                timeout=130.0
+            )
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"Real Test Runner result: {data.get('allPassed', data.get('success'))}")
+            passed = bool(data.get('allPassed', data.get('passed', data.get('success', False))))
+            logs = str(data.get('logs', '') or '')
+            if not passed:
+                logger.info(f"Test Logs: {logs}")
+            return passed, logs
+    except (httpx.HTTPError, ValueError) as e:  # unreachable/HTTP error, or a non-JSON reply
+        logger.error(f"Error calling real test runner: {e}")
+        return False, f"Could not run the tests: {e}"
+
+
+def _clip(text: str, limit: int = 1200) -> str:
+    return text if len(text) <= limit else text[:limit] + "\n[...truncated]"
+
+
 @app.post("/fix", response_model=PatchResult)
 async def execute_fix(request: FixerRequest):
     logger.info(f"Starting ReAct loop for job {request.job_id} in {request.repo_path}")
@@ -157,6 +226,10 @@ async def execute_fix(request: FixerRequest):
     memory = AgentMemory()
     seen_patches = set()
     hint = ""
+    # What the last tested patch was and why it failed — shown to every later
+    # attempt, including one that just repeats that patch.
+    last_failure = ""
+    last_failure_summary = ""
 
     # The fixer needs its own private, stable checkout to read source from across
     # every retry attempt. request.repo_path is shared with Test Runner (via
@@ -376,50 +449,26 @@ Do not write a diff yourself — the unified diff is computed automatically from
         # 5. Self-Healing Loop Detection
         patch_hash = hashlib.sha256(patch.diff.encode('utf-8')).hexdigest()
         if patch_hash in seen_patches:
+            # Only a tested patch is in seen_patches, and a passing one returns —
+            # so this exact patch already failed. Say so, with the reason.
             logger.warning("Loop detected! Agent generated the exact same patch.")
             await report_event(request.job_id, "fixer",
                                f"Attempt {attempt + 1}: produced the same patch as before — retrying",
                                details={"attempt": attempt + 1})
-            hint = "WARNING: Your previous patch failed the tests. You MUST try a fundamentally different approach. Do not output the same diff."
+            hint = (
+                "WARNING: You produced exactly the same edit as an attempt that already FAILED the tests. "
+                "Do not output it again — make a fundamentally different edit.\n" + last_failure
+            )
             continue
-        
+
         seen_patches.add(patch_hash)
-        
-        import httpx
-        
-        async def run_real_test(job_id: str, repo_path: str, repo_url: str, patch_diff: str, branch: str = "") -> bool:
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(
-                        "http://localhost:8084/test",
-                        json={
-                            "jobId": job_id,
-                            "repoUrl": repo_url,
-                            "repoPath": repo_path,
-                            "patchDiff": patch_diff,
-                            "branch": branch,
-                            "framework": "UNKNOWN"  # let Test Runner auto-detect (pom.xml/package.json/etc.)
-                        },
-                        headers={"X-Internal-Token": os.environ.get("GITORACLE_INTERNAL_TOKEN", "")},
-                        timeout=130.0
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-                    logger.info(f"Real Test Runner result: {data.get('allPassed', data.get('success'))}")
-                    passed = data.get('allPassed', data.get('passed', data.get('success', False)))
-                    if not passed:
-                        logger.info(f"Test Logs: {data.get('logs', '')}")
-                    return passed
-            except (httpx.HTTPError, ValueError) as e:  # unreachable/HTTP error, or a non-JSON reply
-                logger.error(f"Error calling real test runner: {e}")
-                return False
 
         # 6. Run tests (Layer 6 real execution)
         if request.job_id.startswith("mock-test-"):
             logger.info("Bypassing tests for mock-test- job.")
-            tests_passed = True
+            tests_passed, test_logs = True, ""
         else:
-            tests_passed = await run_real_test(
+            tests_passed, test_logs = await run_real_test(
                 request.job_id, request.repo_path, request.repo_url or "", patch.diff,
                 request.branch or ""
             )
@@ -439,10 +488,22 @@ Do not write a diff yourself — the unified diff is computed automatically from
                 
             return PatchResult(patch=patch, attempts=attempt + 1, success=True)
         else:
-            hint = f"WARNING: Your patch '{patch.summary}' failed the tests. Please try again and fix any syntax or logic errors."
-            
-    # Escalation
-    return PatchResult(patch=None, attempts=3, success=False, escalation_report="Fixer Agent exhausted all attempts and could not fix the bug.")
+            last_failure_summary = summarize_test_failure(test_logs)
+            last_failure = (
+                f"Your previous edit to {edit.file_path} replaced:\n{_clip(edit.search)}\n"
+                f"with:\n{_clip(edit.replace)}\n"
+                f"and the tests FAILED:\n{last_failure_summary}\n"
+                "The tests are the source of truth: where they contradict the Architect's Blueprint "
+                "(its suggested approach or its line limit), satisfy the tests. "
+                "Make a different edit that resolves the failure above."
+            )
+            hint = "WARNING: Your previous patch failed the tests.\n" + last_failure
+
+    # Escalation — with the last test failure, so the job's reason says why.
+    report = "Fixer Agent exhausted all attempts and could not fix the bug."
+    if last_failure_summary:
+        report += " Last test failure:\n" + last_failure_summary[:1000]
+    return PatchResult(patch=None, attempts=3, success=False, escalation_report=report)
 
 from shared.kafka_consumer import KafkaEventConsumer
 from shared import topics
