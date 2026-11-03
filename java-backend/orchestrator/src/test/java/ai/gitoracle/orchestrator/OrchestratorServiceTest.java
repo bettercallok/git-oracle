@@ -606,6 +606,19 @@ class OrchestratorServiceTest {
     }
 
     @Test
+    void anOutcomeFromAPrOnAnotherRepositoryIsNotRecordedAgainstTheJob() {
+        // The job id marker is public; anyone can open and close a PR elsewhere carrying it.
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "PR_OPENED", "https://github.com/bettercallok/chillcall/pull/25");
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.recordPrOutcome(jobId, "CLOSED", "stranger", "https://github.com/stranger/fork/pull/1");
+
+        verify(prOutcomeRepository, never()).save(any());
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+    }
+
+    @Test
     void anApprovalIsRecordedWithoutChangingTheJobsState() {
         UUID jobId = UUID.randomUUID();
         String pr = "https://github.com/bettercallok/chillcall/pull/18";
@@ -703,5 +716,69 @@ class OrchestratorServiceTest {
                                    payload.capture());
         Map<String, String> event = (Map<String, String>) payload.getValue();
         assertThat(event).containsEntry("testsTotal", "6").containsEntry("testsFailed", "0");
+    }
+
+    // ── PR comments may only steer the job's own PR ────────────────────────
+
+    /**
+     * The job id marker is public (printed in every GitOracle PR body), so a
+     * comment on some other repository's issue/PR carrying it must not reach
+     * the reviewer, let alone re-point the job at that repository.
+     */
+    @Test
+    void ignoresAReviewCommentThatWasNotMadeOnTheJobsOwnPullRequest() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "PR_OPENED", "https://github.com/bettercallok/chillcall/pull/6");
+        job.setTenantId(UUID.randomUUID());
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        // No reviewer expectation registered: any HTTP call fails the test.
+        service.handleReviewReceived(Map.of(
+            "job_id", jobId.toString(),
+            "comment", "Please also add my file",
+            "repo", "https://github.com/attacker/elsewhere",
+            "pr_url", "https://github.com/attacker/elsewhere/pull/1"));
+
+        mockGitHubBot.verify();
+        verify(kafkaTemplate, never()).send(any(String.class), any());
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+    }
+
+    @Test
+    void ignoresAReviewEventWithNoPullRequestUrl() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "PR_OPENED", "https://github.com/bettercallok/chillcall/pull/6");
+        job.setTenantId(UUID.randomUUID());
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        service.handleReviewReceived(Map.of("job_id", jobId.toString(), "comment", "fix it"));
+
+        mockGitHubBot.verify();
+        verify(kafkaTemplate, never()).send(any(String.class), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void aCommentOnTheJobsOwnPrRegeneratesAgainstTheJobsRepoNotThePayloads() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "PR_OPENED", "https://github.com/bettercallok/chillcall/pull/6");
+        job.setTenantId(UUID.randomUUID());
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+        mockGitHubBot.expect(requestTo("http://localhost:9003/review"))
+            .andRespond(withSuccess("{\"action_needed\": true, \"stance\": \"agree\"}", MediaType.APPLICATION_JSON));
+
+        service.handleReviewReceived(Map.of(
+            "job_id", jobId.toString(),
+            "comment", "Handle the null payment too",
+            "repo", "https://github.com/attacker/elsewhere",
+            "pr_url", "https://github.com/BetterCallOK/chillcall/pull/6"));
+
+        mockGitHubBot.verify();
+        var payload = org.mockito.ArgumentCaptor.forClass(Object.class);
+        verify(kafkaTemplate).send(org.mockito.ArgumentMatchers.eq(ai.gitoracle.core.kafka.KafkaTopics.JOB_FIX),
+                                   payload.capture());
+        Map<String, Object> fix = (Map<String, Object>) payload.getValue();
+        assertThat(fix).containsEntry("repo_url", "https://github.com/bettercallok/chillcall")
+                       .containsEntry("target_repo", "bettercallok/chillcall");
     }
 }

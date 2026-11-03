@@ -27,6 +27,14 @@ public class WebhookController {
     private static final Pattern JOB_ID_PATTERN =
         Pattern.compile("<!--\\s*gitoracle:job_id:([0-9a-fA-F\\-]{36})\\s*-->");
 
+    /**
+     * GitHub's author_association values for people with write-level standing
+     * on the repository. CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, FIRST_TIMER,
+     * MANNEQUIN and NONE are all reachable by an outsider.
+     */
+    static final java.util.Set<String> TRUSTED_COMMENTER_ASSOCIATIONS =
+        java.util.Set.of("OWNER", "MEMBER", "COLLABORATOR");
+
     private final SemanticDedupService dedupService;
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final DeliveryReplayGuard replayGuard;
@@ -167,8 +175,33 @@ public class WebhookController {
         String commentBody = (String) comment.get("body");
         if (commentBody == null || commentBody.isBlank()) return ResponseEntity.accepted().build();
 
-        // Extract PR body (contains the embedded job_id marker)
+        // Who may steer a fix. A comment's text becomes the Fixer's
+        // human_instructions, and the regenerated patch is pushed onto the PR
+        // branch with the App's credentials. Anyone with a GitHub account can
+        // comment on a public repository's PR, so without this check any
+        // passer-by could instruct GitOracle to rewrite a PR a maintainer had
+        // already reviewed. Only people GitHub itself reports as having a
+        // standing relationship to the repository count; bots (GitOracle's own
+        // "regenerated this fix" comments included) never do.
+        Map<String, Object> commentSender = (Map<String, Object>) payload.get("sender");
+        if (commentSender != null && "Bot".equals(commentSender.get("type"))) {
+            logger.info("Ignoring {} from a bot account.", eventType);
+            return ResponseEntity.accepted().build();
+        }
+        Object association = comment.get("author_association");
+        if (!(association instanceof String a) || !TRUSTED_COMMENTER_ASSOCIATIONS.contains(a)) {
+            logger.info("Ignoring {} from a commenter with author_association={} — only {} may request a regeneration.",
+                eventType, association, TRUSTED_COMMENTER_ASSOCIATIONS);
+            return ResponseEntity.accepted().build();
+        }
+
+        // Extract PR body (contains the embedded job_id marker) and the PR's own
+        // URL. The marker alone proves nothing: every GitOracle PR body shows
+        // its job id publicly, so anyone can paste it into an issue or PR of
+        // their own. The orchestrator therefore only acts when prUrl is the
+        // job's recorded PR.
         String jobId = null;
+        String prUrl = null;
 
         // Try pull_request block first (review comment)
         Map<String, Object> pr = (Map<String, Object>) payload.get("pull_request");
@@ -176,17 +209,24 @@ public class WebhookController {
             String prBody = (String) pr.get("body");
             if (prBody != null) {
                 Matcher m = JOB_ID_PATTERN.matcher(prBody);
-                if (m.find()) jobId = m.group(1);
+                if (m.find()) {
+                    jobId = m.group(1);
+                    prUrl = (String) pr.get("html_url");
+                }
             }
         }
-        // Fallback: try issue block (issue_comment on PR)
+        // Fallback: try issue block (issue_comment on PR). Only a PR's issue:
+        // a plain issue carrying a copied marker is not a GitOracle PR.
         if (jobId == null) {
             Map<String, Object> issue = (Map<String, Object>) payload.get("issue");
-            if (issue != null) {
+            if (issue != null && issue.get("pull_request") != null) {
                 String issueBody = (String) issue.get("body");
                 if (issueBody != null) {
                     Matcher m = JOB_ID_PATTERN.matcher(issueBody);
-                    if (m.find()) jobId = m.group(1);
+                    if (m.find()) {
+                        jobId = m.group(1);
+                        prUrl = (String) issue.get("html_url");
+                    }
                 }
             }
         }
@@ -210,6 +250,7 @@ public class WebhookController {
             reviewEvent.put("repo",        "https://github.com/" + repoFullName);
             reviewEvent.put("event_type",  eventType);
             reviewEvent.put("tenant_id",   tenantId.toString());
+            reviewEvent.put("pr_url",      prUrl != null ? prUrl : "");
 
             kafkaTemplate.send(KafkaTopics.JOB_REVIEW_RECEIVED, reviewEvent);
         } else {

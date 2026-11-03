@@ -127,6 +127,24 @@ public class OrchestratorService {
     @Transactional
     public void recordPrOutcome(UUID jobId, String outcome, String reviewer, String prUrl) {
         String url = prUrl == null ? "" : prUrl;
+        // The job id marker is public, so a PR on any repository can claim to
+        // be this job's. An outcome is only this job's if the PR lives on the
+        // repository the job's own PR (or, before it has one, its source repo)
+        // is on; otherwise a stranger closing a PR they opened could write
+        // "CLOSED" rows into another tenant's merge-rate statistics.
+        if (!url.isBlank()) {
+            var owner = jobRepository.findById(jobId);
+            String outcomeRepo = repositoryOfPullRequest(url);
+            String jobRepo = owner.map(j -> !repositoryOfPullRequest(j.getPrUrl()).isEmpty()
+                    ? repositoryOfPullRequest(j.getPrUrl())
+                    : String.valueOf(j.getRepo()).replaceFirst("^https://github\\.com/", "").replaceFirst("\\.git$", ""))
+                .orElse("");
+            if (outcomeRepo.isEmpty() || !outcomeRepo.equalsIgnoreCase(jobRepo)) {
+                logger.warn("Ignoring PR outcome {} for job {}: {} is not on the job's repository ({})",
+                            outcome, jobId, url, jobRepo.isEmpty() ? "no such job" : jobRepo);
+                return;
+            }
+        }
         if (prOutcomeRepository.existsByJobIdAndOutcomeAndPrUrl(jobId, outcome, url)) {
             logger.info("PR outcome {} for job {} ({}) already recorded — ignoring duplicate.", outcome, jobId, url);
             return;
@@ -661,7 +679,7 @@ public class OrchestratorService {
     public void handleReviewReceived(Map<String, Object> event) {
         String jobIdStr  = (String) event.get("job_id");
         String comment   = (String) event.get("comment");
-        String repo      = (String) event.get("repo");
+        String commentPr = (String) event.get("pr_url");
 
         if (jobIdStr == null || comment == null) {
             logger.warn("Review event missing job_id or comment — ignoring");
@@ -670,9 +688,29 @@ public class OrchestratorService {
 
         logger.info("Orchestrator received review comment for job: {} — calling Reviewer Agent", jobIdStr);
 
-        AgentJob job = jobRepository.findById(UUID.fromString(jobIdStr)).orElse(null);
+        AgentJob job;
+        try {
+            job = jobRepository.findById(UUID.fromString(jobIdStr)).orElse(null);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Review event carried a non-UUID job_id '{}' — ignoring", jobIdStr);
+            return;
+        }
         if (job == null) {
             logger.warn("Job {} not found for review event", jobIdStr);
+            return;
+        }
+
+        // The comment must be on THIS job's pull request. The job id marker the
+        // event was matched on is printed in every GitOracle PR body, so it is
+        // public: anyone could paste it into an issue or PR on a repository of
+        // their own, and the event's "repo" was then used as the new fix
+        // cycle's repo_url AND target_repo — one tenant's job (and its cloned
+        // workspace) re-pointed at an attacker's repository, by a stranger.
+        // Comparing against the PR URL recorded when github-bot opened the PR
+        // ties the comment to the one place it may legitimately come from.
+        if (!samePullRequest(commentPr, job.getPrUrl())) {
+            logger.warn("Ignoring review comment for job {}: it was made on {}, not the job's own PR {}",
+                        jobIdStr, commentPr, job.getPrUrl());
             return;
         }
 
@@ -705,11 +743,12 @@ public class OrchestratorService {
                     "Reviewer agreed with a PR comment — regenerating: " + comment, "reviewer");
 
                 String repoPath    = "/tmp/gitoracle-workspaces/" + jobIdStr;
-                String repoForPr   = repo != null ? repo.replace("https://github.com/", "") : "";
+                // From the job's own PR, never from the webhook payload.
+                String repoForPr   = repositoryOfPullRequest(job.getPrUrl());
 
                 Map<String, Object> fixPayload = new HashMap<>();
                 fixPayload.put("job_id",              jobIdStr);
-                fixPayload.put("repo_url",            repo != null ? repo : job.getRepo());
+                fixPayload.put("repo_url",            job.getRepo());
                 fixPayload.put("repo_path",           repoPath);
                 fixPayload.put("error_id",            job.getErrorId());
                 fixPayload.put("human_instructions",  comment);
@@ -752,6 +791,26 @@ public class OrchestratorService {
         Double confidence = event.get("confidenceScore") instanceof Number n ? n.doubleValue() : null;
         jobRepository.findById(UUID.fromString(jobIdStr))
             .ifPresent(job -> escalations.escalate(job, reason, actor, confidence));
+    }
+
+    private static final java.util.regex.Pattern PULL_REQUEST_URL =
+        java.util.regex.Pattern.compile("^https://github\\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)/pull/(\\d+)/?$");
+
+    /** True when both are the same GitHub pull request URL (case-insensitive owner/repo). */
+    static boolean samePullRequest(String a, String b) {
+        if (a == null || b == null) return false;
+        var ma = PULL_REQUEST_URL.matcher(a.trim());
+        var mb = PULL_REQUEST_URL.matcher(b.trim());
+        return ma.matches() && mb.matches()
+            && ma.group(1).equalsIgnoreCase(mb.group(1))
+            && ma.group(2).equals(mb.group(2));
+    }
+
+    /** "owner/repo" of a GitHub pull request URL, or "" (= the job's own repo downstream). */
+    static String repositoryOfPullRequest(String prUrl) {
+        if (prUrl == null) return "";
+        var m = PULL_REQUEST_URL.matcher(prUrl.trim());
+        return m.matches() ? m.group(1) : "";
     }
 
     /** The investigator's narrative stored on the job, or null (direct fix, or unparseable). */
