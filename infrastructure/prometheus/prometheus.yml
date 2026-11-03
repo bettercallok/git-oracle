@@ -8,10 +8,18 @@ global:
 rule_files:
   - /etc/prometheus/rules/*.yml
 
+# Every GitOracle service runs on the host (start_local.sh) bound to
+# 127.0.0.1 and is reached as host.docker.internal. That works on Docker
+# Desktop (macOS/Windows), which forwards to the host's loopback. On Docker
+# Engine for Linux, host.docker.internal is the bridge gateway and loopback-only
+# services are unreachable from it: start the services with
+# SERVER_BIND_HOST=0.0.0.0 / BIND_HOST=0.0.0.0 behind a host firewall, or run
+# Prometheus with network_mode: host and these targets as localhost:<port>.
+
 scrape_configs:
 
   # ─── Spring Boot Services (via Actuator /actuator/prometheus) ─
-  # api-gateway exposes /actuator/prometheus too but was never scraped.
+  # /actuator is exempt from each service's X-Internal-Token check.
   - job_name: 'api-gateway'
     metrics_path: '/actuator/prometheus'
     static_configs:
@@ -61,10 +69,8 @@ scrape_configs:
           layer: 'java-service'
 
   # ─── Python AI Agents (via /metrics endpoint) ─────────────────
-  # NOTE: no agent serves /metrics yet, so these scrapes fail (up == 0) by
-  # design for now — the alert rules only use up{layer="java-service"}.
-  # Agent liveness is /health (shared/health.py) plus start_local.sh's
-  # restart loop.
+  # Served by every agent through shared/health.add_health_route →
+  # shared/metrics.py, exempt from X-Internal-Token like /health.
   - job_name: 'investigator-agent'
     metrics_path: '/metrics'
     static_configs:
@@ -124,9 +130,10 @@ scrape_configs:
           layer: 'ai-infra'
 
   # ─── Infrastructure Services ──────────────────────────────────
+  # Was kafka:9101 — nothing listened there (no JMX exporter on the broker).
   - job_name: 'kafka'
     static_configs:
-      - targets: ['kafka:9101']
+      - targets: ['kafka-exporter:9308']
         labels:
           service: 'kafka'
           layer: 'infrastructure'
@@ -145,13 +152,9 @@ scrape_configs:
           service: 'postgres'
           layer: 'infrastructure'
 
-  - job_name: 'neo4j'
-    metrics_path: '/metrics'
-    static_configs:
-      - targets: ['neo4j:2004']
-        labels:
-          service: 'neo4j'
-          layer: 'infrastructure'
+  # No neo4j job: its Prometheus endpoint (:2004) is a Neo4j Enterprise
+  # feature, and this stack runs Community Edition, so the target could never
+  # come up. git-forensics' own metrics cover the queries GitOracle makes.
 
   - job_name: 'prometheus'
     static_configs:

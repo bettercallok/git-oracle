@@ -9,9 +9,8 @@ datasources:
     isDefault: true
     jsonData:
       httpMethod: POST
-      exemplarTraceIdDestinations:
-        - name: trace_id
-          datasourceUid: tempo
+      # No exemplarTraceIdDestinations: it linked to a "tempo" datasource that
+      # was never provisioned (there is no Tempo in this stack).
 
   - name: PostgreSQL
     type: postgres
@@ -21,7 +20,8 @@ datasources:
     secureJsonData:
       password: ${GF_DATASOURCE_PG_PASSWORD}
     jsonData:
-      database: gitOracle
+      # Was hardcoded to gitOracle; follows POSTGRES_DB like the postgres container.
+      database: ${GF_DATASOURCE_PG_DATABASE}
       sslmode: disable
       maxOpenConns: 5
       maxIdleConns: 2

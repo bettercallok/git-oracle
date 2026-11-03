@@ -26,8 +26,10 @@ from aiokafka import AIOKafkaConsumer
 
 from shared import topics
 from shared.kafka_producer import get_producer
+from shared.metrics import KAFKA_MESSAGES, canonical_agent
 
 logger = logging.getLogger(__name__)
+
 
 DLQ_TOPIC = topics.JOB_DLQ
 ESCALATION_TOPIC = topics.JOB_ESCALATED
@@ -110,6 +112,7 @@ class KafkaEventConsumer:
             logger.error(f"Undecodable message on {self.topic}: {e}")
             await self._dead_letter(raw.decode("utf-8", errors="replace") if raw else None,
                                     f"undecodable message: {e}", None)
+            self._count("dead_lettered")
             return
 
         # Every handler expects an event object. An empty message (raw None — a
@@ -118,17 +121,23 @@ class KafkaEventConsumer:
         if not isinstance(payload, dict):
             logger.error(f"Non-object message on {self.topic}: {type(payload).__name__}")
             await self._dead_letter(payload, f"not a JSON object: {type(payload).__name__}", None)
+            self._count("dead_lettered")
             return
 
         logger.debug(f"Received event: {payload}")
         try:
             await message_handler(payload)
+            self._count("handled")
         except Exception as e:
+            self._count("failed")
             job_id = _job_id(payload)
             logger.exception(f"{self.agent_name} failed on a {self.topic} message (job {job_id})")
             await self._dead_letter(payload, repr(e), job_id)
             if job_id:
                 await self._escalate(job_id, f"{self.agent_name} crashed while handling the job: {e}")
+
+    def _count(self, outcome: str) -> None:
+        KAFKA_MESSAGES.labels(agent=canonical_agent(self.agent_name), topic=self.topic, outcome=outcome).inc()
 
     async def _dead_letter(self, payload: Any, error: str, job_id: Optional[str]) -> None:
         try:

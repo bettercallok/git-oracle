@@ -344,6 +344,56 @@ services:
     logging: *default-logging
 
   # ============================================================
+  # Metrics exporters for the infrastructure Prometheus scrapes.
+  # prometheus.yml scraped redis-exporter:9121, postgres-exporter:9187 and
+  # kafka:9101, none of which existed, so those three targets were always
+  # down. Each is tiny; mem_limit keeps them inside the 8GB budget.
+  # ============================================================
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    container_name: git-oracle-redis-exporter
+    restart: unless-stopped
+    mem_limit: 32m
+    networks: [ git-oracle-net ]
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging: *default-logging
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: git-oracle-postgres-exporter
+    restart: unless-stopped
+    mem_limit: 48m
+    networks: [ git-oracle-net ]
+    environment:
+      DATA_SOURCE_URI: postgres:5432/${POSTGRES_DB:-gitOracle}?sslmode=disable
+      DATA_SOURCE_USER: ${POSTGRES_USER:-gitOracle}
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *default-logging
+
+  # Topic offsets, partition counts and consumer-group lag — the numbers that
+  # say an agent has stopped keeping up. Kafka itself exposes no Prometheus
+  # endpoint without a JMX agent; this reads the same data over the protocol.
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.8.0
+    container_name: git-oracle-kafka-exporter
+    restart: unless-stopped
+    mem_limit: 48m
+    networks: [ git-oracle-net ]
+    command: [ "--kafka.server=kafka:9094" ]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    logging: *default-logging
+
+  # ============================================================
   # Prometheus — Metrics Collection
   # Scrapes all Spring Boot services and Python agents
   # ============================================================
@@ -399,8 +449,10 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_SERVER_DOMAIN: localhost
       GF_SERVER_ROOT_URL: http://localhost:${GRAFANA_PORT:-3001}
-      GF_INSTALL_PLUGINS: grafana-piechart-panel
+      # No GF_INSTALL_PLUGINS: it fetched grafana-piechart-panel (a deprecated
+      # Angular plugin no panel uses) from the internet on every start.
       # Datasource env vars (for PostgreSQL datasource)
+      GF_DATASOURCE_PG_DATABASE: ${POSTGRES_DB:-gitOracle}
       GF_DATASOURCE_PG_USER: ${POSTGRES_USER:-gitOracle}
       GF_DATASOURCE_PG_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:

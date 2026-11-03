@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import asyncio
 import random
@@ -7,6 +8,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Type, TypeVar, Dict, List, Optional
 from pydantic import BaseModel, ValidationError
+
+from shared.metrics import LLM_LATENCY, LLM_REQUESTS, LLM_TOKENS, canonical_agent
 from dotenv import load_dotenv, find_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -262,7 +265,7 @@ async def _execute_with_rate_limit_backoff(client: httpx.AsyncClient, base_url: 
 
 # ─── Core Function ────────────────────────────────────────────────────────────
 
-async def llm_structured(
+async def _llm_structured(
     messages: List[Dict[str, str]],
     output_schema: Type[T],
     max_tokens: int = 2048,
@@ -368,6 +371,9 @@ async def llm_structured(
                 raw_content = data["choices"][0]["message"]["content"]
                 usage       = data.get("usage", {})
             tokens_used = usage.get("total_tokens", 0)
+            _agent = canonical_agent(agent_name)
+            LLM_TOKENS.labels(agent=_agent, kind="prompt").inc(usage.get("prompt_tokens", 0) or 0)
+            LLM_TOKENS.labels(agent=_agent, kind="completion").inc(usage.get("completion_tokens", 0) or 0)
 
             # 4. Report tokens to the Java Orchestrator budget tracker
             if job_id and tokens_used:
@@ -406,3 +412,43 @@ async def llm_structured(
         except Exception as e:
             logger.error(f"Failed to parse LLM structured output: {e}")
             raise
+
+
+async def llm_structured(
+    messages: List[Dict[str, str]],
+    output_schema: Type[T],
+    max_tokens: int = 2048,
+    temperature: float = 0.2,
+    base_url: Optional[str] = None,  # None: LLM_BASE_URL from the environment, read per call
+    job_id:     Optional[str] = None,
+    agent_name: str = "unknown",
+    trace_id:   Optional[str] = None,
+) -> T:
+    """
+    _llm_structured, counted for Prometheus (shared/metrics.py): one
+    gitoracle_llm_requests_total per call by outcome, and its latency.
+
+    outcome: ok · schema_error (the reply didn't fit the schema) ·
+    provider_error (the provider refused or errored) · unavailable (primary and
+    fallback both unreachable).
+    """
+    agent = canonical_agent(agent_name)
+    outcome = "provider_error"
+    started = time.monotonic()
+    try:
+        # Read when called, not frozen at import: the default used to be the
+        # module constant, fixed by whichever import of this module came first.
+        url = base_url or os.environ.get("LLM_BASE_URL") or LLM_BASE_URL
+        result = await _llm_structured(messages, output_schema, max_tokens=max_tokens, temperature=temperature,
+                                       base_url=url, job_id=job_id, agent_name=agent_name, trace_id=trace_id)
+        outcome = "ok"
+        return result
+    except ValidationError:
+        outcome = "schema_error"
+        raise
+    except LLMUnavailableError:
+        outcome = "unavailable"
+        raise
+    finally:
+        LLM_REQUESTS.labels(agent=agent, outcome=outcome).inc()
+        LLM_LATENCY.labels(agent=agent).observe(time.monotonic() - started)

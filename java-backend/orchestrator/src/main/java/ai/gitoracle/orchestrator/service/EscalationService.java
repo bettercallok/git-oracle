@@ -43,6 +43,14 @@ public class EscalationService {
         this.escalationRows = escalationRows;
     }
 
+    private PipelineMetrics metrics = PipelineMetrics.noop();
+
+    /** Optional, so the many tests that build this directly don't need a registry. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setMetrics(PipelineMetrics metrics) {
+        this.metrics = metrics;
+    }
+
     /**
      * Escalates {@code job} for human review. Returns true only if an Escalation
      * row was created.
@@ -88,6 +96,7 @@ public class EscalationService {
         escalation.setConfidenceScore(confidence);
         escalation.setStatus("PENDING");
         entityManager.persist(escalation);
+        metrics.escalationQueued(actor);
         return true;
     }
 

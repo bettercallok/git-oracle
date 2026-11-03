@@ -1,0 +1,77 @@
+# Unit tests for ../rules/gitoracle.yml. Run:
+#   promtool test rules infrastructure/prometheus/tests/gitoracle_rules_test.yml
+# (CI runs this in the python-lint job.)
+rule_files:
+  - ../rules/gitoracle.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: an agent that stops answering alerts after 2 minutes, a healthy one never
+    interval: 1m
+    input_series:
+      - series: 'up{layer="ai-agent", service="fixer"}'
+        values: '1 1 0 0 0 0'
+      - series: 'up{layer="ai-agent", service="planner"}'
+        values: '1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AgentDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: AgentDown
+        exp_alerts:
+          - exp_labels: { severity: critical, layer: ai-agent, service: fixer }
+            exp_annotations:
+              summary: "fixer agent is down"
+              description: "Prometheus has not been able to scrape the fixer agent for 2 minutes. Check supervisor.log."
+
+  - name: most LLM calls failing alerts; a single failure among few calls does not
+    interval: 1m
+    input_series:
+      # fixer: 2 failures/min, 1 success/min — 67% failing, plenty of calls
+      - series: 'gitoracle_llm_requests_total{agent="fixer", outcome="provider_error"}'
+        values: '0+2x20'
+      - series: 'gitoracle_llm_requests_total{agent="fixer", outcome="ok"}'
+        values: '0+1x20'
+      # planner: one failure in 20 minutes, below the minimum-calls floor
+      - series: 'gitoracle_llm_requests_total{agent="planner", outcome="schema_error"}'
+        values: '0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'gitoracle_llm_requests_total{agent="planner", outcome="ok"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LLMCallsFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, agent: fixer }
+            exp_annotations:
+              summary: "Most of fixer's LLM calls are failing"
+              description: "66.67% of fixer's LLM calls failed over 10 minutes. Check the provider (LLM_BASE_URL, key, rate limit) and the error in the job's LLM trace."
+
+  - name: a dead Kafka consumer alerts
+    interval: 1m
+    input_series:
+      - series: 'gitoracle_kafka_consumer_up{agent="planner", topic="job.events.plan"}'
+        values: '1 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AgentConsumerDown
+        exp_alerts:
+          - exp_labels: { severity: critical, agent: planner, topic: job.events.plan }
+            exp_annotations:
+              summary: "planner is not consuming job.events.plan"
+              description: "The planner agent's Kafka consumer has been down for 2 minutes; jobs will stall at that stage."
+
+  - name: the first watchdog escalation is enough to alert
+    interval: 1m
+    input_series:
+      - series: 'gitoracle_watchdog_escalations_total{state="FIXING"}'
+        values: '0 0 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: JobsStalling
+        exp_alerts:
+          - exp_labels: { severity: warning, state: FIXING }
+            exp_annotations:
+              summary: "Jobs stalled in FIXING"
+              description: "The watchdog escalated 1 job(s) stuck in FIXING in the last 15 minutes. Check that state's agent (/health) and supervisor.log."
