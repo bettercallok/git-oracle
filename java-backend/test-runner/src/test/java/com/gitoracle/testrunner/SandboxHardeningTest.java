@@ -188,4 +188,45 @@ class SandboxHardeningTest {
         assertThat(shellArg).contains("exit 91");
         assertThat(shellArg.indexOf("ls -A /repo")).isLessThan(shellArg.indexOf("some test command"));
     }
+
+    // ─── Dependency cache: persists per (tenant, repository) ──────────────
+
+    private List<String> buildWithCache(TestFramework framework, String cacheKey) throws Exception {
+        setField("workspaceRoot", workDir.toString());
+        return controller.buildDockerRunCommand(workDir, new TestRunnerController.FrameworkConfig(framework, "."),
+            "/repo/.", "some-image@sha256:abc", "some test command", cacheKey);
+    }
+
+    @Test
+    void mavenGetsAPersistentRepositoryCacheUnderTheWorkspaceRoot() throws Exception {
+        setField("dependencyCacheEnabled", true);
+        String key = controller.dependencyCacheKey("tenant-a", "https://github.com/o/r");
+        List<String> cmd = buildWithCache(TestFramework.MAVEN, key);
+
+        String mount = workDir.resolve(".dep-cache").resolve(key).resolve("m2").toAbsolutePath() + ":/tmp/.m2:rw";
+        assertThat(cmd).containsSubsequence("-v", mount);
+        assertThat(cmd).contains("--read-only");               // the cache doesn't loosen anything else
+    }
+
+    @Test
+    void cachesAreSeparatePerTenantAndPerRepository() throws Exception {
+        setField("dependencyCacheEnabled", true);
+        String a = controller.dependencyCacheKey("tenant-a", "https://github.com/o/r");
+
+        assertThat(controller.dependencyCacheKey("tenant-b", "https://github.com/o/r")).isNotEqualTo(a);
+        assertThat(controller.dependencyCacheKey("tenant-a", "https://github.com/o/other")).isNotEqualTo(a);
+        assertThat(controller.dependencyCacheKey("tenant-a", "https://github.com/O/R.git")).isEqualTo(a);
+        assertThat(a).matches("[0-9a-f]{24}");                 // path-safe, never the raw URL
+    }
+
+    @Test
+    void noCacheWhenDisabledOrWithoutARepository() throws Exception {
+        setField("dependencyCacheEnabled", false);
+        assertThat(controller.dependencyCacheKey("t", "https://github.com/o/r")).isNull();
+        setField("dependencyCacheEnabled", true);
+        assertThat(controller.dependencyCacheKey("t", " ")).isNull();
+
+        List<String> cmd = buildWithCache(TestFramework.MAVEN, null);
+        assertThat(String.join(" ", cmd)).doesNotContain("/tmp/.m2");
+    }
 }

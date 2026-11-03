@@ -63,7 +63,10 @@ def offline_llm(monkeypatch):
     real_post = httpx.AsyncClient.post
 
     async def post(self, url, *args, **kwargs):
-        if str(url) == LLM_URL:
+        # Any chat-completions URL, not just LLM_URL: structured_output reads
+        # LLM_BASE_URL once at import (and binds it as a default argument), so
+        # if another test file imported it first, it still has the real URL.
+        if str(url).endswith("/chat/completions"):
             body = kwargs.get("json") or {}
             messages = body.get("messages", [])
             system = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
