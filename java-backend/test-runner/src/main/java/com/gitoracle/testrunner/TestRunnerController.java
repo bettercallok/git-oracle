@@ -235,6 +235,21 @@ public class TestRunnerController {
         };
     }
 
+    private static final Pattern JOB_ID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_-]{0,63}");
+
+    /**
+     * The per-job workspace, or null when {@code jobId} could address anything
+     * other than a direct child of the workspace root. The pattern alone already
+     * excludes separators and dot segments; the containment check is kept so the
+     * guarantee does not rest on the regex.
+     */
+    Path workspaceFor(String jobId) {
+        if (jobId == null || !JOB_ID.matcher(jobId).matches()) return null;
+        Path root = Path.of(workspaceRoot).toAbsolutePath().normalize();
+        Path candidate = root.resolve(jobId).normalize();
+        return root.equals(candidate.getParent()) ? candidate : null;
+    }
+
     private boolean isNativeFallbackAuthorized(String repoUrl) {
         return allowUnsafeNativeTests && !trustedRepos.isEmpty()
             && repoUrl != null && trustedRepos.contains(repoUrl);
@@ -289,7 +304,16 @@ public class TestRunnerController {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
         }
 
-        Path workDir = Path.of(workspaceRoot, jobId);
+        // jobId comes straight from the request body and names the directory
+        // that is deleted (recursively) before the clone and again in the
+        // finally below. Unchecked, {"jobId": "../../../home/app/data"}
+        // resolved outside the workspace root and deleteDirectory removed it.
+        Path workDir = workspaceFor(jobId);
+        if (workDir == null) {
+            logger.warn("Rejected test request: jobId {} is not a plain identifier", jobId);
+            return ResponseEntity.badRequest().body(new TestResult(false, 0.0, 0.0,
+                "Rejected: jobId must be 1-64 characters of letters, digits, '-' or '_'"));
+        }
 
         try {
             // ── Step 2: Clone ──────────────────────────────────────────────────
