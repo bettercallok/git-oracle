@@ -1,29 +1,16 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, CheckCircle2, Loader2, AlertCircle, GitPullRequest, GitPullRequestClosed, RefreshCw, Send, ExternalLink } from 'lucide-react';
+import {
+  CheckCircle2, Loader2, GitPullRequest, GitPullRequestClosed, RefreshCw, Send,
+  ExternalLink, Circle, XCircle, PauseCircle, MinusCircle, SearchX,
+} from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import { stateMeta, isRunning } from '../utils/jobState';
-
-/** Safely format a timestamp from the backend.
- *  Handles: null, undefined, epoch (Jan 1 1970) and valid ISO strings.
- *  Returns a human-readable local date+time string. */
-const formatTime = (raw: string | null | undefined): string => {
-  if (!raw) return '—';
-  const d = new Date(raw);
-  if (isNaN(d.getTime())) return '—';
-  // Epoch or near-epoch means the DB had no timestamp yet
-  if (d.getFullYear() < 2000) return '—';
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: true,
-  });
-};
+import { stateMeta, isRunning, PIPELINE_STAGES, stageIndex } from '../utils/jobState';
+import { containerVariants, itemVariants } from '../utils/motion';
+import { duration, formatNumber, formatTime, shortRepo, shortSha } from '../utils/format';
+import { PageHeader, Alert, EmptyState, LoadingState } from '../components/ui';
 
 interface Job {
   id: string;
@@ -68,26 +55,61 @@ const fetchEvents = async (id: string): Promise<JobEvent[]> => {
 // defaulted to :3000, where nothing listens, so the link always went nowhere.
 const LANGFUSE_URL = import.meta.env.VITE_LANGFUSE_URL || 'http://localhost:3002';
 
-/** "2m 14s" between two timestamps; empty when either is missing. */
-const duration = (from: string, to?: string | null): string => {
-  if (!to) return '';
-  const ms = new Date(to).getTime() - new Date(from).getTime();
-  if (!(ms >= 0)) return '';
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+type StepStatus = 'done' | 'current' | 'pending' | 'skipped' | 'failed' | 'halted';
+
+/**
+ * Where the job is in the pipeline, worked out from its state and timeline.
+ * A stage the timeline never entered but the job is already past (a direct-fix
+ * job skips investigate and plan) is "skipped", not "done".
+ */
+function pipelineSteps(state: string, events: JobEvent[]) {
+  const changes = events.filter(e => e.type === 'STATE_CHANGE' && e.toState);
+  const entered = (i: number) => changes.some(e => PIPELINE_STAGES[i].states.includes(e.toState!));
+  const now = new Date().toISOString();
+
+  let current = stageIndex(state);
+  const stopped = current === -1; // ESCALATED / FAILED
+  if (stopped) {
+    // The last stage the timeline shows the job reaching.
+    current = 0;
+    for (const e of changes) {
+      const i = stageIndex(e.toState);
+      if (i >= 0) current = i;
+    }
+  }
+  const terminalPr = current === PIPELINE_STAGES.length - 1 && stateMeta(state).terminal;
+
+  return PIPELINE_STAGES.map((stage, i) => {
+    let status: StepStatus;
+    if (i < current) status = changes.length > 0 && !entered(i) ? 'skipped' : 'done';
+    else if (i === current) status = stopped ? (state === 'FAILED' ? 'failed' : 'halted') : terminalPr ? 'done' : 'current';
+    else status = 'pending';
+
+    // Time spent: first entry into this stage → first later change out of it.
+    const start = changes.findIndex(e => stage.states.includes(e.toState!));
+    let spent = '';
+    if (start >= 0) {
+      const exit = changes.slice(start + 1).find(e => !stage.states.includes(e.toState!));
+      if (i < PIPELINE_STAGES.length - 1) spent = duration(changes[start].createdAt, exit?.createdAt ?? (status === 'current' ? now : null));
+    }
+    return { ...stage, status, spent };
+  });
+}
+
+const STEP_ICON: Record<StepStatus, React.ReactNode> = {
+  done: <CheckCircle2 size={14} />,
+  current: <Loader2 size={14} className="spinner" />,
+  pending: <Circle size={14} />,
+  skipped: <MinusCircle size={14} />,
+  failed: <XCircle size={14} />,
+  halted: <PauseCircle size={14} />,
 };
 
-const shortSha = (sha?: string | null) => (sha ? sha.substring(0, 8) : '');
-
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.05 } }
-};
-const itemVariants = {
-  hidden: { opacity: 0, y: 10 },
-  show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 300, damping: 24 } }
+const STEP_SUB: Partial<Record<StepStatus, string>> = {
+  current: 'In progress',
+  skipped: 'Skipped',
+  failed: 'Failed here',
+  halted: 'Escalated here',
 };
 
 export default function JobDetail() {
@@ -122,237 +144,226 @@ export default function JobDetail() {
     }
   });
 
-  if (isLoading) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}>
-        <Loader2 size={32} className="spinner" style={{ color: 'var(--accent)' }} />
-      </div>
-    );
-  }
+  if (isLoading) return <LoadingState label="Loading job…" />;
 
   if (isError || !job) {
     return (
-      <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--danger)' }}>
-        <AlertCircle size={32} style={{ marginBottom: 16 }} />
-        <h2>Error loading job details</h2>
-        <p>Could not find job {jobId}</p>
-        <Link to="/" className="btn btn-outline" style={{ marginTop: 16 }}>Back to Feed</Link>
+      <div className="card">
+        <EmptyState
+          icon={<SearchX size={20} />}
+          title="Job not found"
+          description={<>There's no job with id <span className="mono">{jobId}</span>, or the gateway couldn't be reached.</>}
+          action={<Link to="/" className="btn">Back to jobs</Link>}
+        />
       </div>
     );
   }
 
   const status = job.state;
   const meta = stateMeta(status);
-  const isSuccess = meta.group === 'succeeded';
   const needsHuman = meta.group === 'attention' || meta.group === 'failed';
   const prClosed = meta.group === 'closed';
-  // The timeline's last state change, to show how long the current state has run.
+  // The timeline's state changes, to show how long each state ran.
   const stateChanges = events.filter(e => e.type === 'STATE_CHANGE');
+  const steps = pipelineSteps(status, events);
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
-      <motion.div variants={itemVariants} className="page-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
-          <Link to="/" className="btn btn-outline" style={{ padding: '6px 10px', textDecoration: 'none' }}>
-            <ArrowLeft size={16} />
-          </Link>
-          <h1 className="page-title" style={{ marginBottom: 0 }}>Job {job.id.substring(0,8)}</h1>
-          <span className={`badge ${meta.badge}`} style={{ padding: '4px 8px' }}>
-            {isSuccess ? <CheckCircle2 size={12} style={{ marginRight: 2 }} />
-              : needsHuman ? <AlertCircle size={12} style={{ marginRight: 2 }} />
-              : prClosed ? <GitPullRequestClosed size={12} style={{ marginRight: 2 }} />
-              : <Loader2 size={12} className={isRunning(status) ? 'spinner' : undefined} style={{ marginRight: 2 }} />}
-            {status}
-          </span>
-          <a href={`${LANGFUSE_URL}/trace/${job.id}`} target="_blank" rel="noreferrer"
-             className="btn btn-outline" style={{ marginLeft: 'auto', padding: '6px 10px', textDecoration: 'none' }}>
-            View LLM trace <ExternalLink size={14} />
+      <PageHeader
+        backTo="/"
+        backLabel="All jobs"
+        title={<>
+          <span>Job <span className="mono" style={{ fontSize: '0.85em', fontWeight: 500 }}>{job.id.substring(0, 8)}</span></span>
+          <span className={`badge ${meta.badge} ${isRunning(status) ? 'live' : ''}`} style={{ fontSize: '0.8rem' }}>{meta.label}</span>
+        </>}
+        description={<>
+          <span className="mono" style={{ color: 'var(--text-primary)' }}>{shortRepo(job.repo)}</span>
+          {' · '}started {formatTime(job.createdAt)}
+          {job.stateChangedAt && !meta.terminal ? ` · ${meta.label.toLowerCase()} for ${duration(job.stateChangedAt, new Date().toISOString())}` : ''}
+        </>}
+        actions={<>
+          {job.prUrl && (
+            <a href={job.prUrl} target="_blank" rel="noreferrer" className="btn btn-primary">
+              <GitPullRequest size={15} /> View pull request
+            </a>
+          )}
+          <a href={`${LANGFUSE_URL}/trace/${job.id}`} target="_blank" rel="noreferrer" className="btn">
+            LLM trace <ExternalLink size={13} />
           </a>
+        </>}
+      />
+
+      {/* Pipeline progress */}
+      <motion.div variants={itemVariants} className="card" style={{ marginBottom: 16 }}>
+        <div className="stepper" style={{ ['--steps' as string]: steps.length }}>
+          {steps.map(s => (
+            <div key={s.key} className={`step ${s.status}`}>
+              <div className="step-bar" />
+              <div className="step-label">{STEP_ICON[s.status]} <span className="truncate">{s.label}</span></div>
+              <div className="step-sub">{STEP_SUB[s.status] ?? (s.spent || (s.status === 'pending' ? 'Waiting' : ' '))}</div>
+            </div>
+          ))}
         </div>
-        <p className="page-description" style={{ marginLeft: 50 }}>
-          {meta.label}{job.stateChangedAt && !meta.terminal ? ` for ${duration(job.stateChangedAt, new Date().toISOString())}` : ''}
-        </p>
       </motion.div>
 
       <motion.div variants={itemVariants} className="stat-grid">
         <div className="card">
-          <div className="stat-label">Repository</div>
-          <div style={{ fontSize: '1.1rem', fontWeight: 500, color: 'var(--text-primary)' }}>{job.repo.replace('https://github.com/','')}</div>
-        </div>
-        <div className="card">
-          <div className="stat-label">Tokens Used</div>
-          <div className="mono" style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>{job.tokenBudgetUsed ?? 0}</div>
-        </div>
-        <div className="card">
-          <div className="stat-label">Fix Attempts</div>
-          <div className="stat-value">{job.attempts ?? 0}</div>
-        </div>
-        <div className="card">
-          <div className="stat-label">Root Cause</div>
-          <div className="mono" style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>
-            {job.rootCommit
-              ? `${shortSha(job.rootCommit)}${job.causalScore != null ? ` (${job.causalScore.toFixed(2)})` : ''}`
-              : 'not identified'}
+          <div className="stat-label">Root cause</div>
+          <div className="stat-value sm mono" style={{ marginTop: 10 }}>
+            {job.rootCommit ? shortSha(job.rootCommit) : <span className="muted">Not identified</span>}
+          </div>
+          <div className="stat-subtitle">
+            {job.rootCommit && job.causalScore != null ? `Causal score ${job.causalScore.toFixed(2)}` : 'Set when the investigator ranks commits'}
           </div>
         </div>
         <div className="card">
-          <div className="stat-label">When</div>
-          <div className="stat-value" style={{ fontSize: '0.9rem' }}>{formatTime(job.createdAt)}</div>
+          <div className="stat-label">Base commit</div>
+          <div className="stat-value sm mono" style={{ marginTop: 10 }}>
+            {job.baseCommit ? shortSha(job.baseCommit) : <span className="muted">—</span>}
+          </div>
+          <div className="stat-subtitle">HEAD when the repo was cloned</div>
+        </div>
+        <div className="card">
+          <div className="stat-label">Fix attempts</div>
+          <div className="stat-value" style={{ marginTop: 10 }}>{job.attempts ?? 0}</div>
+          <div className="stat-subtitle">The fixer retries up to 3 times</div>
+        </div>
+        <div className="card">
+          <div className="stat-label">Tokens used</div>
+          <div className="stat-value" style={{ marginTop: 10 }}>{formatNumber(job.tokenBudgetUsed ?? 0)}</div>
+          <div className="stat-subtitle">Across every agent on this job</div>
         </div>
       </motion.div>
 
-      {/* Why it stopped */}
-      {needsHuman && job.stateReason && (
-        <motion.div variants={itemVariants}
-          style={{
-            display: 'flex', alignItems: 'flex-start', gap: 12,
-            padding: '14px 20px', borderRadius: 10, marginBottom: 16,
-            background: 'var(--danger-bg)', border: '1px solid var(--danger)'
-          }}
-        >
-          <AlertCircle size={18} color="var(--danger)" style={{ flexShrink: 0, marginTop: 2 }} />
-          <div>
-            <div style={{ color: 'var(--text-primary)', fontWeight: 500, marginBottom: 4 }}>{meta.label}</div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {job.stateReason}
+      {(needsHuman && job.stateReason) || prClosed || job.prUrl ? (
+        <motion.div variants={itemVariants} className="stack" style={{ marginBottom: 16 }}>
+          {/* Why it stopped */}
+          {needsHuman && job.stateReason && (
+            <Alert
+              tone={meta.group === 'failed' ? 'danger' : 'warning'}
+              title={meta.group === 'failed' ? 'Why this job failed' : 'Why this job was escalated'}
+              action={meta.group === 'attention' ? <Link to="/escalations" className="btn btn-sm">Review</Link> : undefined}
+            >
+              <span style={{ whiteSpace: 'pre-wrap' }}>{job.stateReason}</span>
+            </Alert>
+          )}
+
+          {/* A human closed the PR without merging: finished, nothing broken. */}
+          {prClosed && (
+            <Alert tone="neutral" icon={<GitPullRequestClosed size={16} />} title="Pull request closed without merging">
+              {job.stateReason || 'Someone closed the pull request.'}{' '}
+              Use <strong>Regenerate fix</strong> below to try a different approach — it opens a new pull request.
+            </Alert>
+          )}
+
+          {job.prUrl && (
+            <Alert tone="success" icon={<GitPullRequest size={16} />} title={status === 'PR_MERGED' ? 'Pull request merged' : 'Pull request opened'}>
+              <a href={job.prUrl} target="_blank" rel="noreferrer" className="link mono" style={{ wordBreak: 'break-all' }}>{job.prUrl}</a>
+            </Alert>
+          )}
+        </motion.div>
+      ) : null}
+
+      <div className="grid-sidebar">
+        <motion.div variants={itemVariants} className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Timeline</div>
+              <div className="card-subtitle">State changes and agent notes, oldest first</div>
             </div>
+            {isRunning(status) && <span className="badge badge-accent live">Live</span>}
           </div>
-        </motion.div>
-      )}
-
-      {/* A human closed the PR without merging: finished, nothing broken. */}
-      {prClosed && (
-        <motion.div variants={itemVariants}
-          style={{
-            display: 'flex', alignItems: 'flex-start', gap: 12,
-            padding: '14px 20px', borderRadius: 10, marginBottom: 16,
-            background: 'var(--bg-surface-raised)', border: '1px solid var(--border-strong)'
-          }}
-        >
-          <GitPullRequestClosed size={18} color="var(--text-muted)" style={{ flexShrink: 0, marginTop: 2 }} />
-          <div>
-            <div style={{ color: 'var(--text-primary)', fontWeight: 500, marginBottom: 4 }}>{meta.label}</div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', wordBreak: 'break-word' }}>
-              {job.stateReason || 'The pull request was closed without being merged.'}
-              {' '}Use Regenerate Fix below to try a different fix — it opens a new pull request.
+          {events.length === 0 ? (
+            <p className="muted" style={{ fontSize: '0.9rem' }}>
+              No events recorded yet. Jobs created before the timeline existed have none.
+            </p>
+          ) : (
+            <div className="timeline">
+              {events.map((e, i) => {
+                const isState = e.type === 'STATE_CHANGE';
+                const isErr = e.type === 'ERROR';
+                const toMeta = stateMeta(e.toState);
+                const next = isState ? stateChanges[stateChanges.indexOf(e) + 1] : undefined;
+                const spent = isState
+                  ? duration(e.createdAt, next?.createdAt ?? (toMeta.terminal ? null : new Date().toISOString()))
+                  : '';
+                const dot = isErr ? 'var(--danger)' : toMeta.color;
+                return (
+                  <motion.div key={e.id} className={`timeline-item ${isState ? '' : 'minor'} ${isErr ? 'error' : ''}`}
+                    initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: Math.min(i, 10) * 0.03 }}>
+                    <div className="timeline-dot" style={isState || isErr ? { borderColor: dot, ...(isErr ? { background: dot } : {}) } : undefined} />
+                    <div className="timeline-head">
+                      <span className="timeline-title">
+                        {isState ? toMeta.label : isErr ? 'Error' : (e.message || 'Progress')}
+                      </span>
+                      <span className="timeline-meta">
+                        <span className="mono">{e.actor}</span>
+                        {spent && <>· {spent}</>}
+                      </span>
+                    </div>
+                    <div className="timeline-time">{formatTime(e.createdAt, true)}</div>
+                    {e.message && (isState || isErr) && <div className="timeline-body">{e.message}</div>}
+                  </motion.div>
+                );
+              })}
             </div>
-          </div>
+          )}
         </motion.div>
-      )}
 
-      {/* PR URL Banner */}
-      {job.prUrl && (
-        <motion.div variants={itemVariants}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 12,
-            padding: '14px 20px', borderRadius: 10, marginBottom: 16,
-            background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)'
-          }}
-        >
-          <GitPullRequest size={18} color="var(--success)" />
-          <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>Pull Request Opened:</span>
-          <a href={job.prUrl} target="_blank" rel="noreferrer"
-            style={{ color: 'var(--accent)', textDecoration: 'none', fontFamily: 'monospace', fontSize: '0.9rem' }}>
-            {job.prUrl}
-          </a>
-        </motion.div>
-      )}
-
-      <motion.div variants={itemVariants} className="card" style={{ padding: '28px 32px' }}>
-        <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 24 }}>Pipeline Timeline</h2>
-        {events.length === 0 ? (
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-            No events recorded yet. Jobs created before the timeline existed have none.
-          </p>
-        ) : (
-          <div className="timeline">
-            {events.map((e, i) => {
-              const isState = e.type === 'STATE_CHANGE';
-              const toMeta = stateMeta(e.toState);
-              const next = isState ? stateChanges[stateChanges.indexOf(e) + 1] : undefined;
-              const spent = isState
-                ? duration(e.createdAt, next?.createdAt ?? (toMeta.terminal ? null : new Date().toISOString()))
-                : '';
-              const dot = e.type === 'ERROR' ? 'var(--danger)' : isState ? toMeta.color : 'var(--border-subtle)';
-              return (
-                <motion.div key={e.id} className="timeline-item"
-                  initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: Math.min(i, 10) * 0.03 }}>
-                  <div className="timeline-dot" style={{ borderColor: dot }} />
-                  <div className="timeline-time">
-                    {formatTime(e.createdAt)} · {e.actor}{spent ? ` · ${spent}` : ''}
-                  </div>
-                  <div className="timeline-title" style={isState ? undefined : { fontWeight: 400, fontSize: '0.9rem' }}>
-                    {isState ? toMeta.label : e.type === 'ERROR' ? 'Error' : 'Progress'}
-                  </div>
-                  {e.message && <div className="timeline-body" style={{ wordBreak: 'break-word' }}>{e.message}</div>}
-                </motion.div>
-              );
-            })}
+        {/* Human feedback */}
+        <motion.div variants={itemVariants} className="card" style={{ position: 'sticky', top: 24 }}>
+          <div className="card-title" style={{ marginBottom: 4 }}>
+            <RefreshCw size={15} /> Regenerate fix
           </div>
-        )}
-      </motion.div>
-
-      {/* Human Feedback Panel */}
-        <motion.div variants={itemVariants} className="card" style={{ padding: '28px 32px', marginTop: 16 }}>
-          <h2 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <RefreshCw size={16} color="var(--accent)" />
-            Regenerate Fix
-          </h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: 18 }}>
-            Not satisfied with the patch? Tell GitOracle exactly how you want it fixed and it will generate a new PR.
+          <p className="card-subtitle" style={{ marginBottom: 16, lineHeight: 1.55 }}>
+            Not happy with the patch? Tell GitOracle how you'd fix it and it will run another cycle and open a new pull request.
           </p>
 
           <AnimatePresence>
             {feedbackSent && (
-              <motion.div
-                initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '10px 14px', borderRadius: 8, marginBottom: 16,
-                  background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)',
-                  color: 'var(--success)', fontSize: '0.9rem'
-                }}
-              >
-                <CheckCircle2 size={16} />
-                Instructions sent! A new fix is being generated and will open as a new PR.
+              <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} style={{ marginBottom: 14 }}>
+                <Alert tone="success">Instructions sent. A new fix is on its way.</Alert>
+              </motion.div>
+            )}
+            {feedbackMutation.isError && (
+              <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} style={{ marginBottom: 14 }}>
+                <Alert tone="danger">Couldn't send instructions. Try again.</Alert>
               </motion.div>
             )}
           </AnimatePresence>
 
           <textarea
             id="feedback-instructions"
+            className="form-textarea"
             value={instructions}
             onChange={e => setInstructions(e.target.value)}
-            placeholder="e.g. Instead of catching the exception, fix the root cause by checking for null before calling the method."
-            rows={4}
-            style={{
-              width: '100%', padding: '10px 14px',
-              background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
-              borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-              boxSizing: 'border-box', outline: 'none', resize: 'vertical',
-              fontFamily: 'inherit', lineHeight: 1.6,
-              transition: 'border-color 0.2s', marginBottom: 14
+            placeholder="e.g. Don't catch the exception — check for null before calling getId()."
+            rows={5}
+            onKeyDown={e => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && instructions.trim() && !feedbackMutation.isPending) {
+                feedbackMutation.mutate(instructions);
+              }
             }}
-            onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
-            onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
           />
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, gap: 8 }}>
+            <span className="muted hide-mobile" style={{ fontSize: '0.78rem' }}>
+              <span className="kbd">⌘</span> <span className="kbd">Enter</span> to send
+            </span>
             <button
               id="regenerate-fix-btn"
               className="btn btn-primary"
               disabled={!instructions.trim() || feedbackMutation.isPending}
               onClick={() => feedbackMutation.mutate(instructions)}
-              style={{ display: 'flex', alignItems: 'center', gap: 8 }}
             >
               {feedbackMutation.isPending
-                ? <><Loader2 size={14} className="spinner" /> Sending...</>
-                : <><Send size={14} /> Regenerate Fix</>
-              }
+                ? <><Loader2 size={14} className="spinner" /> Sending…</>
+                : <><Send size={14} /> Regenerate fix</>}
             </button>
           </div>
         </motion.div>
+      </div>
     </motion.div>
   );
 }

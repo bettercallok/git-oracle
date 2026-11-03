@@ -1,40 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
+import { Activity, CheckCircle2, AlertTriangle, Layers, Search, Wand2, Inbox, WifiOff } from 'lucide-react';
 import { apiClient } from '../api/client';
-import { stateMeta, isRunning, isSucceeded, needsAttention } from '../utils/jobState';
+import { stateMeta, isRunning, isSucceeded, needsAttention, GROUPS, type StateGroup } from '../utils/jobState';
+import { containerVariants, itemVariants } from '../utils/motion';
+import { formatNumber, formatTime, relativeTime, shortRepo } from '../utils/format';
+import { useNumberTicker } from '../utils/useNumberTicker';
+import { PageHeader, EmptyState, LoadingState } from '../components/ui';
 
-const formatTime = (raw: string | null | undefined): string => {
-  if (!raw) return '—';
-  const d = new Date(raw);
-  if (isNaN(d.getTime()) || d.getFullYear() < 2000) return '—';
-  return d.toLocaleString(undefined, {
-    month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
-  });
-};
-
-// --- Custom Number Ticker Hook ---
-function useNumberTicker(target: number, duration: number = 800) {
-  const [value, setValue] = useState(0);
-
-  useEffect(() => {
-    let startTimestamp: number | null = null;
-    const step = (timestamp: number) => {
-      if (!startTimestamp) startTimestamp = timestamp;
-      const progress = Math.min((timestamp - startTimestamp) / duration, 1);
-      const easeProgress = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
-      setValue(Math.floor(easeProgress * target));
-      if (progress < 1) window.requestAnimationFrame(step);
-    };
-    window.requestAnimationFrame(step);
-  }, [target, duration]);
-
-  return value;
-}
-
-// --- Types & Data ---
 interface Job {
   id: string;
   repo: string;
@@ -50,113 +25,201 @@ const fetchJobs = async (): Promise<Job[]> => {
   return data;
 };
 
-const SPARKLINE = [2, 4, 3, 7, 5, 8, 4, 6, 9, 5, 8, 7];
+type Filter = 'all' | 'running' | 'succeeded' | 'attention';
 
-const statusBadge = (state: string) => {
+const FILTERS: { key: Filter; label: string; test: (s: string) => boolean }[] = [
+  { key: 'all', label: 'All', test: () => true },
+  { key: 'running', label: 'Running', test: isRunning },
+  { key: 'succeeded', label: 'PR opened', test: isSucceeded },
+  { key: 'attention', label: 'Needs attention', test: needsAttention },
+];
+
+function StatusBadge({ state }: { state: string }) {
   const meta = stateMeta(state);
-  return <span className={`badge ${meta.badge}`}>{state || 'UNKNOWN'}</span>;
-};
-
-// --- Animations ---
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.05 } }
-};
-const itemVariants = {
-  hidden: { opacity: 0, y: 10 },
-  show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 300, damping: 24 } }
-};
+  return <span className={`badge ${meta.badge} ${meta.group === 'running' ? 'live' : ''}`}>{meta.label}</span>;
+}
 
 export default function JobFeed() {
   const navigate = useNavigate();
+  const [filter, setFilter] = useState<Filter>('all');
+  const [query, setQuery] = useState('');
+
   const { data: jobs = [], isLoading, isError } = useQuery({
     queryKey: ['jobs'],
     queryFn: fetchJobs,
-    refetchInterval: 2000, // Live poll every 2s
+    refetchInterval: 2000, // live poll
   });
 
-  const total = useNumberTicker(jobs.length, 1000);
-  const success = useNumberTicker(jobs.filter(j => isSucceeded(j.state)).length, 1000);
-  const running = useNumberTicker(jobs.filter(j => isRunning(j.state)).length, 1000);
-  const failed = useNumberTicker(jobs.filter(j => needsAttention(j.state)).length, 1000);
+  const counts = useMemo(() => {
+    const byGroup = {} as Record<StateGroup, number>;
+    for (const j of jobs) {
+      const g = stateMeta(j.state).group;
+      byGroup[g] = (byGroup[g] ?? 0) + 1;
+    }
+    return {
+      byGroup,
+      running: jobs.filter(j => isRunning(j.state)).length,
+      succeeded: jobs.filter(j => isSucceeded(j.state)).length,
+      attention: jobs.filter(j => needsAttention(j.state)).length,
+    };
+  }, [jobs]);
+
+  const total = useNumberTicker(jobs.length);
+  const running = useNumberTicker(counts.running);
+  const succeeded = useNumberTicker(counts.succeeded);
+  const attention = useNumberTicker(counts.attention);
+
+  // Escalated jobs aren't finished — a human may still send them back through.
+  const finished = counts.succeeded + (counts.byGroup.failed ?? 0) + (counts.byGroup.closed ?? 0);
+  const successRate = finished > 0 ? Math.round((counts.succeeded / finished) * 100) : null;
+
+  const visible = useMemo(() => {
+    const f = FILTERS.find(x => x.key === filter)!;
+    const q = query.trim().toLowerCase();
+    return jobs.filter(j =>
+      f.test(j.state) &&
+      (!q || j.id.includes(q) || shortRepo(j.repo).toLowerCase().includes(q) || (j.errorMessage || '').toLowerCase().includes(q)),
+    );
+  }, [jobs, filter, query]);
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
-      <motion.div variants={itemVariants} className="page-header">
-        <h1 className="page-title">Job Feed</h1>
-        <p className="page-description">Live view of agent jobs across repositories</p>
-      </motion.div>
+      <PageHeader
+        title="Jobs"
+        description="Every bug GitOracle is working on, from first report to pull request. Updates live."
+        actions={<Link to="/fix" className="btn btn-primary"><Wand2 size={15} /> Ask to fix</Link>}
+      />
 
       <motion.div variants={itemVariants} className="stat-grid">
         <div className="card">
-          <div className="stat-label">Total Jobs</div>
+          <div className="stat-head">
+            <span className="stat-label">Total jobs</span>
+            <span className="stat-icon"><Layers size={15} /></span>
+          </div>
           <div className="stat-value">{total}</div>
-          <div className="sparkline-container">
-            {SPARKLINE.map((v, i) => (
-              <motion.div 
-                key={i} 
-                className="sparkline-bar" 
-                initial={{ height: 0 }}
-                animate={{ height: `${v * 3}px` }}
-                transition={{ delay: 0.2 + (i * 0.03), type: 'spring' as const }}
-              />
-            ))}
+          {jobs.length > 0 ? (
+            <>
+              <div className="dist-bar" style={{ marginTop: 14 }} aria-label="Jobs by state">
+                {GROUPS.filter(g => counts.byGroup[g.group]).map(g => (
+                  <span key={g.group} title={`${g.label}: ${counts.byGroup[g.group]}`}
+                        style={{ flexGrow: counts.byGroup[g.group], background: g.color }} />
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="stat-subtitle">No jobs yet</div>
+          )}
+        </div>
+        <div className="card">
+          <div className="stat-head">
+            <span className="stat-label">Running now</span>
+            <span className="stat-icon accent"><Activity size={15} /></span>
+          </div>
+          <div className="stat-value">{running}</div>
+          <div className="stat-subtitle">Investigating, planning, fixing or testing</div>
+        </div>
+        <div className="card">
+          <div className="stat-head">
+            <span className="stat-label">Pull requests opened</span>
+            <span className="stat-icon success"><CheckCircle2 size={15} /></span>
+          </div>
+          <div className="stat-value">{succeeded}</div>
+          <div className="stat-subtitle">
+            {successRate === null ? 'No finished jobs yet' : `${successRate}% of finished jobs`}
           </div>
         </div>
         <div className="card">
-          <div className="stat-label">Successful</div>
-          <div className="stat-value" style={{ color: 'var(--success)' }}>{success}</div>
-          <div className="stat-subtitle">success count</div>
-        </div>
-        <div className="card">
-          <div className="stat-label">Running</div>
-          <div className="stat-value" style={{ color: 'var(--warning)' }}>{running}</div>
-          <div className="stat-subtitle">active count</div>
-        </div>
-        <div className="card">
-          <div className="stat-label">Failed</div>
-          <div className="stat-value" style={{ color: 'var(--danger)' }}>{failed}</div>
-          <div className="stat-subtitle">needs review</div>
+          <div className="stat-head">
+            <span className="stat-label">Needs attention</span>
+            <span className={`stat-icon ${counts.attention > 0 ? 'warning' : ''}`}><AlertTriangle size={15} /></span>
+          </div>
+          <div className="stat-value">{attention}</div>
+          <div className="stat-subtitle">
+            {counts.attention > 0 ? <Link to="/escalations" className="link">Review escalations →</Link> : 'Nothing waiting on you'}
+          </div>
         </div>
       </motion.div>
 
       <motion.div variants={itemVariants} className="table-container">
-        {isLoading && <p>Loading live jobs...</p>}
-        {isError && <p>Error connecting to API Gateway.</p>}
-        {!isLoading && !isError && (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Job</th>
-                <th>Repository</th>
-                <th>Error</th>
-                <th>Tokens Used</th>
-                <th>Status</th>
-                <th>When</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.map((job) => (
-                <tr key={job.id} onClick={() => navigate(`/job/${job.id}`)} style={{ cursor: 'pointer' }} className="hover-row">
-                  <td>
-                    <Link to={`/job/${job.id}`} className="mono" onClick={(e) => e.stopPropagation()} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
-                      {job.id.substring(0,8)}
-                    </Link>
-                  </td>
-                  <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{job.repo.replace('https://github.com/','')}</td>
-                  <td style={{ maxWidth: 280, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{job.errorMessage}</td>
-                  <td className="mono">{job.tokensUsed}</td>
-                  <td>{statusBadge(job.state)}</td>
-                  <td style={{ fontSize: '0.82rem' }}>{formatTime(job.createdAt)}</td>
-                </tr>
-              ))}
-              {jobs.length === 0 && (
+        <div className="table-toolbar">
+          <div className="chip-group" role="tablist" aria-label="Filter jobs">
+            {FILTERS.map(f => {
+              const n = f.key === 'all' ? jobs.length : jobs.filter(j => f.test(j.state)).length;
+              return (
+                <button key={f.key} role="tab" aria-selected={filter === f.key}
+                        className={`chip ${filter === f.key ? 'active' : ''}`} onClick={() => setFilter(f.key)}>
+                  {f.label} <span className="chip-count">{n}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="input-wrap" style={{ width: 260, maxWidth: '100%' }}>
+            <Search size={14} className="input-icon" />
+            <input
+              className="form-input"
+              style={{ height: 32, fontSize: '0.86rem' }}
+              placeholder="Search by job, repo or error"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              aria-label="Search jobs"
+            />
+          </div>
+        </div>
+
+        {isLoading && <LoadingState label="Loading jobs…" />}
+        {isError && (
+          <EmptyState
+            icon={<WifiOff size={20} />}
+            title="Can't reach the API gateway"
+            description="Check that the gateway is running on the URL in VITE_API_URL. This page retries every two seconds."
+          />
+        )}
+        {!isLoading && !isError && jobs.length === 0 && (
+          <EmptyState
+            icon={<Inbox size={20} />}
+            tone="accent"
+            title="No jobs yet"
+            description="Describe a bug in plain English, or send a GitHub webhook, and GitOracle will start investigating."
+            action={<Link to="/fix" className="btn btn-primary"><Wand2 size={15} /> Ask to fix</Link>}
+          />
+        )}
+        {!isLoading && !isError && jobs.length > 0 && visible.length === 0 && (
+          <EmptyState icon={<Search size={20} />} title="No matching jobs" description="Try a different filter or search term." />
+        )}
+        {!isLoading && !isError && visible.length > 0 && (
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '2rem' }}>No active jobs found in database.</td>
+                  <th>Job</th>
+                  <th>Repository &amp; error</th>
+                  <th>Status</th>
+                  <th className="num">Tokens</th>
+                  <th className="num">Started</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {visible.map((job) => (
+                  <tr key={job.id} className="clickable" onClick={() => navigate(`/job/${job.id}`)}>
+                    <td>
+                      <Link to={`/job/${job.id}`} className="mono link" onClick={(e) => e.stopPropagation()}>
+                        {job.id.substring(0, 8)}
+                      </Link>
+                    </td>
+                    <td style={{ maxWidth: 420 }}>
+                      <div className="cell-primary truncate">{shortRepo(job.repo)}</div>
+                      <div className="cell-sub truncate" title={job.errorMessage}>{job.errorMessage || 'No description'}</div>
+                    </td>
+                    <td><StatusBadge state={job.state} /></td>
+                    <td className="num mono tabular">{formatNumber(job.tokensUsed)}</td>
+                    <td className="num" style={{ whiteSpace: 'nowrap', fontSize: '0.84rem' }} title={formatTime(job.createdAt, true)}>
+                      {relativeTime(job.createdAt)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </motion.div>
     </motion.div>

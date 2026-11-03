@@ -1,18 +1,12 @@
 import { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Wand2, GitBranch, FileText, ChevronRight, CheckCircle2, Loader2, AlertCircle, Plus } from 'lucide-react';
+import { GitBranch, ArrowRight, CheckCircle2, Loader2, Search, Zap, FolderGit2, GitPullRequest } from 'lucide-react';
 import { apiClient } from '../api/client';
 import { useRepos } from '../context/RepoContext';
-
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.07 } }
-};
-const itemVariants = {
-  hidden: { opacity: 0, y: 16 },
-  show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 300, damping: 24 } }
-};
+import { containerVariants, itemVariants } from '../utils/motion';
+import { errorMessage } from '../utils/format';
+import { PageHeader, Alert } from '../components/ui';
 
 type Status = 'idle' | 'loading' | 'success' | 'error';
 
@@ -40,8 +34,6 @@ export default function FixCommand() {
   // and faster, but no root-cause analysis and no file context for the Fixer.
   const [investigateFirst, setInvestigateFirst] = useState(true);
 
-  // Keep source/target pre-filled with active repo
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!repoUrl.trim() || !issueDesc.trim()) return;
@@ -59,92 +51,55 @@ export default function FixCommand() {
       });
       setJobId(data.jobId);
       setStatus('success');
-    } catch (err: any) {
+    } catch (err) {
       setStatus('error');
-      setErrorMsg(err?.response?.data?.error || err?.message || 'Request failed');
+      setErrorMsg(errorMessage(err, 'Request failed'));
     }
   };
 
+  const reset = () => { setStatus('idle'); setRepoUrl(''); setIssueDesc(''); setTargetRepo(''); setBranch(''); setJobId(''); };
+
   return (
-    <motion.div variants={containerVariants} initial="hidden" animate="show" style={{ maxWidth: 720, margin: '0 auto' }}>
-      <motion.div variants={itemVariants} className="page-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-          <div style={{
-            width: 40, height: 40, borderRadius: 10,
-            background: 'linear-gradient(135deg, var(--accent), #a855f7)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center'
-          }}>
-            <Wand2 size={20} color="#fff" />
-          </div>
-          <h1 className="page-title" style={{ marginBottom: 0 }}>Ask GitOracle to Fix</h1>
-        </div>
-        <p className="page-description" style={{ marginLeft: 52 }}>
-          Describe the issue in plain English — GitOracle will plan, fix, test, and open a PR autonomously.
-        </p>
-      </motion.div>
+    <motion.div variants={containerVariants} initial="hidden" animate="show" style={{ maxWidth: 760 }}>
+      <PageHeader
+        title="Ask to fix"
+        description="Describe the bug in plain English. GitOracle finds the cause, writes a patch, runs your tests and opens a pull request."
+      />
 
       <AnimatePresence mode="wait">
         {status === 'success' ? (
           <motion.div
             key="success"
-            initial={{ opacity: 0, scale: 0.96 }}
+            initial={{ opacity: 0, scale: 0.98 }}
             animate={{ opacity: 1, scale: 1 }}
             className="card"
-            style={{ padding: '40px 32px', textAlign: 'center' }}
+            style={{ padding: '44px 32px', textAlign: 'center' }}
           >
-            <div style={{
-              width: 64, height: 64, borderRadius: '50%',
-              background: 'rgba(34,197,94,0.15)', border: '2px solid var(--success)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              margin: '0 auto 20px'
-            }}>
-              <CheckCircle2 size={32} color="var(--success)" />
+            <div className="empty-icon success" style={{ margin: '0 auto 18px', width: 52, height: 52 }}>
+              <CheckCircle2 size={24} />
             </div>
-            <h2 style={{ color: 'var(--text-primary)', marginBottom: 8 }}>Fix Job Queued!</h2>
-            <p style={{ color: 'var(--text-muted)', marginBottom: 24 }}>
-              GitOracle is now analyzing, fixing, and testing your issue. A PR will be opened when complete.
+            <h2 style={{ fontSize: '1.25rem' }}>Job queued</h2>
+            <p style={{ color: 'var(--text-secondary)', margin: '8px auto 6px', maxWidth: '46ch' }}>
+              {investigateFirst
+                ? 'The investigator is looking through the history now. You can watch each stage as it happens.'
+                : 'The fixer has your instruction and is writing a patch now.'}
             </p>
-            <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
-              <button
-                className="btn btn-primary"
-                onClick={() => navigate('/job/' + jobId)}
-              >
-                Watch Live Progress →
+            <p className="mono muted" style={{ fontSize: '0.8rem', marginBottom: 24 }}>job {jobId.substring(0, 8)}</p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button className="btn btn-primary" onClick={() => navigate('/job/' + jobId)}>
+                Follow progress <ArrowRight size={15} />
               </button>
-              <button
-                className="btn btn-outline"
-                onClick={() => { setStatus('idle'); setRepoUrl(''); setIssueDesc(''); setTargetRepo(''); setJobId(''); }}
-              >
-                Submit Another
-              </button>
+              <button className="btn" onClick={reset}>Report another bug</button>
             </div>
           </motion.div>
         ) : (
           <motion.form key="form" variants={itemVariants} onSubmit={handleSubmit}>
-            <div className="card" style={{ padding: '28px 32px', marginBottom: 16 }}>
-              <h2 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: 20 }}>
-                <FileText size={16} style={{ marginRight: 8, verticalAlign: 'middle' }} />
-                Issue Details
-              </h2>
-
-              <div style={{ marginBottom: 20 }}>
-                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  Source Repository *
-                </label>
+            <div className="card" style={{ padding: '24px 26px', marginBottom: 16 }}>
+              <div className="field">
+                <label className="form-label" htmlFor="repo-url-input"><FolderGit2 size={14} /> Repository</label>
                 {repos.length > 0 ? (
-                  <select
-                    id="repo-url-input"
-                    value={repoUrl}
-                    onChange={e => setRepoUrl(e.target.value)}
-                    required
-                    style={{
-                      width: '100%', padding: '10px 14px',
-                      background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
-                      borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-                      boxSizing: 'border-box', outline: 'none', cursor: 'pointer'
-                    }}
-                  >
-                    <option value="">Select a repository...</option>
+                  <select id="repo-url-input" className="form-select" value={repoUrl} onChange={e => setRepoUrl(e.target.value)} required>
+                    <option value="">Choose a repository…</option>
                     {repos.map(r => (
                       <option key={r.id} value={r.url}>{r.fullName}{r.id === activeRepo?.id ? ' (active)' : ''}</option>
                     ))}
@@ -154,175 +109,120 @@ export default function FixCommand() {
                     <input
                       id="repo-url-input"
                       type="text"
+                      className="form-input mono-input"
                       value={repoUrl}
                       onChange={e => setRepoUrl(e.target.value)}
                       placeholder="https://github.com/owner/repo"
                       required
-                      style={{
-                        width: '100%', padding: '10px 14px',
-                        background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
-                        borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-                        boxSizing: 'border-box', outline: 'none', transition: 'border-color 0.2s'
-                      }}
-                      onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
-                      onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
                     />
-                    <div style={{ marginTop: 6, fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Plus size={11} />
-                      <a href="#" onClick={e => { e.preventDefault(); navigate('/repos'); }} style={{ color: 'var(--accent)', textDecoration: 'none' }}>Add repos to My Repos</a> for quick selection
+                    <div className="form-hint">
+                      <Link to="/repos" className="link">Save repositories</Link> to pick them from a list next time.
                     </div>
                   </>
                 )}
               </div>
 
-              <div style={{ marginBottom: 20 }}>
-                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  Describe the Issue / Fix Instruction *
-                </label>
+              <div className="field">
+                <label className="form-label" htmlFor="issue-desc-input">What's wrong?</label>
                 <textarea
                   id="issue-desc-input"
+                  className="form-textarea"
                   value={issueDesc}
                   onChange={e => setIssueDesc(e.target.value)}
-                  placeholder="e.g. The payment service throws a NullPointerException when the user object is null. Fix it by adding a null check before accessing user.getId()."
+                  placeholder="e.g. PaymentService throws a NullPointerException when the user is null. Add a null check before user.getId()."
                   required
                   rows={5}
-                  style={{
-                    width: '100%', padding: '10px 14px',
-                    background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
-                    borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-                    boxSizing: 'border-box', outline: 'none', resize: 'vertical',
-                    fontFamily: 'inherit', lineHeight: 1.6,
-                    transition: 'border-color 0.2s'
-                  }}
-                  onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
-                  onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
                 />
-              </div>
-
-              <div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  <GitBranch size={12} />
-                  Open PR on Repo (optional — defaults to source repo)
-                </label>
-                {repos.length > 0 ? (
-                  <select
-                    id="target-repo-input"
-                    value={targetRepo}
-                    onChange={e => setTargetRepo(e.target.value)}
-                    style={{
-                      width: '100%', padding: '10px 14px',
-                      background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
-                      borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-                      boxSizing: 'border-box', outline: 'none', cursor: 'pointer'
-                    }}
-                  >
-                    <option value="">Same as source repo</option>
-                    {repos.map(r => (
-                      <option key={r.id} value={r.fullName}>{r.fullName}{r.id === activeRepo?.id ? ' (active)' : ''}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    id="target-repo-input"
-                    type="text"
-                    value={targetRepo}
-                    onChange={e => setTargetRepo(e.target.value)}
-                    placeholder="owner/repo  (e.g. bettercallok/chillcall)"
-                    style={{
-                      width: '100%', padding: '10px 14px',
-                      background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
-                      borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-                      boxSizing: 'border-box', outline: 'none', transition: 'border-color 0.2s'
-                    }}
-                    onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
-                    onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
-                  />
-                )}
-              </div>
-
-              <div style={{ marginTop: 20 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  <GitBranch size={12} />
-                  Branch (optional — defaults to the repo's default branch)
-                </label>
-                <input
-                  id="branch-input"
-                  type="text"
-                  value={branch}
-                  onChange={e => setBranch(e.target.value)}
-                  placeholder="e.g. develop, release-2.0"
-                  style={{
-                    width: '100%', padding: '10px 14px',
-                    background: 'var(--bg-lighter)', border: '1px solid var(--border-subtle)',
-                    borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem',
-                    boxSizing: 'border-box', outline: 'none', transition: 'border-color 0.2s'
-                  }}
-                  onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
-                  onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
-                />
-                <div style={{ marginTop: 6, fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                  GitOracle reads, tests, and opens its PR against this branch instead of
-                  the repo's default.
+                <div className="form-hint">
+                  Include the error message, where it happens, and — if you know it — how you'd fix it.
                 </div>
+              </div>
+
+              <div className="grid-2">
+                <div className="field" style={{ marginBottom: 0 }}>
+                  <label className="form-label" htmlFor="target-repo-input">
+                    <GitPullRequest size={14} /> Open the PR on <span className="optional">· optional</span>
+                  </label>
+                  {repos.length > 0 ? (
+                    <select id="target-repo-input" className="form-select" value={targetRepo} onChange={e => setTargetRepo(e.target.value)}>
+                      <option value="">Same repository</option>
+                      {repos.map(r => (
+                        <option key={r.id} value={r.fullName}>{r.fullName}{r.id === activeRepo?.id ? ' (active)' : ''}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      id="target-repo-input"
+                      type="text"
+                      className="form-input mono-input"
+                      value={targetRepo}
+                      onChange={e => setTargetRepo(e.target.value)}
+                      placeholder="owner/repo"
+                    />
+                  )}
+                </div>
+
+                <div className="field" style={{ marginBottom: 0 }}>
+                  <label className="form-label" htmlFor="branch-input">
+                    <GitBranch size={14} /> Branch <span className="optional">· optional</span>
+                  </label>
+                  <input
+                    id="branch-input"
+                    type="text"
+                    className="form-input mono-input"
+                    value={branch}
+                    onChange={e => setBranch(e.target.value)}
+                    placeholder="default branch"
+                  />
+                </div>
+              </div>
+              <div className="form-hint">
+                GitOracle reads, tests and opens its pull request against this branch. Leave it empty to use the repository's default.
               </div>
             </div>
 
+            <motion.div variants={itemVariants} style={{ marginBottom: 16 }}>
+              <div className="form-label" style={{ marginBottom: 10 }}>How should it work?</div>
+              <div className="grid-2" role="radiogroup" aria-label="Pipeline mode">
+                <label className={`option-card ${investigateFirst ? 'selected' : ''}`}>
+                  <input id="investigate-first" type="radio" name="mode" checked={investigateFirst}
+                         onChange={() => setInvestigateFirst(true)} style={{ marginTop: 3, accentColor: 'var(--accent)' }} />
+                  <div>
+                    <div className="option-title"><Search size={14} /> Investigate first <span className="badge badge-accent no-dot" style={{ height: 18, fontSize: '0.68rem' }}>Recommended</span></div>
+                    <div className="option-desc">
+                      Finds the commit that caused the bug, scopes a plan, then fixes it. Slower (~25s) and uses more tokens.
+                    </div>
+                  </div>
+                </label>
+                <label className={`option-card ${!investigateFirst ? 'selected' : ''}`}>
+                  <input type="radio" name="mode" checked={!investigateFirst}
+                         onChange={() => setInvestigateFirst(false)} style={{ marginTop: 3, accentColor: 'var(--accent)' }} />
+                  <div>
+                    <div className="option-title"><Zap size={14} /> Fix directly</div>
+                    <div className="option-desc">
+                      Sends your instruction straight to the fixer, with no root-cause search. Faster (~8s) and cheaper — best when you already know the fix.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </motion.div>
+
             {status === 'error' && (
-              <motion.div
-                initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '12px 16px', borderRadius: 8,
-                  background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
-                  color: 'var(--danger)', marginBottom: 16, fontSize: '0.9rem'
-                }}
-              >
-                <AlertCircle size={16} />
-                {errorMsg}
+              <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} style={{ marginBottom: 16 }}>
+                <Alert tone="danger" title="Couldn't start the job">{errorMsg}</Alert>
               </motion.div>
             )}
-
-            <motion.div
-              variants={itemVariants}
-              style={{
-                display: 'flex', alignItems: 'flex-start', gap: 10,
-                padding: '14px 16px', marginBottom: 16,
-                border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)',
-                background: 'var(--bg-surface)'
-              }}
-            >
-              <input
-                id="investigate-first"
-                type="checkbox"
-                checked={investigateFirst}
-                onChange={(e) => setInvestigateFirst(e.target.checked)}
-                style={{ marginTop: 3, cursor: 'pointer' }}
-              />
-              <label htmlFor="investigate-first" style={{ cursor: 'pointer', flex: 1 }}>
-                <div style={{ fontSize: '0.88rem', color: 'var(--text-primary)', fontWeight: 500 }}>
-                  Investigate root cause first
-                </div>
-                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.5 }}>
-                  {investigateFirst
-                    ? 'Runs the full agent chain — Investigator ranks the commits that caused the bug, Planner scopes the change, then Fixer patches it. Slower (~25s) and uses more tokens.'
-                    : 'Sends your instruction straight to the Fixer with no investigation and no file context. Faster (~8s) and much cheaper — best when you already know what needs changing.'}
-                </div>
-              </label>
-            </motion.div>
 
             <motion.div variants={itemVariants} style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button
                 id="submit-fix-btn"
                 type="submit"
-                className="btn btn-primary"
+                className="btn btn-primary btn-lg"
                 disabled={status === 'loading' || !repoUrl.trim() || !issueDesc.trim()}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 28px', fontSize: '0.95rem' }}
               >
-                {status === 'loading' ? (
-                  <><Loader2 size={16} className="spinner" /> Queuing Fix...</>
-                ) : (
-                  <>Launch Fix Agent <ChevronRight size={16} /></>
-                )}
+                {status === 'loading'
+                  ? <><Loader2 size={16} className="spinner" /> Starting…</>
+                  : <>Start fixing <ArrowRight size={16} /></>}
               </button>
             </motion.div>
           </motion.form>
