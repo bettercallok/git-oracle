@@ -141,6 +141,12 @@ jar_for() {
 }
 
 echo "☕ Starting Java Microservices..."
+# Each service's own config also writes a log file (logging.file.name, e.g.
+# orchestrator.log) — and since they run from java-backend/, that is the very
+# file supervise already appends their console output to. Two writers, one
+# file: every line appeared twice. Console output is what supervise captures
+# (including crashes before logging starts), so turn the file appender off here.
+export LOGGING_FILE_NAME=
 # Use an array, not a plain string, for the JVM flags — passing an unquoted
 # string variable containing multiple flags to `java` is not reliably
 # word-split in every invocation context and can collapse into one bad

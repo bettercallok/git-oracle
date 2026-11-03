@@ -474,10 +474,12 @@ public class OrchestratorService {
             // Look up the repo URL and root commit from the job record
             final String[] repoUrl = {""};
             final String[] rootCommit = {null};
+            final String[] tenantId = {null};
             final Integer[] attempts = {1};
             jobRepository.findById(UUID.fromString(jobIdStr)).ifPresent(job -> {
                 repoUrl[0] = job.getRepo();
                 rootCommit[0] = job.getRootCommit();
+                tenantId[0] = job.getTenantId() == null ? null : job.getTenantId().toString();
                 if (job.getAttempts() != null) attempts[0] = job.getAttempts();
             });
 
@@ -493,6 +495,7 @@ public class OrchestratorService {
             testRequest.put("repoPath",  repoUrl[0]);            // fallback slug infer
             testRequest.put("patchDiff", event.get("patch"));
             testRequest.put("branch",    branch);
+            testRequest.put("tenantId",  tenantId[0]);           // per-tenant dependency cache
             testRequest.put("framework", "UNKNOWN");             // let runner auto-detect
 
             var response = restTemplate.postForObject("http://localhost:8084/test", withInternalAuth(testRequest), Map.class);

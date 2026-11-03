@@ -61,6 +61,16 @@ public class TestRunnerController {
     @Value("${gitoracle.testrunner.workspace-root:/tmp/gitoracle-workspaces}")
     private String workspaceRoot;
 
+    // Dependency caches (Maven ~/.m2, Gradle, npm, pip) used to live in each
+    // job's scratch directory and be deleted with it, so every test run — the
+    // fixer's baseline plus each attempt — downloaded every dependency again.
+    // They now persist per (tenant, repository) under <workspace-root>/.dep-cache
+    // (inside the root so the Docker daemon sees the same path). Per tenant AND
+    // repository: a build can write anything into its cache, so sharing one
+    // across repositories or tenants would let one poison another's builds.
+    @Value("${gitoracle.testrunner.dependency-cache:true}")
+    private boolean dependencyCacheEnabled;
+
     // Docker is the only sandbox this service has — running a cloned repo's own
     // build/test command (mvn test / npm ci / pip install -r / cargo test) is
     // executing arbitrary third-party code, so it must never happen unsandboxed
@@ -235,6 +245,52 @@ public class TestRunnerController {
         };
     }
 
+    /** Where each build tool keeps downloaded dependencies, given HOME=/tmp in the sandbox. */
+    static Map<String, String> dependencyCachePaths(TestFramework framework) {
+        return switch (framework) {
+            case MAVEN -> Map.of("m2", "/tmp/.m2");
+            case GRADLE -> Map.of("gradle", "/tmp/.gradle");
+            case NPM_JEST -> Map.of("npm", "/tmp/.npm");
+            case PYTEST -> Map.of("pip", "/tmp/.cache/pip");
+            default -> Map.of();
+        };
+    }
+
+    /** Stable, path-safe key for one tenant's cache of one repository; null = no cache. */
+    String dependencyCacheKey(String tenantId, String repoUrl) {
+        if (!dependencyCacheEnabled || repoUrl == null || repoUrl.isBlank()) {
+            return null;
+        }
+        String repo = repoUrl.trim().toLowerCase(Locale.ROOT).replaceAll("\\.git/?$", "").replaceAll("/+$", "");
+        String tenant = tenantId == null || tenantId.isBlank() ? "default" : tenantId.trim().toLowerCase(Locale.ROOT);
+        try {
+            byte[] hash = java.security.MessageDigest.getInstance("SHA-256")
+                .digest((tenant + "|" + repo).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash, 0, 12);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
+    private Path dependencyCacheDir(String cacheKey) {
+        return cacheKey == null ? null : Path.of(workspaceRoot).resolve(".dep-cache").resolve(cacheKey);
+    }
+
+    private List<String> dependencyCacheMounts(String cacheKey, TestFramework framework) throws IOException {
+        Path root = dependencyCacheDir(cacheKey);
+        if (root == null) {
+            return List.of();
+        }
+        List<String> mounts = new ArrayList<>();
+        for (var entry : dependencyCachePaths(framework).entrySet()) {
+            Path hostDir = root.resolve(entry.getKey());
+            Files.createDirectories(hostDir);
+            mounts.add("-v");
+            mounts.add(hostDir.toAbsolutePath() + ":" + entry.getValue() + ":rw");
+        }
+        return mounts;
+    }
+
     private static final Pattern JOB_ID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_-]{0,63}");
 
     /**
@@ -398,7 +454,8 @@ public class TestRunnerController {
             logger.info("Detected framework {} in dir {} for job {}", config.framework(), config.subDir(), jobId);
 
             // ── Step 5: Run tests in Docker ────────────────────────────────────
-            return ResponseEntity.ok(runInDocker(workDir, config, jobId, repoUrl));
+            return ResponseEntity.ok(runInDocker(workDir, config, jobId, repoUrl,
+                dependencyCacheKey(request.getTenantId(), repoUrl)));
 
         } catch (Exception e) {
             logger.error("Unexpected error running tests for job {}: {}", jobId, e.getMessage(), e);
@@ -470,6 +527,11 @@ public class TestRunnerController {
      */
     List<String> buildDockerRunCommand(Path workDir, FrameworkConfig config, String containerWorkDir,
                                         String dockerImage, String testCommand) throws IOException {
+        return buildDockerRunCommand(workDir, config, containerWorkDir, dockerImage, testCommand, null);
+    }
+
+    List<String> buildDockerRunCommand(Path workDir, FrameworkConfig config, String containerWorkDir,
+                                        String dockerImage, String testCommand, String cacheKey) throws IOException {
         // Scratch space for /tmp and the framework-specific caches below is a
         // host-directory bind mount, not --tmpfs. tmpfs is RAM-backed and its
         // pages count against --memory, so it seemed like the obvious choice
@@ -503,6 +565,7 @@ public class TestRunnerController {
             "-e", "HOME=/tmp"                           // package-manager caches land in the mount above
         ));
         dockerCmd.addAll(sandboxCacheBindMounts(scratchRoot, config.framework()));
+        dockerCmd.addAll(dependencyCacheMounts(cacheKey, config.framework()));
         dockerCmd.addAll(List.of(
             "-v", workDir.toAbsolutePath() + ":/repo:rw",
             "-w", containerWorkDir.replaceAll("/\\.$", ""), // clean trailing /.
@@ -598,7 +661,8 @@ public class TestRunnerController {
              + testCommand;
     }
 
-    private TestResult runInDocker(Path workDir, FrameworkConfig config, String jobId, String repoUrl) {
+    private TestResult runInDocker(Path workDir, FrameworkConfig config, String jobId, String repoUrl,
+                                   String cacheKey) {
         String dockerImage = getDockerImage(config.framework());
         String testCommand = getTestCommand(config.framework());
         String containerWorkDir = "/repo/" + config.subDir();
@@ -617,7 +681,8 @@ public class TestRunnerController {
             // Creates the scratch/cache subdirectories under workDir as a side
             // effect, so chown below (which must run AFTER this, not before)
             // covers them too.
-            List<String> dockerCmd = buildDockerRunCommand(workDir, config, containerWorkDir, dockerImage, testCommand);
+            List<String> dockerCmd = buildDockerRunCommand(workDir, config, containerWorkDir, dockerImage,
+                testCommand, cacheKey);
 
             // The container will run as sandboxUser (never root — see
             // resolveSandboxUser()), which may not be the uid that owns this
@@ -630,6 +695,10 @@ public class TestRunnerController {
             // can.
             try {
                 run(workDir, 10, "chown", "-R", sandboxUser, workDir.toAbsolutePath().toString());
+                Path cacheDir = dependencyCacheDir(cacheKey);
+                if (cacheDir != null) {
+                    run(workDir, 30, "chown", "-R", sandboxUser, cacheDir.toAbsolutePath().toString());
+                }
             } catch (Exception e) {
                 logger.warn("Could not chown workspace {} to sandbox user {} for job {}: {}",
                     workDir, sandboxUser, jobId, e.getMessage());

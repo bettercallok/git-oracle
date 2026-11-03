@@ -25,3 +25,9 @@ updates:
     groups:
       java:
         patterns: ["*"]
+    # Major versions (Spring Boot 3 → 4, Gradle 8 → 9, ...) are migrations, not
+    # bumps: #18 bundled them with routine updates and didn't compile. Those are
+    # done deliberately; Dependabot keeps sending minor and patch updates.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
