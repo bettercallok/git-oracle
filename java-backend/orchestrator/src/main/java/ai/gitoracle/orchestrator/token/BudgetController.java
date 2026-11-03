@@ -24,6 +24,8 @@ import java.util.UUID;
 @Slf4j
 public class BudgetController {
 
+    static final int MAX_TOKENS_PER_RECORD = 1_000_000;
+
     private final TokenBudgetManager budgetManager;
     private final AgentJobRepository jobRepository;
 
@@ -35,6 +37,24 @@ public class BudgetController {
     public ResponseEntity<Map<String, Object>> recordUsage(
             @PathVariable UUID jobId,
             @RequestBody RecordUsageRequest request) {
+
+        // Negative usage would let a caller refund its own budget; anything
+        // past a single completion's plausible size is not a real LLM call.
+        if (request.getTokensUsed() < 0 || request.getTokensUsed() > MAX_TOKENS_PER_RECORD) {
+            return ResponseEntity.badRequest().body(Map.of(
+                "error", "tokensUsed must be between 0 and " + MAX_TOKENS_PER_RECORD));
+        }
+        // Agents record usage directly (internal token, no tenant header). The
+        // same route is reachable through the gateway, where it had no
+        // ownership check: any tenant could post a huge count against another
+        // tenant's job id (printed in every GitOracle PR body) and have that
+        // job escalated as TOKEN_BUDGET_EXCEEDED.
+        if (TenantContext.isAssertedByGateway()
+                && jobRepository.findById(jobId)
+                    .filter(job -> TenantContext.requireTenantId().equals(job.getTenantId()))
+                    .isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
 
         log.info("Recording {} tokens for job {} from agent {}",
                 request.getTokensUsed(), jobId, request.getAgentName());

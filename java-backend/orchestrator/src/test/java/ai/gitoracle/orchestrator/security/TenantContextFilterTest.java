@@ -230,4 +230,29 @@ class TenantContextFilterTest {
             assertThat(response.getStatus()).as("path %s should bypass entirely", path).isEqualTo(200);
         }
     }
+
+    // ── Gateway-asserted vs defaulted tenant ────────────────────────────────
+
+    /**
+     * Ownership checks on routes agents also call (job events, budget usage,
+     * prompt versions) hinge on telling "the gateway resolved this tenant"
+     * apart from "no header, default filled in" — tenantId() is non-null either way.
+     */
+    @Test
+    void aTenantHeaderIsAssertedAndAMissingOneIsNot() throws Exception {
+        boolean[] seen = new boolean[2];
+
+        MockHttpServletRequest withHeader = new MockHttpServletRequest("GET", "/api/v1/jobs");
+        withHeader.addHeader("X-Tenant-ID", UUID.randomUUID().toString());
+        filter.doFilter(withHeader, new MockHttpServletResponse(),
+            (req, res) -> seen[0] = TenantContext.isAssertedByGateway());
+
+        MockHttpServletRequest without = new MockHttpServletRequest("GET", "/api/v1/jobs");
+        filter.doFilter(without, new MockHttpServletResponse(),
+            (req, res) -> seen[1] = TenantContext.isAssertedByGateway() || TenantContext.tenantId() == null);
+
+        assertThat(seen[0]).isTrue();
+        assertThat(seen[1]).isFalse();
+        assertThat(TenantContext.isAssertedByGateway()).isFalse(); // cleared afterwards
+    }
 }

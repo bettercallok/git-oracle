@@ -12,6 +12,11 @@ public final class TestTenantContext {
         TenantContext.set(tenantId, Set.of());
     }
 
+    /** A direct internal caller (a Python agent): no X-Tenant-ID, default tenant filled in. */
+    public static void setInternalCaller(UUID defaultTenantId) {
+        TenantContext.set(defaultTenantId, Set.of(), false);
+    }
+
     public static void clear() {
         TenantContext.clear();
     }

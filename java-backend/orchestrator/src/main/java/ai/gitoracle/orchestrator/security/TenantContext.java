@@ -31,14 +31,36 @@ import java.util.UUID;
  */
 public final class TenantContext {
 
-    private record Context(UUID tenantId, Set<String> scopes) {}
+    /**
+     * {@code asserted}: the tenant arrived as an {@code X-Tenant-ID} header,
+     * which only the api-gateway sets (after resolving an API key) and which it
+     * strips from client requests. False means the filter fell back to the
+     * default tenant for a direct internal caller (a Python agent) that sent no
+     * header — a value that must never be read as "this caller owns the
+     * default tenant's jobs and nobody else's".
+     */
+    private record Context(UUID tenantId, Set<String> scopes, boolean asserted) {}
 
     private static final ThreadLocal<Context> CURRENT = new ThreadLocal<>();
 
     private TenantContext() {}
 
     static void set(UUID tenantId, Set<String> scopes) {
-        CURRENT.set(new Context(tenantId, scopes == null ? Set.of() : scopes));
+        set(tenantId, scopes, true);
+    }
+
+    static void set(UUID tenantId, Set<String> scopes, boolean asserted) {
+        CURRENT.set(new Context(tenantId, scopes == null ? Set.of() : scopes, asserted));
+    }
+
+    /**
+     * True when the current request carries a tenant the api-gateway resolved
+     * from an API key, i.e. it came from an external caller who must own any
+     * job it touches. False for a direct internal caller.
+     */
+    public static boolean isAssertedByGateway() {
+        Context c = CURRENT.get();
+        return c != null && c.asserted();
     }
 
     static void clear() {
