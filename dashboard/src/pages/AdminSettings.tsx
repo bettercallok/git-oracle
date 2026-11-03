@@ -1,22 +1,24 @@
 import { useState } from 'react';
-import { Save, Server, Shield, Brain } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Save, Server, ShieldCheck, Bot, Check } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { containerVariants, itemVariants } from '../utils/motion';
+import { PageHeader, Alert } from '../components/ui';
 
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.05 } }
-};
-const itemVariants = {
-  hidden: { opacity: 0, y: 10 },
-  show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 300, damping: 24 } }
-};
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <label className="toggle-switch">
+      <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} aria-label={label} />
+      <span className="toggle-slider" />
+    </label>
+  );
+}
 
 export default function AdminSettings() {
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
-  // Form State
   const [config, setConfig] = useState({
-    llamaUrl: 'http://localhost:8080/v1',
+    llmUrl: 'https://api.openai.com/v1/chat/completions',
     kafkaBroker: 'localhost:9092',
     qdrantEndpoint: 'http://localhost:6333',
     plannerEnabled: true,
@@ -24,140 +26,113 @@ export default function AdminSettings() {
     requireGuardrails: true,
     autoCommit: false,
   });
+  const set = <K extends keyof typeof config>(key: K, value: (typeof config)[K]) => setConfig(c => ({ ...c, [key]: value }));
 
   const handleSave = () => {
     setSaving(true);
-    // Simulate save
+    // Not wired to the backend yet — see the notice at the top of the page.
     setTimeout(() => {
       setSaving(false);
-      alert('Settings saved locally. Backend integration pending.');
-    }, 800);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    }, 500);
   };
 
   return (
-    <motion.div variants={containerVariants} initial="hidden" animate="show" style={{ maxWidth: 900 }}>
-      <motion.div variants={itemVariants} className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div>
-          <h1 className="page-title">Admin Settings</h1>
-          <p className="page-description" style={{ color: 'var(--text-secondary)' }}>Configure system endpoints, AI agents, and security constraints</p>
-        </div>
-        <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-          <Save size={16} />
-          {saving ? 'Saving...' : 'Save Changes'}
-        </button>
+    <motion.div variants={containerVariants} initial="hidden" animate="show" style={{ maxWidth: 940 }}>
+      <PageHeader
+        title="Settings"
+        description="Endpoints, agents and safety rules for this deployment."
+        actions={
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+            {saved ? <Check size={15} /> : <Save size={15} />}
+            {saving ? 'Saving…' : saved ? 'Saved in this tab' : 'Save changes'}
+          </button>
+        }
+      />
+
+      <motion.div variants={itemVariants} style={{ marginBottom: 16 }}>
+        <Alert tone="info" title="Preview">
+          These controls aren't connected to the services yet, so changes here last only until you leave the page.
+          The running configuration comes from the root <code className="inline">.env</code> — restart the services after editing it.
+        </Alert>
       </motion.div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
-        {/* System Configuration */}
+      <AnimatePresence>
+        {saved && (
+          <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} style={{ marginBottom: 16 }}>
+            <Alert tone="success">Saved for this tab. Nothing was sent to the backend.</Alert>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="grid-2" style={{ alignItems: 'start' }}>
         <motion.div variants={itemVariants} className="card">
-          <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Server size={18} /> System Infrastructure
-          </h2>
-          
-          <div className="form-group">
-            <label className="form-label">LLM API Endpoint (llama.cpp)</label>
-            <input 
-              type="text" 
-              className="form-input" 
-              value={config.llamaUrl}
-              onChange={e => setConfig({...config, llamaUrl: e.target.value})}
-            />
+          <h2 className="section-title"><Server size={16} /> Infrastructure</h2>
+
+          <div className="field">
+            <label className="form-label" htmlFor="llm-url">LLM endpoint</label>
+            <input id="llm-url" type="text" className="form-input mono-input" value={config.llmUrl}
+                   onChange={e => set('llmUrl', e.target.value)} />
+            <div className="form-hint">
+              Any OpenAI-compatible API. Must be the full <code className="inline">/chat/completions</code> URL (<code className="inline">LLM_BASE_URL</code>).
+            </div>
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Kafka Broker URL</label>
-            <input 
-              type="text" 
-              className="form-input" 
-              value={config.kafkaBroker}
-              onChange={e => setConfig({...config, kafkaBroker: e.target.value})}
-            />
+          <div className="field">
+            <label className="form-label" htmlFor="kafka">Kafka broker</label>
+            <input id="kafka" type="text" className="form-input mono-input" value={config.kafkaBroker}
+                   onChange={e => set('kafkaBroker', e.target.value)} />
           </div>
 
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Qdrant Vector DB Endpoint</label>
-            <input 
-              type="text" 
-              className="form-input" 
-              value={config.qdrantEndpoint}
-              onChange={e => setConfig({...config, qdrantEndpoint: e.target.value})}
-            />
+          <div className="field">
+            <label className="form-label" htmlFor="qdrant">Qdrant endpoint</label>
+            <input id="qdrant" type="text" className="form-input mono-input" value={config.qdrantEndpoint}
+                   onChange={e => set('qdrantEndpoint', e.target.value)} />
+            <div className="form-hint">Vector store for retrieval context.</div>
           </div>
         </motion.div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-          {/* Agent Controls */}
+        <div className="stack-lg">
           <motion.div variants={itemVariants} className="card">
-            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Brain size={18} /> Agent Fleet Controls
-            </h2>
-            
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <h2 className="section-title"><Bot size={16} /> Agents</h2>
+            <div className="setting-row">
               <div>
-                <div style={{ fontWeight: 500, color: 'var(--text-primary)', marginBottom: 2 }}>Planner Agent</div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Analyzes issues and builds execution plans</div>
+                <div className="setting-title">Planner</div>
+                <div className="setting-desc">Scopes each fix to specific files, functions and a line budget.</div>
               </div>
-              <label className="toggle-switch">
-                <input 
-                  type="checkbox" 
-                  checked={config.plannerEnabled}
-                  onChange={e => setConfig({...config, plannerEnabled: e.target.checked})}
-                />
-                <span className="toggle-slider"></span>
-              </label>
+              <Toggle label="Planner" checked={config.plannerEnabled} onChange={v => set('plannerEnabled', v)} />
             </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="setting-row">
               <div>
-                <div style={{ fontWeight: 500, color: 'var(--text-primary)', marginBottom: 2 }}>Fixer Agent</div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Executes code modifications directly</div>
+                <div className="setting-title">Fixer</div>
+                <div className="setting-desc">Writes the patch and self-tests it, up to three attempts.</div>
               </div>
-              <label className="toggle-switch">
-                <input 
-                  type="checkbox" 
-                  checked={config.fixerEnabled}
-                  onChange={e => setConfig({...config, fixerEnabled: e.target.checked})}
-                />
-                <span className="toggle-slider"></span>
-              </label>
+              <Toggle label="Fixer" checked={config.fixerEnabled} onChange={v => set('fixerEnabled', v)} />
             </div>
           </motion.div>
 
-          {/* Security & Pipeline */}
           <motion.div variants={itemVariants} className="card">
-            <h2 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Shield size={18} /> Security & Pipeline
-            </h2>
-            
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <h2 className="section-title"><ShieldCheck size={16} /> Safety</h2>
+            <div className="setting-row">
               <div>
-                <div style={{ fontWeight: 500, color: 'var(--text-primary)', marginBottom: 2 }}>Require Guardrails Validation</div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Block execution if AI confidence is low</div>
+                <div className="setting-title">Require guardrails</div>
+                <div className="setting-desc">Reject any patch that touches a file outside the plan's allow-list.</div>
               </div>
-              <label className="toggle-switch">
-                <input 
-                  type="checkbox" 
-                  checked={config.requireGuardrails}
-                  onChange={e => setConfig({...config, requireGuardrails: e.target.checked})}
-                />
-                <span className="toggle-slider"></span>
-              </label>
+              <Toggle label="Require guardrails" checked={config.requireGuardrails} onChange={v => set('requireGuardrails', v)} />
             </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="setting-row">
               <div>
-                <div style={{ fontWeight: 500, color: 'var(--text-primary)', marginBottom: 2 }}>Enable Auto-Commit</div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Allow agents to commit bypassing human review</div>
+                <div className="setting-title">Auto-commit</div>
+                <div className="setting-desc">Commit directly instead of opening a pull request for review.</div>
               </div>
-              <label className="toggle-switch">
-                <input 
-                  type="checkbox" 
-                  checked={config.autoCommit}
-                  onChange={e => setConfig({...config, autoCommit: e.target.checked})}
-                />
-                <span className="toggle-slider"></span>
-              </label>
+              <Toggle label="Auto-commit" checked={config.autoCommit} onChange={v => set('autoCommit', v)} />
             </div>
+            {config.autoCommit && (
+              <div style={{ marginTop: 14 }}>
+                <Alert tone="warning">Changes would land without a human looking at them first.</Alert>
+              </div>
+            )}
           </motion.div>
         </div>
       </div>
