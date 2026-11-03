@@ -6,7 +6,7 @@ import httpx
 import logging
 from datetime import datetime, timezone
 from typing import Type, TypeVar, Dict, List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv, find_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -91,18 +91,35 @@ def _trace_to_langfuse(
     usage:      Dict,
     start_time: datetime,
     end_time:   datetime,
+    model:      Optional[str] = None,
+    level:      str = "DEFAULT",
+    status_message: Optional[str] = None,
 ) -> None:
-    """Send a single generation event to Langfuse. Fails silently."""
+    """
+    Send a single generation event to Langfuse. Fails silently.
+
+    One trace per job (trace_id = job_id), one generation per LLM call, and the
+    generation is named after the agent that made it. It used to be the other
+    way round: every generation was called "llm_structured" and each call
+    renamed the shared trace to "<agent>_llm_call", so a job's trace carried
+    whichever agent happened to write last and nothing said which call was
+    whose. The dashboard's trace viewer groups and labels calls by this name.
+    """
     if _lf is None:
         return
     try:
         trace = _lf.trace(
             id=trace_id,
-            name=f"{agent_name}_llm_call",
+            # Stable for a job's trace; a call outside any job (the commit
+            # analyst's chat) gets its own trace named after the agent.
+            name="gitoracle-job" if trace_id else f"{agent_name}_llm_call",
         )
         trace.generation(
-            name="llm_structured",
-            model=LLM_MODEL_NAME,
+            name=agent_name,
+            metadata={"agent": agent_name},
+            model=model or LLM_MODEL_NAME,
+            level=level,
+            status_message=status_message,
             input=messages,
             output=raw_output,
             usage={
@@ -259,7 +276,16 @@ async def llm_structured(
             if job_id and tokens_used:
                 await _report_tokens(job_id, tokens_used, agent_name)
 
-            # 5. Send full trace to Langfuse (non-blocking, silent failure)
+            # 5. Validate output against the Pydantic schema, then
+            # 6. send the full call to Langfuse (non-blocking, silent failure)
+            #    — marked ERROR when the reply did not fit the schema, so a
+            #    failed attempt is visible in the trace instead of looking
+            #    like any other call.
+            validation_error: Optional[ValidationError] = None
+            try:
+                parsed = output_schema.model_validate_json(raw_content)
+            except ValidationError as ve:
+                validation_error = ve
             _trace_to_langfuse(
                 trace_id=trace_id or job_id,
                 agent_name=agent_name,
@@ -268,10 +294,14 @@ async def llm_structured(
                 usage=usage,
                 start_time=start_time,
                 end_time=end_time,
+                model=str(payload["model"]),   # the fallback model when that is what answered
+                level="ERROR" if validation_error else "DEFAULT",
+                status_message=(f"Reply did not match {output_schema.__name__}: {validation_error}"[:1000]
+                                if validation_error else None),
             )
-
-            # 6. Validate output against the Pydantic schema
-            return output_schema.model_validate_json(raw_content)
+            if validation_error:
+                raise validation_error
+            return parsed
 
         except httpx.HTTPError as e:
             logger.error(f"HTTP error parsing LLM response: {e}")
