@@ -125,7 +125,7 @@ Each agent also exposes its own synchronous HTTP endpoint (`/fix`, `/plan`, etc.
 
 Keys are `gor_<12-hex prefix>_<64-hex secret>`; only a SHA-256 hash is stored, located by the indexed public prefix and compared with `MessageDigest.isEqual`. Mint/list/revoke via `/api/v1/admin/api-keys` (requires the `platform:admin` scope, enforced at the gateway). Two things to know:
 - **Revocation is not instant** — the gateway caches key rows for `GITORACLE_API_KEY_CACHE_TTL_SECONDS` (default 60). Restart the gateway to purge immediately.
-- **`GITORACLE_API_KEY` is legacy** — a single shared secret resolving to the default tenant with `platform:admin`. It exists only to bootstrap the first real key; set `GITORACLE_LEGACY_API_KEY_ENABLED=false` afterwards. The gateway logs a warning every boot while it is on.
+- **`GITORACLE_API_KEY` is legacy** — a single shared secret resolving to the default tenant with `platform:admin`. It exists only to bootstrap the first real key; set `GITORACLE_LEGACY_API_KEY_ENABLED=false` afterwards. `scripts/setup_production_config.sh` does that whole switch (mints a real key, verifies it, stores it as `GITORACLE_API_KEY`, then disables the legacy key; also moves the App credentials into the root `.env` and sets the repository allow-list). The gateway logs a warning every boot while it is on.
 
 `TenantContext` is **request-scoped only**. Kafka listeners run on consumer threads with no request, so they must take the tenant from the event payload (`ErrorIngestedEvent.tenantId`); `TenantContext.requireTenantId()` throws there rather than silently defaulting.
 
