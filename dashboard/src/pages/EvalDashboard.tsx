@@ -1,25 +1,10 @@
 import { motion } from 'framer-motion';
-import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Target, ListChecks, GitMerge, TrendingDown, LineChart, MessagesSquare, FileText, WifiOff, TestTubes } from 'lucide-react';
 import { apiClient } from '../api/client';
-import { Loader2, AlertCircle } from 'lucide-react';
-
-// --- Custom Number Ticker Hook ---
-function useNumberTicker(target: number, duration: number = 800) {
-  const [value, setValue] = useState(0);
-  useEffect(() => {
-    let startTimestamp: number | null = null;
-    const step = (timestamp: number) => {
-      if (!startTimestamp) startTimestamp = timestamp;
-      const progress = Math.min((timestamp - startTimestamp) / duration, 1);
-      const easeProgress = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
-      setValue(Math.floor(easeProgress * target));
-      if (progress < 1) window.requestAnimationFrame(step);
-    };
-    window.requestAnimationFrame(step);
-  }, [target, duration]);
-  return value;
-}
+import { containerVariants, itemVariants } from '../utils/motion';
+import { useNumberTicker } from '../utils/useNumberTicker';
+import { PageHeader, EmptyState, LoadingState } from '../components/ui';
 
 interface PromptVersion {
   agent: string;
@@ -80,19 +65,11 @@ const fetchPrOutcomes = async (): Promise<PrOutcomeStats> => {
 const FEEDBACK_ROWS: { key: string; label: string; color: string }[] = [
   { key: 'MERGED',   label: 'Merged',   color: 'var(--success)' },
   { key: 'APPROVED', label: 'Approved', color: 'var(--info)' },
-  { key: 'CLOSED',   label: 'Closed',   color: 'var(--warning)' },
+  { key: 'CLOSED',   label: 'Closed',   color: 'var(--text-muted)' },
   { key: 'REVERTED', label: 'Reverted', color: 'var(--danger)' },
 ];
 
-
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.05 } }
-};
-const itemVariants = {
-  hidden: { opacity: 0, y: 10 },
-  show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 300, damping: 24 } }
-};
+const RECENT_WINDOW = 8;
 
 export default function EvalDashboard() {
   const { data: evals = [], isLoading: evalsLoading, isError: evalsError } = useQuery({
@@ -112,179 +89,206 @@ export default function EvalDashboard() {
     refetchInterval: 10000,
   });
 
-  const latestAccuracy = evals.length > 0 ? evals[0].accuracy * 100 : 0;
-  const accuracy = useNumberTicker(latestAccuracy, 1000);
-
-  // Both of these were hardcoded (50 cases, 92% merge rate) and bore no relation
-  // to anything the system had actually measured. Eval Cases now reports the case
-  // count the most recent run genuinely covered; regressions are derived from the
-  // accuracy history rather than asserted.
-  const RECENT_WINDOW = 6;
+  const latest = evals[0];
+  const accuracy = useNumberTicker(latest ? Math.round(latest.accuracy * 100) : 0);
   const recentRuns = evals.slice(0, RECENT_WINDOW);
-  const cases = useNumberTicker(evals.length > 0 ? (evals[0].casesTotal ?? 0) : 0, 1000);
+  // Both of these were once hardcoded (50 cases, 92% merge rate). Eval cases is
+  // the count the latest run actually covered; regressions come from the history.
+  const cases = useNumberTicker(latest ? (latest.casesTotal ?? 0) : 0);
   const regressions = countRegressions(recentRuns);
+  const delta = evals.length > 1 ? (evals[0].accuracy - evals[1].accuracy) * 100 : null;
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
-      <motion.div variants={itemVariants} className="page-header">
-        <h1 className="page-title">Eval Dashboard</h1>
-        <p className="page-description">Prompt performance, feedback outcomes, and accuracy trends</p>
-      </motion.div>
+      <PageHeader
+        title="Evaluations"
+        description="How well GitOracle finds root causes and writes fixes, measured against a golden dataset — plus what happened to the pull requests it opened."
+      />
 
-      {evalsLoading && <p><Loader2 className="spinner" size={16} /> Loading evaluations...</p>}
-      {evalsError && <p style={{ color: 'var(--danger)' }}><AlertCircle size={16} /> Error loading evaluations.</p>}
-      
+      {evalsLoading && <LoadingState label="Loading evaluations…" />}
+      {evalsError && (
+        <div className="card">
+          <EmptyState icon={<WifiOff size={20} />} title="Couldn't load evaluations" description="The orchestrator didn't answer. Retrying every ten seconds." />
+        </div>
+      )}
+
       {!evalsLoading && !evalsError && (
         <>
           <motion.div variants={itemVariants} className="stat-grid">
             <div className="card">
-              <div className="stat-label">Latest Accuracy</div>
-              <div className="stat-value">{accuracy}%</div>
-              <div className="stat-subtitle mono" style={{ color: 'var(--text-muted)' }}>{evals.length > 0 ? evals[0].goldenDatasetVersion : 'No Data'}</div>
+              <div className="stat-head">
+                <span className="stat-label">Latest accuracy</span>
+                <span className="stat-icon accent"><Target size={15} /></span>
+              </div>
+              <div className="stat-value">{latest ? `${accuracy}%` : '—'}</div>
+              <div className="stat-subtitle">
+                {delta !== null
+                  ? <span style={{ color: delta >= 0 ? 'var(--success)' : 'var(--danger)' }}>{delta >= 0 ? '▲' : '▼'} {Math.abs(delta).toFixed(1)} pts vs previous run</span>
+                  : latest ? <span className="mono">{latest.goldenDatasetVersion}</span> : 'No runs yet'}
+              </div>
             </div>
             <div className="card">
-              <div className="stat-label">Eval Cases</div>
-              <div className="stat-value">{cases}</div>
-              <div className="stat-subtitle">in latest run</div>
+              <div className="stat-head">
+                <span className="stat-label">Eval cases</span>
+                <span className="stat-icon"><ListChecks size={15} /></span>
+              </div>
+              <div className="stat-value">{latest ? cases : '—'}</div>
+              <div className="stat-subtitle">{latest ? 'In the latest run' : 'Run eval/run_evals.py'}</div>
             </div>
             <div className="card">
-              <div className="stat-label">PR Merge Rate</div>
-              <div className="stat-value" style={{ color: 'var(--success)' }}>
-                {prStats && prStats.mergeRate !== null
-                  ? `${Math.round(prStats.mergeRate * 100)}%`
-                  : '—'}
+              <div className="stat-head">
+                <span className="stat-label">PR merge rate</span>
+                <span className="stat-icon success"><GitMerge size={15} /></span>
+              </div>
+              <div className="stat-value">
+                {prStats && prStats.mergeRate !== null ? `${Math.round(prStats.mergeRate * 100)}%` : '—'}
               </div>
               <div className="stat-subtitle">
                 {prStats && prStats.total > 0
-                  ? `across ${prStats.total} PR${prStats.total === 1 ? '' : 's'}`
-                  : 'no PR outcomes yet'}
+                  ? `Across ${prStats.total} pull request${prStats.total === 1 ? '' : 's'}`
+                  : 'No pull request outcomes yet'}
               </div>
             </div>
             <div className="card">
-              <div className="stat-label">Regressions</div>
-              <div className="stat-value" style={{ color: regressions > 0 ? 'var(--danger)' : 'var(--text-primary)' }}>
-                {regressions}
+              <div className="stat-head">
+                <span className="stat-label">Regressions</span>
+                <span className={`stat-icon ${regressions > 0 ? 'danger' : ''}`}><TrendingDown size={15} /></span>
               </div>
+              <div className="stat-value" style={{ color: regressions > 0 ? 'var(--danger)' : undefined }}>{regressions}</div>
               <div className="stat-subtitle">
-                {recentRuns.length > 1 ? `in last ${recentRuns.length} runs` : 'need 2+ runs'}
+                {recentRuns.length > 1 ? `Runs that scored lower than the one before, last ${recentRuns.length}` : 'Needs at least two runs'}
               </div>
             </div>
           </motion.div>
 
-          <motion.div variants={itemVariants} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
+          <motion.div variants={itemVariants} className="grid-2" style={{ marginBottom: 16 }}>
             <div className="card">
-              <h2 style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)', marginBottom: 20 }}>Accuracy Trend</h2>
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, height: 160 }}>
-                {evals.slice(0, 6).reverse().map((run, i) => (
-                  <div key={run.id} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                    <div style={{ position: 'relative', width: '100%', maxWidth: 36, height: 130, display: 'flex', alignItems: 'flex-end' }}>
-                      <motion.div
-                        initial={{ height: 0 }}
-                        animate={{ height: `${run.accuracy * 100}%` }}
-                        transition={{ delay: 0.2 + (i * 0.05), type: 'spring' as const }}
-                        style={{ width: '100%', background: 'var(--accent)', borderRadius: '3px 3px 0 0' }}
-                      />
-                      <div className="mono" style={{ position: 'absolute', top: -20, left: '50%', transform: 'translateX(-50%)', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                        {(run.accuracy * 100).toFixed(0)}%
-                      </div>
-                    </div>
-                    <div className="mono" style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{new Date(run.createdAt).toLocaleDateString(undefined, {month: 'short', day: 'numeric'})}</div>
-                  </div>
-                ))}
+              <div className="card-header">
+                <div>
+                  <div className="card-title"><LineChart size={16} /> Accuracy by run</div>
+                  <div className="card-subtitle">Last {Math.min(RECENT_WINDOW, evals.length) || RECENT_WINDOW} runs, oldest first · dashed line is the 75% CI gate</div>
+                </div>
               </div>
+              {evals.length === 0 ? (
+                <EmptyState icon={<TestTubes size={20} />} title="No eval runs yet"
+                            description={<>Run <code className="inline">python eval/run_evals.py</code> with the services up.</>} />
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 180, paddingTop: 22, position: 'relative' }}>
+                  {/* 75% gate — the CI regression threshold */}
+                  <div style={{ position: 'absolute', left: 0, right: 0, bottom: `calc(${0.75 * 140}px + 22px)`, borderTop: '1px dashed var(--border-strong)' }} />
+                  {[...recentRuns].reverse().map((run, i, arr) => {
+                    const isLatest = i === arr.length - 1;
+                    return (
+                      <div key={run.id} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, minWidth: 0 }}
+                           title={`${run.goldenDatasetVersion} · ${run.casesTotal} cases · ${(run.avgLatencyMs / 1000).toFixed(1)}s avg`}>
+                        <div style={{ position: 'relative', width: '100%', maxWidth: 34, height: 140, display: 'flex', alignItems: 'flex-end' }}>
+                          <motion.div
+                            initial={{ height: 0 }}
+                            animate={{ height: `${run.accuracy * 100}%` }}
+                            transition={{ delay: 0.1 + i * 0.04, type: 'spring', stiffness: 200, damping: 24 }}
+                            style={{
+                              width: '100%', borderRadius: '5px 5px 2px 2px',
+                              background: isLatest ? 'var(--accent)' : 'color-mix(in srgb, var(--accent) 35%, transparent)',
+                            }}
+                          />
+                          <div className="mono" style={{ position: 'absolute', top: -18, left: '50%', transform: 'translateX(-50%)', fontSize: '0.7rem', color: isLatest ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                            {(run.accuracy * 100).toFixed(0)}
+                          </div>
+                        </div>
+                        <div className="mono muted truncate" style={{ fontSize: '0.68rem', maxWidth: '100%' }}>
+                          {new Date(run.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="card">
-              <h2 style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)', marginBottom: 20 }}>
-                PR Feedback
-              </h2>
-              {(!prStats || prStats.total === 0) && (
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', paddingTop: 6 }}>
-                  No PR outcomes recorded yet. Merge or close a GitOracle PR — the
-                  GitHub <span className="mono">pull_request</span> webhook populates this.
-                </p>
-              )}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 6 }}>
-                {prStats && prStats.total > 0 && FEEDBACK_ROWS.map((item, i) => {
-                  const count = prStats.counts[item.key] ?? 0;
-                  const pct = Math.round((count / prStats.total) * 100);
-                  return (
-                  <div key={item.label}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{item.label}</span>
-                      <span className="mono" style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>
-                        {count} ({pct}%)
-                      </span>
-                    </div>
-                    <div style={{ height: 6, background: 'var(--border-strong)', borderRadius: 3, overflow: 'hidden' }}>
-                      <motion.div
-                        initial={{ width: 0 }}
-                        animate={{ width: `${pct}%` }}
-                        transition={{ delay: 0.3 + (i * 0.1), duration: 0.8, ease: 'easeOut' }}
-                        style={{ height: '100%', background: item.color, borderRadius: 3 }}
-                      />
-                    </div>
-                  </div>
-                  );
-                })}
+              <div className="card-header">
+                <div>
+                  <div className="card-title"><MessagesSquare size={16} /> Pull request outcomes</div>
+                  <div className="card-subtitle">What reviewers did with GitOracle's pull requests</div>
+                </div>
               </div>
+              {(!prStats || prStats.total === 0) ? (
+                <EmptyState icon={<GitMerge size={20} />} title="No outcomes yet"
+                            description={<>Merge or close a GitOracle pull request — the GitHub <code className="inline">pull_request</code> webhook fills this in.</>} />
+              ) : (
+                <div className="stack-lg" style={{ paddingTop: 4 }}>
+                  {FEEDBACK_ROWS.map((item, i) => {
+                    const count = prStats.counts[item.key] ?? 0;
+                    const pct = Math.round((count / prStats.total) * 100);
+                    return (
+                      <div key={item.label}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 7, fontSize: '0.88rem' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)' }}>
+                            <i style={{ width: 8, height: 8, borderRadius: 2, background: item.color, display: 'block' }} /> {item.label}
+                          </span>
+                          <span className="mono tabular" style={{ color: 'var(--text-primary)' }}>
+                            {count} <span className="muted">· {pct}%</span>
+                          </span>
+                        </div>
+                        <div className="meter">
+                          <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }}
+                                      transition={{ delay: 0.2 + i * 0.08, duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+                                      style={{ background: item.color }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </motion.div>
 
           <motion.div variants={itemVariants} className="table-container">
-            <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-subtle)' }}>
-              <h2 style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-primary)' }}>
-                Prompt Versions
-              </h2>
+            <div className="card-header" style={{ margin: 0, padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div>
+                <div className="card-title"><FileText size={16} /> Prompt versions</div>
+                <div className="card-subtitle">Measured from the jobs that actually ran on each version</div>
+              </div>
             </div>
-            {prompts.length === 0 && (
-              <p style={{ padding: '18px 24px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                No finished jobs attributed to a prompt version yet. Run a job and this
-                fills in from real outcomes.
-              </p>
+            {prompts.length === 0 ? (
+              <EmptyState icon={<FileText size={20} />} title="No measured prompt versions yet"
+                          description="Finish a job and its prompt versions show up here with real outcomes." />
+            ) : (
+              <div className="table-scroll">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Agent</th>
+                      <th>Version</th>
+                      <th className="num">Accuracy</th>
+                      <th className="num">Succeeded</th>
+                      <th className="num">Avg tokens</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {prompts.map((p) => (
+                      <tr key={`${p.agent}-${p.version}`}>
+                        <td className="cell-primary" style={{ textTransform: 'capitalize' }}>{p.agent}</td>
+                        <td className="mono">v{p.version}</td>
+                        <td className="num mono tabular" style={{
+                          color: p.accuracy === null ? 'var(--text-muted)' : p.accuracy >= 0.9 ? 'var(--success)' : p.accuracy >= 0.75 ? 'var(--text-primary)' : 'var(--warning)',
+                        }}>
+                          {p.accuracy === null ? '—' : `${(p.accuracy * 100).toFixed(0)}%`}
+                        </td>
+                        <td className="num mono tabular muted">{p.successes} / {p.jobs}</td>
+                        <td className="num mono tabular">{p.avgTokens === null ? '—' : p.avgTokens.toLocaleString()}</td>
+                        <td>
+                          {p.active
+                            ? <span className="badge badge-success">Active</span>
+                            : <span className="badge badge-neutral no-dot">Archived</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Agent</th>
-                  <th>Version</th>
-                  <th>Accuracy</th>
-                  <th>Jobs</th>
-                  <th>Avg Tokens</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {prompts.map((p) => (
-                  <tr key={`${p.agent}-${p.version}`}>
-                    <td style={{ fontWeight: 500, color: 'var(--text-primary)', textTransform: 'capitalize' }}>{p.agent}</td>
-                    <td className="mono">v{p.version}</td>
-                    <td
-                      className="mono"
-                      style={{
-                        color: p.accuracy === null
-                          ? 'var(--text-muted)'
-                          : p.accuracy >= 0.9 ? 'var(--success)' : 'var(--warning)'
-                      }}
-                    >
-                      {p.accuracy === null ? '—' : `${(p.accuracy * 100).toFixed(0)}%`}
-                    </td>
-                    <td className="mono" style={{ color: 'var(--text-muted)' }}>
-                      {p.successes}/{p.jobs}
-                    </td>
-                    <td className="mono">
-                      {p.avgTokens === null ? '—' : p.avgTokens.toLocaleString()}
-                    </td>
-                    <td>
-                      {p.active
-                        ? <span className="badge badge-success">ACTIVE</span>
-                        : <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Archived</span>
-                      }
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           </motion.div>
         </>
       )}
