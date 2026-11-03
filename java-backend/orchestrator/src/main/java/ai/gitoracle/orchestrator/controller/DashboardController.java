@@ -253,6 +253,14 @@ public class DashboardController {
         try {
             repoUrl = RepoRefValidator.validateRepoUrl(repoUrl);
             branch = RepoRefValidator.validateBranch(branch);
+            // targetRepo becomes github-bot's repoFullName — the repository the
+            // App's token clones, pushes a branch to, and opens the PR on. It was
+            // the one git-bound field not checked here; github-bot rejects a
+            // malformed one too, but only after the whole pipeline has run.
+            if (!targetRepo.isBlank()) {
+                targetRepo = targetRepo.trim();
+                RepoRefValidator.validateRepoUrl("https://github.com/" + targetRepo);
+            }
         } catch (RepoRefValidator.InvalidRepoRefException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
