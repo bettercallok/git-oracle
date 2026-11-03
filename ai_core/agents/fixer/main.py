@@ -20,6 +20,7 @@ from shared.internal_auth import require_internal_token
 from shared.job_events import report_event, ERROR
 from shared.body_limit import BodySizeLimitMiddleware
 from shared.safe_paths import UnsafePathError, partition_safe, resolve_within, safe_read_text
+from shared.git_context import commit_diff
 from shared.repo_refs import InvalidRepoRefError, is_within_workspace_root, validate_branch, validate_repo_url
 
 logging.basicConfig(level=logging.INFO)
@@ -52,6 +53,7 @@ class FixerRequest(BaseModel):
     target_repo: Optional[str] = None          # GitHub repo to open PR against (owner/repo)
     repo_url: Optional[str] = None             # https://github.com/<owner>/<repo> to clone; anything else is ignored (see shared/repo_refs)
     branch: Optional[str] = None               # Branch to check out; None/empty = repo's default branch
+    root_commit: Optional[str] = None          # Investigator's top suspect; its diff is shown to the model
 
 class PatchOutput(BaseModel):
     diff: str                   # unified diff format
@@ -363,6 +365,30 @@ async def execute_fix(request: FixerRequest):
             logger.warning(f"Could not read {file_path}: {e}")
             source_context += f"\n--- {file_path} ---\n[File not found or unreadable]\n"
 
+    # Two facts the plan may have got wrong, shown from the first attempt on:
+    # what the bug-introducing commit changed, and which test fails right now
+    # (one test run with no patch). Before, the fixer first learned which test
+    # failed after spending an attempt on the plan's guess.
+    bug_change = commit_diff(local_src_path, request.root_commit, affected_files)
+    baseline_failure = ""
+    if not request.job_id.startswith("mock-test-"):
+        baseline_passed, baseline_logs = await run_real_test(
+            request.job_id, request.repo_path, request.repo_url or "", "", request.branch or "")
+        if not baseline_passed and not baseline_logs.startswith("Could not run the tests"):
+            baseline_failure = summarize_test_failure(baseline_logs)
+        await report_event(request.job_id, "fixer",
+                           "Baseline: tests fail before any change — the failure is shown to the model"
+                           if baseline_failure else "Baseline: no failing test found before the change",
+                           details={"baseline_failing": bool(baseline_failure)})
+    facts = ""
+    if bug_change:
+        facts += f"\nWhat the Bug-Introducing Commit Changed:\n{bug_change}\n"
+    if baseline_failure:
+        facts += f"\nTests Failing Right Now (before your change):\n{baseline_failure}\n"
+    if facts:
+        facts += ("\nThe blueprint is guidance; the change and the failing tests above are facts. "
+                  "Where they disagree, follow the facts — your edit must make those tests pass.\n")
+
     # ReAct Loop (Up to 3 attempts to save time during testing, normally 5)
     for attempt in range(3):
         logger.info(f"Fixer Attempt {attempt + 1}")
@@ -403,7 +429,7 @@ Architect's Blueprint:
 Strategy: {request.plan.strategy}
 Max Lines to Change: {request.plan.max_lines_to_change}
 Reasoning: {request.plan.reasoning}
-
+{facts}
 Past Successful Fixes for Similar Bugs:
 {past_fixes}
 
@@ -564,7 +590,8 @@ async def handle_fix_job(payload: dict):
         human_instructions=human_instructions,
         target_repo=target_repo if target_repo else None,
         repo_url=repo_url if repo_url else None,
-        branch=branch
+        branch=branch,
+        root_commit=payload.get("root_commit") or None,
     )
     
     try:

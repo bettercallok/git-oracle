@@ -148,7 +148,7 @@ def run_fixer(monkeypatch, tmp_path):
     monkeypatch.setattr(fixer, "report_prompt_version", noop)
     monkeypatch.setattr(fixer, "fetch_prompt_versioned", prompt)
 
-    def run(edits, results):
+    def run(edits, results, baseline=(True, ""), root_commit=None):
         prompts, test_calls = [], []
         edits, results = list(edits), list(results)
 
@@ -157,6 +157,8 @@ def run_fixer(monkeypatch, tmp_path):
             return edits.pop(0)
 
         async def tests(job_id, repo_path, repo_url, patch_diff, branch=""):
+            if not patch_diff:                 # the baseline run, before any attempt
+                return baseline
             test_calls.append(patch_diff)
             return results.pop(0)
 
@@ -168,9 +170,11 @@ def run_fixer(monkeypatch, tmp_path):
             plan=fixer.PlannerOutput(
                 strategy="surgical_patch", affected_files=[USER_SERVICE],
                 affected_functions=["processPayment"], max_lines_to_change=2,
-                reasoning="Re-introduce a null validation, e.g. Objects.requireNonNull.", confidence=0.97))
+                reasoning="Re-introduce a null validation, e.g. Objects.requireNonNull.", confidence=0.97),
+            root_commit=root_commit)
         return asyncio.run(fixer.execute_fix(request)), prompts, test_calls
 
+    run.repo = repo
     return run
 
 
@@ -216,3 +220,38 @@ def test_an_escalation_without_any_test_run_keeps_the_plain_reason(run_fixer):
 
     assert test_calls == []
     assert result.escalation_report == "Fixer Agent exhausted all attempts and could not fix the bug."
+
+
+# ── Facts shown from the first attempt ──────────────────────────────────────
+
+def test_the_first_attempt_sees_the_test_that_fails_before_any_change(run_fixer):
+    result, prompts, test_calls = run_fixer([EXPLICIT_CHECK], [(True, "")], baseline=(False, MAVEN_LOG))
+
+    assert result.success is True and result.attempts == 1
+    assert ASSERTION in prompts[0]                     # attempt 1 already knows the real failure
+    assert "follow the facts" in prompts[0]            # and that it outranks the plan
+    assert len(test_calls) == 1                        # the baseline isn't counted as an attempt
+
+
+def test_a_passing_baseline_adds_no_failing_tests_block(run_fixer):
+    _, prompts, _ = run_fixer([EXPLICIT_CHECK], [(True, "")])
+
+    assert "Tests Failing Right Now" not in prompts[0]
+
+
+def test_the_first_attempt_sees_the_bug_introducing_diff(run_fixer):
+    import subprocess
+    repo = run_fixer.repo
+    git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, text=True)  # noqa: E731
+    git("init", "-q"); git("config", "user.email", "t@example.com"); git("config", "user.name", "T")
+    guarded = SOURCE.replace(SEARCH, "        if (user == null) throw new IllegalArgumentException(\"no user\");\n" + SEARCH)
+    (repo / USER_SERVICE).write_text(guarded)
+    git("add", "."); git("commit", "-qm", "base")
+    (repo / USER_SERVICE).write_text(SOURCE)
+    git("commit", "-qam", "refactor: simplify processPayment")
+    sha = git("rev-parse", "HEAD").stdout.strip()
+
+    _, prompts, _ = run_fixer([EXPLICIT_CHECK], [(True, "")], root_commit=sha)
+
+    assert "What the Bug-Introducing Commit Changed" in prompts[0]
+    assert '-        if (user == null) throw new IllegalArgumentException("no user");' in prompts[0]
