@@ -73,7 +73,7 @@ public class InternalAuthFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         String path = request.getRequestURI();
-        if (EXEMPT_PATHS.stream().anyMatch(exempt -> path.equals(exempt) || path.startsWith(exempt + "/"))) {
+        if (isExempt(path)) {
             chain.doFilter(request, response);
             return;
         }
@@ -97,6 +97,36 @@ public class InternalAuthFilter extends OncePerRequestFilter {
         }
 
         chain.doFilter(request, response);
+    }
+
+    /**
+     * Exempting a path is a GRANT, so it is tested against the raw request URI
+     * and only for a URI the container will not rewrite before dispatch.
+     *
+     * <p>{@code getRequestURI()} is the undecoded, un-normalised request line,
+     * while Tomcat maps the request on its normalised form. A plain
+     * {@code startsWith} therefore exempted {@code GET /health/../<any route>}
+     * (and {@code /actuator/..;/<any route>}, {@code /health/%2e%2e/...}): the
+     * literal prefix matched the exempt list, the token check was skipped, and
+     * Tomcat then resolved the dot segments and dispatched to the real
+     * endpoint — every internal service answered with no X-Internal-Token at
+     * all. Anything carrying encoding, path parameters, empty segments, dot
+     * segments or a backslash now fails the exemption and is authenticated
+     * normally; no legitimate probe sends those.
+     */
+    static boolean isExempt(String path) {
+        if (path == null || !isPlainPath(path)) return false;
+        return EXEMPT_PATHS.stream().anyMatch(exempt -> path.equals(exempt) || path.startsWith(exempt + "/"));
+    }
+
+    private static boolean isPlainPath(String path) {
+        if (!path.startsWith("/")) return false;
+        if (path.indexOf('%') >= 0 || path.indexOf(';') >= 0 || path.indexOf('\\') >= 0) return false;
+        if (path.contains("//")) return false;
+        for (String segment : path.substring(1).split("/", -1)) {
+            if (segment.equals(".") || segment.equals("..")) return false;
+        }
+        return true;
     }
 
     private static boolean constantTimeEquals(String a, String b) {
