@@ -405,9 +405,32 @@ public class CommitController {
             return ResponseEntity.status(503).body(Map.of(
                     "error", "Commit Analyst agent is not available. Start it with: cd ai_core && python -m agents.commit_analyst.main",
                     "details", e.getMessage()));
+        } catch (org.springframework.web.client.HttpStatusCodeException e) {
+            // The agent answered with an error (e.g. the LLM provider refused the
+            // request). Pass its own explanation through: this used to fall into
+            // the catch below and reach the dashboard as Spring's exception text,
+            // `502 Bad Gateway: "{\"detail\":\"...\"}"`, JSON-escaped and all.
+            String detail = agentErrorDetail(e.getResponseBodyAsString());
+            logger.warn("Commit Analyst failed for {}/{} ({}): {}", repo, sha, e.getStatusCode().value(), detail);
+            return ResponseEntity.status(502).body(Map.of(
+                    "error", detail != null ? detail : "The Commit Analyst could not answer (" + e.getStatusCode().value() + ")."));
         } catch (Exception e) {
             logger.error("Unexpected error calling Commit Analyst for {}/{}: {}", repo, sha, e.getMessage());
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /** FastAPI's {"detail": "..."} (or a validation list), as plain text; null if there is none. */
+    static String agentErrorDetail(String body) {
+        if (body == null || body.isBlank()) return null;
+        try {
+            var detail = new com.fasterxml.jackson.databind.ObjectMapper().readTree(body).get("detail");
+            if (detail == null || detail.isNull()) return null;
+            String text = detail.isTextual() ? detail.asText() : detail.toString();
+            // The agent prefixes its own wrapper; the provider's reason is what matters.
+            return text.replaceFirst("^LLM inference failed: ", "");
+        } catch (Exception e) {
+            return body.length() > 500 ? body.substring(0, 500) : body;
         }
     }
 }

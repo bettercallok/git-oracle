@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   CheckCircle2, Loader2, GitPullRequest, GitPullRequestClosed, RefreshCw, Send,
-  ExternalLink, Circle, XCircle, PauseCircle, MinusCircle, SearchX,
+  Activity, Circle, XCircle, PauseCircle, MinusCircle, SearchX,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
@@ -11,6 +11,7 @@ import { stateMeta, isRunning, PIPELINE_STAGES, stageIndex } from '../utils/jobS
 import { containerVariants, itemVariants } from '../utils/motion';
 import { duration, formatNumber, formatTime, shortRepo, shortSha } from '../utils/format';
 import { PageHeader, Alert, EmptyState, LoadingState } from '../components/ui';
+import TraceViewer from '../components/TraceViewer';
 
 interface Job {
   id: string;
@@ -50,10 +51,6 @@ const fetchEvents = async (id: string): Promise<JobEvent[]> => {
   return data;
 };
 
-// Every LLM call in a job is traced under the job id (structured_output.py).
-// Langfuse runs on LANGFUSE_PORT (3002) in docker-compose.infra.yml. This
-// defaulted to :3000, where nothing listens, so the link always went nowhere.
-const LANGFUSE_URL = import.meta.env.VITE_LANGFUSE_URL || 'http://localhost:3002';
 
 type StepStatus = 'done' | 'current' | 'pending' | 'skipped' | 'failed' | 'halted';
 
@@ -187,8 +184,9 @@ export default function JobDetail() {
               <GitPullRequest size={15} /> View pull request
             </a>
           )}
-          <a href={`${LANGFUSE_URL}/trace/${job.id}`} target="_blank" rel="noreferrer" className="btn">
-            LLM trace <ExternalLink size={13} />
+          <a href="#llm-trace" className="btn"
+             onClick={e => { e.preventDefault(); document.getElementById('llm-trace')?.scrollIntoView({ behavior: 'smooth' }); }}>
+            <Activity size={14} /> LLM trace
           </a>
         </>}
       />
@@ -364,6 +362,18 @@ export default function JobDetail() {
           </div>
         </motion.div>
       </div>
+
+      {/* Every LLM call this job made, read from its Langfuse trace (one trace per job). */}
+      <motion.div variants={itemVariants} className="card" id="llm-trace" style={{ marginTop: 16, scrollMarginTop: 24 }}>
+        <div className="card-header">
+          <div>
+            <div className="card-title"><Activity size={15} /> LLM trace</div>
+            <div className="card-subtitle">Every prompt and response the agents exchanged with the model, in order. Click a call to see it.</div>
+          </div>
+          {isRunning(status) && <span className="badge badge-accent live">Live</span>}
+        </div>
+        <TraceViewer jobId={job.id} live={isRunning(status)} />
+      </motion.div>
     </motion.div>
   );
 }

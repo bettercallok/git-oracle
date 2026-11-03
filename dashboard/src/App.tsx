@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -53,8 +53,11 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   if (isAuthenticated && location.pathname === '/login') {
-    window.location.href = '/';
-    return null;
+    // A client-side redirect. This was `window.location.href = '/'`: a full
+    // page load, which drops the API key (it is held in memory only), so a
+    // sign-in that rendered here before its own navigate('/') landed was
+    // signed straight back out.
+    return <Navigate to="/" replace />;
   }
 
   return <>{children}</>;

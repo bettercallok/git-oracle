@@ -143,7 +143,12 @@ async def analyze(request: AnalyzeRequest):
         result = await llm_structured(
             messages=messages,
             output_schema=AnalyzeResponse,
-            max_tokens=1024,
+            # Was 1024. A broad question ("what tests should I write?") over a
+            # large diff needs more than that, and in JSON mode a reply cut off
+            # mid-object is rejected outright by the provider (Groq: 400
+            # json_validate_failed) — the same budget the investigator and
+            # fixer already use.
+            max_tokens=4096,
             temperature=0.3,
             agent_name="commit_analyst",
             job_id=None,   # Not a tracked job — ephemeral chat

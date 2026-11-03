@@ -6,7 +6,7 @@ import httpx
 import logging
 from datetime import datetime, timezone
 from typing import Type, TypeVar, Dict, List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv, find_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -20,6 +20,72 @@ T = TypeVar("T", bound=BaseModel)
 class LLMUnavailableError(Exception):
     """Raised when the primary LLM (and fallback, if configured) is unreachable."""
     pass
+
+
+class LLMRequestError(Exception):
+    """
+    The provider answered, but refused the request (a 4xx other than 429).
+
+    Carries the provider's own explanation. This used to surface as httpx's
+    "Client error '400 Bad Request' for url ... For more information check:
+    https://developer.mozilla.org/..." — the status code and a generic MDN
+    link, with the body that says *what* was wrong thrown away.
+    """
+
+    def __init__(self, status_code: int, provider_message: str):
+        self.status_code = status_code
+        self.provider_message = provider_message
+        super().__init__(f"LLM provider rejected the request ({status_code}): {provider_message}")
+
+
+# Ceiling for the one automatic retry after a reply was cut off mid-JSON.
+LLM_MAX_TOKENS_CEILING = int(os.environ.get("LLM_MAX_TOKENS_CEILING", "8192"))
+
+
+def _provider_error(response: httpx.Response) -> tuple[str, str]:
+    """(code, message) from an OpenAI-style error body; best effort, never raises."""
+    try:
+        err = response.json().get("error", {})
+        if isinstance(err, dict):
+            return str(err.get("code") or err.get("type") or ""), str(err.get("message") or "")
+        return "", str(err)
+    except Exception:  # noqa: BLE001 — a non-JSON error body is still worth reporting as text
+        return "", response.text[:500]
+
+
+def _is_json_validation_failure(response: httpx.Response) -> bool:
+    """
+    Groq (and some OpenAI-compatible servers) validate JSON-mode output
+    themselves and answer 400 "json_validate_failed" when the model's reply
+    isn't valid JSON — most often because max_tokens cut it off mid-object.
+    """
+    if response.status_code != 400:
+        return False
+    code, message = _provider_error(response)
+    return code == "json_validate_failed" or "failed to generate json" in message.lower()
+
+
+def _recover_failed_generation(response: httpx.Response) -> Optional[str]:
+    """
+    The JSON object inside Groq's rejected ``failed_generation``, when there
+    is a complete one. Models often wrap valid JSON in a ```json fence or a
+    sentence, which JSON mode rejects even though the object itself is fine.
+    """
+    try:
+        text = response.json().get("error", {}).get("failed_generation")
+    except Exception:  # noqa: BLE001 — no recoverable body
+        return None
+    if not isinstance(text, str):
+        return None
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    candidate = text[start:end + 1]
+    try:
+        json.loads(candidate)
+    except ValueError:
+        return None
+    return candidate
 
 ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8083")
 
@@ -91,18 +157,35 @@ def _trace_to_langfuse(
     usage:      Dict,
     start_time: datetime,
     end_time:   datetime,
+    model:      Optional[str] = None,
+    level:      str = "DEFAULT",
+    status_message: Optional[str] = None,
 ) -> None:
-    """Send a single generation event to Langfuse. Fails silently."""
+    """
+    Send a single generation event to Langfuse. Fails silently.
+
+    One trace per job (trace_id = job_id), one generation per LLM call, and the
+    generation is named after the agent that made it. It used to be the other
+    way round: every generation was called "llm_structured" and each call
+    renamed the shared trace to "<agent>_llm_call", so a job's trace carried
+    whichever agent happened to write last and nothing said which call was
+    whose. The dashboard's trace viewer groups and labels calls by this name.
+    """
     if _lf is None:
         return
     try:
         trace = _lf.trace(
             id=trace_id,
-            name=f"{agent_name}_llm_call",
+            # Stable for a job's trace; a call outside any job (the commit
+            # analyst's chat) gets its own trace named after the agent.
+            name="gitoracle-job" if trace_id else f"{agent_name}_llm_call",
         )
         trace.generation(
-            name="llm_structured",
-            model=LLM_MODEL_NAME,
+            name=agent_name,
+            metadata={"agent": agent_name},
+            model=model or LLM_MODEL_NAME,
+            level=level,
+            status_message=status_message,
             input=messages,
             output=raw_output,
             usage={
@@ -227,6 +310,7 @@ async def llm_structured(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
+    answered_by: str = base_url   # whichever endpoint actually answers
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
             # 1. Primary Attempt
@@ -239,6 +323,7 @@ async def llm_structured(
                 try:
                     # 2. Fallback Attempt
                     response = await _execute_with_rate_limit_backoff(client, LLM_FALLBACK_BASE_URL, payload, headers=headers)
+                    answered_by = LLM_FALLBACK_BASE_URL
                 except Exception as fallback_e:
                     logger.error(f"Fallback LLM also failed: {fallback_e}")
                     raise LLMUnavailableError("Both primary and fallback LLM servers are unavailable.") from fallback_e
@@ -246,20 +331,58 @@ async def llm_structured(
                 raise LLMUnavailableError(f"Primary LLM server is unavailable and no fallback configured: {primary_e}") from primary_e
 
         # 3. Process Response
+        recovered: Optional[str] = None
+        if _is_json_validation_failure(response):
+            recovered = _recover_failed_generation(response)
+            if recovered is None and max_tokens < LLM_MAX_TOKENS_CEILING:
+                # Cut off mid-JSON: one more try with room to finish, on the
+                # endpoint that just answered (the fallback, if the primary was down).
+                max_tokens = min(max_tokens * 2, LLM_MAX_TOKENS_CEILING)
+                payload["max_tokens"] = max_tokens
+                logger.warning(
+                    f"{agent_name}: provider rejected a reply that was not valid JSON; "
+                    f"retrying once with max_tokens={max_tokens}")
+                response = await _execute_with_rate_limit_backoff(client, answered_by, payload, headers=headers)
+                if _is_json_validation_failure(response):
+                    recovered = _recover_failed_generation(response)
+
+        if recovered is None and 400 <= response.status_code < 500:
+            code, message = _provider_error(response)
+            if _is_json_validation_failure(response):
+                message = (f"{message} The model's reply was not valid JSON even with "
+                           f"max_tokens={max_tokens} — try a narrower question, "
+                           f"or a model that follows JSON mode more reliably.")
+            raise LLMRequestError(response.status_code, f"{message}{f' [{code}]' if code else ''}".strip()[:1000])
+
         try:
-            response.raise_for_status()
-            
+            if recovered is None:
+                response.raise_for_status()
+
             end_time    = datetime.now(timezone.utc)
-            data        = response.json()
-            raw_content = data["choices"][0]["message"]["content"]
-            usage       = data.get("usage", {})
+            if recovered is not None:
+                logger.info(f"{agent_name}: recovered a valid JSON object from the provider's rejected reply")
+                raw_content = recovered
+                usage: Dict = {}
+            else:
+                data        = response.json()
+                raw_content = data["choices"][0]["message"]["content"]
+                usage       = data.get("usage", {})
             tokens_used = usage.get("total_tokens", 0)
 
             # 4. Report tokens to the Java Orchestrator budget tracker
             if job_id and tokens_used:
                 await _report_tokens(job_id, tokens_used, agent_name)
 
-            # 5. Send full trace to Langfuse (non-blocking, silent failure)
+            # 5. Validate output against the Pydantic schema, then
+            # 6. send the full call to Langfuse (non-blocking, silent failure)
+            #    — marked ERROR when the reply did not fit the schema, so a
+            #    failed attempt is visible in the trace instead of looking
+            #    like any other call.
+            validation_error: Optional[ValidationError] = None
+            try:
+                parsed = output_schema.model_validate_json(raw_content)
+            except ValidationError as ve:
+                validation_error = ve
             _trace_to_langfuse(
                 trace_id=trace_id or job_id,
                 agent_name=agent_name,
@@ -268,10 +391,14 @@ async def llm_structured(
                 usage=usage,
                 start_time=start_time,
                 end_time=end_time,
+                model=str(payload["model"]),   # the fallback model when that is what answered
+                level="ERROR" if validation_error else "DEFAULT",
+                status_message=(f"Reply did not match {output_schema.__name__}: {validation_error}"[:1000]
+                                if validation_error else None),
             )
-
-            # 6. Validate output against the Pydantic schema
-            return output_schema.model_validate_json(raw_content)
+            if validation_error:
+                raise validation_error
+            return parsed
 
         except httpx.HTTPError as e:
             logger.error(f"HTTP error parsing LLM response: {e}")

@@ -75,6 +75,12 @@ services:
       - "127.0.0.1:8083:8083"
     environment:
       <<: *java-env
+      # The dashboard's LLM-trace views are read through the orchestrator
+      # (TraceController), which needs the same project keys the agents trace
+      # with. Optional: unset means "tracing off" and the views say so.
+      LANGFUSE_HOST: http://langfuse:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
     logging: *default-logging
 
   api-gateway:
