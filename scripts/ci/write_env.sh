@@ -36,6 +36,8 @@ cp .env.example .env
   echo "LLM_BASE_URL=$LLM_URL"
   echo "OPENAI_API_KEY=${LLM_KEY:-unused}"
   echo "LLM_MODEL_NAME=$LLM_MODEL"
+  # Optional: agent memory's embeddings endpoint (memory is off without it).
+  echo "EMBEDDINGS_BASE_URL=${EMBEDDINGS_URL:-}"
 } >> .env
 
 if [ -n "${GITHUB_ENV:-}" ]; then

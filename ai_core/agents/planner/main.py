@@ -51,6 +51,7 @@ class PlannerRequest(BaseModel):
     bug_description: str
     investigation_result: InvestigationResult
     job_id: str = "debug-job"
+    repo_url: str = ""          # memory is keyed by repository, not by the job's workspace path
 
 class PlannerOutput(BaseModel):
     strategy: FixStrategy
@@ -69,7 +70,7 @@ async def create_plan(request: PlannerRequest):
     # We query rules based on the bug description and narrative to find relevant architectural constraints
     query_text = f"{request.bug_description}. {request.investigation_result.narrative}"
     try:
-        facts = await memory.retrieve_facts(request.repo_path, query_text, top_k=3)
+        facts = await memory.retrieve_facts(request.repo_url or request.repo_path, query_text, top_k=3)
         architectural_rules = "\n".join([f"- {f['fact']} (Confidence: {f['confidence']})" for f in facts])
     except Exception as e:  # noqa: BLE001 — memory is optional context; it must not block planning
         logger.warning(f"Could not retrieve semantic memory: {e}")
@@ -172,7 +173,8 @@ async def handle_planner_job(payload: dict):
         repo_path=repo_path,
         bug_description=bug_description,
         investigation_result=investigation,
-        job_id=job_id
+        job_id=job_id,
+        repo_url=payload.get("repo_url", "") or "",
     )
     
     try:

@@ -132,6 +132,8 @@ Keys are `gor_<12-hex prefix>_<64-hex secret>`; only a SHA-256 hash is stored, l
 ### Storage
 Postgres+pgvector (job state, escalations, PR outcomes, eval runs, prompt versions, episodic/semantic agent memory) · Neo4j (repo dependency/risk graph) · Qdrant (RAG context vectors) · Redis (gateway rate limiting, prompt-registry cache) · Langfuse/Prometheus/Grafana/Kafka UI (observability).
 
+Agent memory's embeddings come from `EMBEDDINGS_BASE_URL` (any OpenAI-compatible `/embeddings` endpoint — Ollama, LM Studio, OpenAI, ...; `shared/embeddings.py`), independent of the chat LLM. Unset means memory is off: nothing is stored or recalled. Vectors are stored at 384 dimensions and tagged with their model; recall only compares same-model vectors. Memories are keyed by repository (`memory.repo_key`), never by a job's workspace path.
+
 ### Memory constraints are load-bearing, not incidental
 The full stack targets 8GB RAM minimum: `java-backend/gradle.properties` (`org.gradle.daemon=false`, capped `jvmargs`), `start_local.sh`'s per-service `-Xmx`/`-XX:MaxMetaspaceSize` JVM args, and a `mem_limit` on every container in `docker-compose.infra.yml` all exist specifically to prevent Docker Desktop from being OOM-killed on smaller machines — this has happened in practice. Don't remove these caps to "simplify" a service's startup.
 

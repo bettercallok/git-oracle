@@ -37,5 +37,9 @@ def check_startup_config(agent: str, *, needs_llm: bool) -> None:
             problem = llm_url_problem(os.environ["LLM_BASE_URL"].strip())
             if problem:
                 problems.append(problem)
+    embeddings_url = os.environ.get("EMBEDDINGS_BASE_URL", "").strip()
+    if embeddings_url and not embeddings_url.startswith(("http://", "https://")):
+        problems.append(f"EMBEDDINGS_BASE_URL must be an http(s) URL (or empty to turn memory off), "
+                        f"got {embeddings_url!r}")
     if problems:
         sys.exit(f"{agent}: refusing to start — " + "; ".join(problems) + ". Set it in the root .env.")

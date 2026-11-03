@@ -255,6 +255,8 @@ jobs:
           LLM_URL: http://127.0.0.1:18089/v1/chat/completions
           LLM_KEY: mock
           LLM_MODEL: mock
+          # The mock serves embeddings too, so agent memory runs end to end.
+          EMBEDDINGS_URL: http://127.0.0.1:18089/v1/embeddings
         run: scripts/ci/write_env.sh
 
       - name: Start the mock LLM

@@ -46,3 +46,14 @@ def test_llm_url_rules():
     assert llm_url_problem(GOOD_URL) is None
     assert llm_url_problem(GOOD_URL + "/") is None
     assert "http(s)" in llm_url_problem("api.groq.com/openai/v1/chat/completions")
+
+
+def test_a_malformed_embeddings_url_stops_startup(monkeypatch):
+    monkeypatch.setenv("EMBEDDINGS_BASE_URL", "localhost:11434/v1/embeddings")
+    with pytest.raises(SystemExit, match="EMBEDDINGS_BASE_URL"):
+        check_startup_config("fixer", needs_llm=True)
+
+
+def test_an_empty_embeddings_url_just_turns_memory_off(monkeypatch):
+    monkeypatch.setenv("EMBEDDINGS_BASE_URL", "")
+    check_startup_config("fixer", needs_llm=True)
