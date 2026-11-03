@@ -28,6 +28,7 @@ public class BudgetController {
 
     private final TokenBudgetManager budgetManager;
     private final AgentJobRepository jobRepository;
+    private final ai.gitoracle.orchestrator.repository.JobPromptVersionRepository promptVersions;
 
     /**
      * POST /budget/{jobId}/record
@@ -60,6 +61,12 @@ public class BudgetController {
                 request.getTokensUsed(), jobId, request.getAgentName());
 
         int totalUsed = budgetManager.recordUsage(jobId, request.getTokensUsed());
+        // Per agent as well, for the prompt-version table's tokens column.
+        if (request.getAgentName() != null && request.getTokensUsed() > 0) {
+            promptVersions.addTokens(jobId,
+                ai.gitoracle.orchestrator.service.AgentNames.canonical(request.getAgentName()),
+                request.getTokensUsed());
+        }
 
         return ResponseEntity.ok(Map.of(
                 "jobId",      jobId.toString(),

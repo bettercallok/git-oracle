@@ -2,12 +2,14 @@ package ai.gitoracle.orchestrator.service;
 
 import ai.gitoracle.core.entity.Escalation;
 import ai.gitoracle.core.model.postgres.AgentJob;
+import ai.gitoracle.orchestrator.repository.EscalationRepository;
 import ai.gitoracle.orchestrator.repository.PrOutcomeRepository;
 import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
@@ -31,11 +33,14 @@ public class EscalationService {
     private final JobStateService jobState;
     private final EntityManager entityManager;
     private final PrOutcomeRepository prOutcomes;
+    private final EscalationRepository escalationRows;
 
-    public EscalationService(JobStateService jobState, EntityManager entityManager, PrOutcomeRepository prOutcomes) {
+    public EscalationService(JobStateService jobState, EntityManager entityManager, PrOutcomeRepository prOutcomes,
+                             EscalationRepository escalationRows) {
         this.jobState = jobState;
         this.entityManager = entityManager;
         this.prOutcomes = prOutcomes;
+        this.escalationRows = escalationRows;
     }
 
     /**
@@ -58,9 +63,23 @@ public class EscalationService {
             }
             return false;
         }
-        if (!jobState.transition(job, "ESCALATED", reason, actor)) {
+        // A job already ESCALATED with a pending row needs nothing more. One that
+        // is ESCALATED with NO pending row (escalated by a path that skipped this
+        // service, or whose row was lost) gets one now — otherwise it shows as
+        // escalated everywhere except the queue where a human could act on it.
+        boolean alreadyEscalated = "ESCALATED".equals(job.getState());
+        if (alreadyEscalated) {
+            if (escalationRows.existsByJob_IdAndStatus(job.getId(), "PENDING")) {
+                return false;
+            }
+        } else if (!jobState.transition(job, "ESCALATED", reason, actor)) {
             return false;
         }
+
+        // One pending escalation per job: a row left PENDING from an earlier
+        // escalation the pipeline later moved past would otherwise be listed
+        // (and counted) alongside this one.
+        escalationRows.supersedePending(job.getId(), OffsetDateTime.now());
 
         Escalation escalation = new Escalation();
         escalation.setId(UUID.randomUUID());
@@ -70,6 +89,30 @@ public class EscalationService {
         escalation.setStatus("PENDING");
         entityManager.persist(escalation);
         return true;
+    }
+
+    /**
+     * Gives every ESCALATED job without a pending escalation one, at startup.
+     *
+     * <p>Until this release a failed PR creation moved the job to ESCALATED
+     * directly, creating no row: those jobs were counted as escalated on the
+     * jobs page but missing from the escalation queue and its sidebar count,
+     * with no way to approve or reject them. The row carries the reason the job
+     * was escalated with. Idempotent: a job that already has one is skipped.
+     */
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    @org.springframework.transaction.annotation.Transactional
+    public void backfillMissingEscalations() {
+        int created = 0;
+        for (UUID jobId : escalationRows.escalatedJobsWithoutPendingEscalation()) {
+            AgentJob job = entityManager.find(AgentJob.class, jobId);
+            if (job == null) continue;
+            String reason = job.getStateReason() != null ? job.getStateReason() : "Escalated (reason not recorded)";
+            if (escalate(job, reason, "orchestrator", null)) created++;
+        }
+        if (created > 0) {
+            logger.warn("Created {} missing escalation(s) for jobs that were ESCALATED with nothing in the queue.", created);
+        }
     }
 
     /**

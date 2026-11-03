@@ -37,6 +37,14 @@ public class JobPromptVersion {
     @Column(name = "prompt_version", nullable = false)
     private Integer promptVersion;
 
+    /**
+     * Tokens this agent's LLM calls used on this job. The prompt-version table
+     * showed the whole job's total on every agent's row, so all three agents
+     * read the same "average tokens"; null for rows recorded before this existed.
+     */
+    @Column(name = "tokens_used")
+    private Integer tokensUsed;
+
     @Column(name = "created_at", insertable = false, updatable = false,
             columnDefinition = "timestamptz DEFAULT CURRENT_TIMESTAMP")
     private OffsetDateTime createdAt;

@@ -133,10 +133,11 @@ public final class TraceViews {
     }
 
     static String agentOf(JsonNode generation) {
+        // Canonical: the agents name their calls "planner_agent", "fixer_agent", ...
         String fromMetadata = generation.path("metadata").path("agent").asText("");
-        if (!fromMetadata.isBlank()) return fromMetadata;
+        if (!fromMetadata.isBlank()) return AgentNames.canonical(fromMetadata);
         String name = generation.path("name").asText("");
-        if (!name.isBlank() && !"llm_structured".equals(name)) return name;
+        if (!name.isBlank() && !"llm_structured".equals(name)) return AgentNames.canonical(name);
         // Older traces: recover the agent from the schema title in the system prompt.
         String input = generation.path("input").toString();
         for (var e : SCHEMA_TO_AGENT.entrySet()) {

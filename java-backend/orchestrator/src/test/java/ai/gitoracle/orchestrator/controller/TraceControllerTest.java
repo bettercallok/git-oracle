@@ -162,4 +162,14 @@ class TraceControllerTest {
     }
 
     private static final int TraceViews_MAX = 60_000;
+
+    /** The agents name their calls "planner_agent", "fixer_agent"...; the dashboard keys colours on "planner". */
+    @Test
+    void agentNamesWithTheAgentSuffixAreNormalised() throws Exception {
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree("""
+            {"id":"t","observations":[
+              {"id":"a","type":"GENERATION","name":"fixer_agent","metadata":{"agent":"fixer_agent"},"startTime":"2026-11-03T12:00:00Z"},
+              {"id":"b","type":"GENERATION","name":"Planner_Agent","startTime":"2026-11-03T12:00:01Z"}]}""");
+        assertThat(TraceViews.toTrace(json).calls()).extracting(TraceViews.Call::agent).containsExactly("fixer", "planner");
+    }
 }

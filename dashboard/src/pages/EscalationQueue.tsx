@@ -86,7 +86,11 @@ export default function EscalationQueue() {
       setNotice({ kind: 'error', text: err?.response?.data?.error || err?.message || 'Request failed' });
     },
     onSettled: () => {
+      // Everything that counts escalations, not just this list: the sidebar
+      // badge shares this key; the jobs page reads job states and stats.
       queryClient.invalidateQueries({ queryKey: ['escalations'] });
+      queryClient.invalidateQueries({ queryKey: ['job-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
     },
   });
 

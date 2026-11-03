@@ -65,8 +65,16 @@ const fetchPrompts = async (): Promise<PromptVersion[]> => {
 };
 
 interface PrOutcomeStats {
+  /** Per job, its most significant PR outcome ever (feeds the PR Feedback card). */
   counts: Record<string, number>;
   total: number;
+  /** From each job's CURRENT pull request. */
+  merged: number;
+  closed: number;
+  open: number;
+  /** merged + closed: PRs a human has finished deciding on. */
+  decided: number;
+  /** merged / decided; null until something is decided. */
   mergeRate: number | null;
 }
 
@@ -104,6 +112,7 @@ export default function EvalDashboard() {
   const { data: prompts = [] } = useQuery({
     queryKey: ['prompts'],
     queryFn: fetchPrompts,
+    refetchInterval: 10000,
   });
 
   const { data: prStats } = useQuery({
@@ -112,7 +121,9 @@ export default function EvalDashboard() {
     refetchInterval: 10000,
   });
 
-  const latestAccuracy = evals.length > 0 ? evals[0].accuracy * 100 : 0;
+  // No eval run means no measurement — shown as "—", not as a 0% score.
+  const hasRuns = evals.length > 0;
+  const latestAccuracy = hasRuns ? evals[0].accuracy * 100 : 0;
   const accuracy = useNumberTicker(latestAccuracy, 1000);
 
   // Both of these were hardcoded (50 cases, 92% merge rate) and bore no relation
@@ -139,31 +150,36 @@ export default function EvalDashboard() {
           <motion.div variants={itemVariants} className="stat-grid">
             <div className="card">
               <div className="stat-label">Latest Accuracy</div>
-              <div className="stat-value">{accuracy}%</div>
-              <div className="stat-subtitle mono" style={{ color: 'var(--text-muted)' }}>{evals.length > 0 ? evals[0].goldenDatasetVersion : 'No Data'}</div>
+              <div className="stat-value">{hasRuns ? `${accuracy}%` : '—'}</div>
+              <div className="stat-subtitle" style={{ color: 'var(--text-muted)' }}>
+                {hasRuns
+                  ? <>patches judged ≥ 7/10 · dataset <span className="mono">{evals[0].goldenDatasetVersion}</span></>
+                  : 'no eval runs yet'}
+              </div>
             </div>
             <div className="card">
               <div className="stat-label">Eval Cases</div>
-              <div className="stat-value">{cases}</div>
-              <div className="stat-subtitle">in latest run</div>
+              <div className="stat-value">{hasRuns ? cases : '—'}</div>
+              <div className="stat-subtitle">{hasRuns ? 'in latest run' : <>run <span className="mono">eval/run_evals.py</span></>}</div>
             </div>
             <div className="card">
               <div className="stat-label">PR Merge Rate</div>
-              <div className="stat-value" style={{ color: 'var(--success)' }}>
+              <div className="stat-value" style={{ color: prStats?.mergeRate != null ? 'var(--success)' : undefined }}>
                 {prStats && prStats.mergeRate !== null
                   ? `${Math.round(prStats.mergeRate * 100)}%`
                   : '—'}
               </div>
               <div className="stat-subtitle">
-                {prStats && prStats.total > 0
-                  ? `across ${prStats.total} PR${prStats.total === 1 ? '' : 's'}`
-                  : 'no PR outcomes yet'}
+                {!prStats ? '' : prStats.decided > 0
+                  ? `${prStats.merged} of ${prStats.decided} decided PR${prStats.decided === 1 ? '' : 's'} merged`
+                    + (prStats.open > 0 ? ` · ${prStats.open} still open` : '')
+                  : prStats.open > 0 ? `${prStats.open} PR${prStats.open === 1 ? '' : 's'} open, none merged or closed yet` : 'no PRs yet'}
               </div>
             </div>
             <div className="card">
               <div className="stat-label">Regressions</div>
               <div className="stat-value" style={{ color: regressions > 0 ? 'var(--danger)' : 'var(--text-primary)' }}>
-                {regressions}
+                {recentRuns.length > 1 ? regressions : '—'}
               </div>
               <div className="stat-subtitle">
                 {recentRuns.length > 1 ? `in last ${recentRuns.length} runs` : 'need 2+ runs'}
@@ -174,7 +190,13 @@ export default function EvalDashboard() {
           <motion.div variants={itemVariants} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
             <div className="card">
               <h2 style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)', marginBottom: 20 }}>Accuracy Trend</h2>
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, height: 160 }}>
+              {!hasRuns && (
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', paddingTop: 6 }}>
+                  No eval runs recorded. Each run of <span className="mono">eval/run_evals.py</span> (or the nightly
+                  Golden Dataset Eval workflow) adds a bar here: the share of cases whose patch the judge scored ≥ 7/10.
+                </p>
+              )}
+              <div style={{ display: hasRuns ? 'flex' : 'none', alignItems: 'flex-end', gap: 12, height: 160 }}>
                 {evals.slice(0, 6).reverse().map((run, i) => (
                   <div key={run.id} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
                     <div style={{ position: 'relative', width: '100%', maxWidth: 36, height: 130, display: 'flex', alignItems: 'flex-end' }}>
@@ -198,6 +220,9 @@ export default function EvalDashboard() {
               <h2 style={{ fontSize: '0.9rem', fontWeight: 500, color: 'var(--text-primary)', marginBottom: 20 }}>
                 PR Feedback
               </h2>
+              <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: -12, marginBottom: 8 }}>
+                Each job once, by the strongest outcome of any of its PRs (reverted › merged › closed › approved).
+              </p>
               {(!prStats || prStats.total === 0) && (
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', paddingTop: 6 }}>
                   No PR outcomes recorded yet. Merge or close a GitOracle PR — the
@@ -240,7 +265,8 @@ export default function EvalDashboard() {
             {prompts.length === 0 && (
               <p style={{ padding: '18px 24px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                 No finished jobs attributed to a prompt version yet. Run a job and this
-                fills in from real outcomes.
+                fills in from real outcomes. A job counts as a success when it opens or
+                merges a PR; escalated and running jobs aren't counted until they finish.
               </p>
             )}
             <table className="table">
@@ -248,9 +274,9 @@ export default function EvalDashboard() {
                 <tr>
                   <th>Agent</th>
                   <th>Version</th>
-                  <th>Accuracy</th>
-                  <th>Jobs</th>
-                  <th>Avg Tokens</th>
+                  <th title="Finished jobs on this prompt version that opened or merged a PR. Escalated and running jobs aren't counted yet.">Success rate</th>
+                  <th title="Succeeded / finished jobs">Jobs</th>
+                  <th title="This agent's own LLM tokens per job — not the whole job's">Avg tokens / job</th>
                   <th>Status</th>
                 </tr>
               </thead>
