@@ -47,10 +47,13 @@ public class OrchestratorService {
     @Value("${gitoracle.internal-token:}")
     private String internalToken;
 
+    private final ai.gitoracle.orchestrator.service.RepoAccessService repoAccess;
+
     public OrchestratorService(AgentJobRepository jobRepository, KafkaTemplate<String, Object> kafkaTemplate,
                                WorkspaceService workspaceService, EntityManager entityManager,
                                ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository,
-                               JobStateService jobState, EscalationService escalations) {
+                               JobStateService jobState, EscalationService escalations,
+                               ai.gitoracle.orchestrator.service.RepoAccessService repoAccess) {
         this.jobRepository = jobRepository;
         this.kafkaTemplate = kafkaTemplate;
         this.workspaceService = workspaceService;
@@ -58,6 +61,7 @@ public class OrchestratorService {
         this.prOutcomeRepository = prOutcomeRepository;
         this.jobState = jobState;
         this.escalations = escalations;
+        this.repoAccess = repoAccess;
     }
 
     /** Wraps a request body with the X-Internal-Token header every internal-service call needs. */
@@ -205,6 +209,21 @@ public class OrchestratorService {
             job.setState("QUEUED");
             jobRepository.save(job);
             jobState.recordCreated(job, "Error reported: " + event.getErrorId(), "error-ingestor");
+        }
+
+        // Every way into the pipeline — dashboard, CLI, GitHub and Sentry
+        // webhooks — arrives here, so the tenant's repository allow-list is
+        // enforced here before anything is cloned (the HTTP entry points also
+        // reject early, with a 403). Both the repo and the PR target count.
+        String target = event.getTargetRepo();
+        for (String repo : target == null || target.isBlank()
+                ? java.util.List.of(event.getRepoUrl()) : java.util.List.of(event.getRepoUrl(), target)) {
+            if (!repoAccess.isAllowed(job.getTenantId(), repo)) {
+                logger.warn("Job {} refused: {} is not on tenant {}'s allow-list", job.getId(), repo, job.getTenantId());
+                jobState.transition(job, "FAILED", "Repository " + repo + " is not on this tenant's allow-list "
+                    + "(an admin can add it with POST /api/v1/admin/repos)", "orchestrator");
+                return;
+            }
         }
 
         jobState.transition(job, "INVESTIGATING", "Cloning the repo and starting investigation", "orchestrator");

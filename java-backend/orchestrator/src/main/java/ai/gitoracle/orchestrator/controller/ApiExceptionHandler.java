@@ -110,6 +110,18 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
+     * A repository that isn't on the caller's tenant allow-list. The message is
+     * the client's to see: it names the repository and how to allow it.
+     */
+    @ExceptionHandler(ai.gitoracle.orchestrator.service.RepoNotAllowedException.class)
+    public ProblemDetail onRepoNotAllowed(ai.gitoracle.orchestrator.service.RepoNotAllowedException ex) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.FORBIDDEN);
+        problem.setTitle("Repository not allowed");
+        problem.setDetail(ex.getMessage());
+        return problem;
+    }
+
+    /**
      * A constraint on a path variable or request parameter. Not covered by the
      * superclass, so it stays an explicit handler.
      */

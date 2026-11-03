@@ -127,6 +127,8 @@ Keys are `gor_<12-hex prefix>_<64-hex secret>`; only a SHA-256 hash is stored, l
 - **Revocation is not instant** — the gateway caches key rows for `GITORACLE_API_KEY_CACHE_TTL_SECONDS` (default 60). Restart the gateway to purge immediately.
 - **`GITORACLE_API_KEY` is legacy** — a single shared secret resolving to the default tenant with `platform:admin`. It exists only to bootstrap the first real key; set `GITORACLE_LEGACY_API_KEY_ENABLED=false` afterwards. The gateway logs a warning every boot while it is on.
 
+**Repositories are tenant-scoped too** (`RepoAccessService`, table `tenant_allowed_repos`, slugs from `RepoNames.slug`): `/trigger`, `/jobs`, the commit explorer and `/api/v1/risk` (git-forensics asks the orchestrator's `GET /api/v1/repos`) reject a repo — or PR target — not on the caller tenant's allow-list with 403, and `handleErrorIngested` FAILs such jobs before cloning, which covers the GitHub/Sentry webhooks. An empty list allows nothing. `GITORACLE_ALLOWED_REPOS` seeds the default tenant (CI sets it to the fixture repo); `/api/v1/admin/repos` manages any tenant's list. Sentry webhooks are verified with the tenant's own secret (`POST /api/v1/admin/tenants/{id}/sentry-secret`); the shared `SENTRY_WEBHOOK_SECRET` only still works for the default tenant. Eval runs carry a `tenant_id`.
+
 `TenantContext` is **request-scoped only**. Kafka listeners run on consumer threads with no request, so they must take the tenant from the event payload (`ErrorIngestedEvent.tenantId`); `TenantContext.requireTenantId()` throws there rather than silently defaulting.
 
 ### Storage

@@ -28,6 +28,10 @@ public class EvalRun {
     @Column(name = "cases_total")
     private Integer casesTotal;
 
-    @Column(name = "created_at", insertable = false, updatable = false)
+    /** The tenant that ran it; null for rows from before eval runs were tenant-scoped (= default tenant). */
+    @Column(name = "tenant_id")
+    private UUID tenantId;
+
+        @Column(name = "created_at", insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 }

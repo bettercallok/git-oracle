@@ -31,6 +31,16 @@ public class Tenant {
     @Column(name = "org_name", unique = true, nullable = false)
     private String orgName;
 
+    /**
+     * HMAC secret for this tenant's Sentry webhook ({@code /webhook/{tenantId}/sentry}).
+     * There used to be one SENTRY_WEBHOOK_SECRET for everyone, with the tenant
+     * taken from the URL — so whoever held it could file jobs under any tenant.
+     * Set it with {@code POST /api/v1/admin/tenants/{id}/sentry-secret}. Kept in
+     * plain form because verifying an HMAC needs the secret itself.
+     */
+    @Column(name = "sentry_webhook_secret")
+    private String sentryWebhookSecret;
+
     @Column(name = "github_app_installation_id")
     private String githubAppInstallationId;
 

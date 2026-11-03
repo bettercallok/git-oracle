@@ -65,6 +65,7 @@ class OrchestratorServiceTest {
     private EntityManager entityManager;
     private ai.gitoracle.orchestrator.repository.EscalationRepository escalationRows;
     private OrchestratorService service;
+    private ai.gitoracle.orchestrator.service.RepoAccessService repoAccess;
     private MockRestServiceServer mockGitHubBot;
     private KafkaTemplate<String, Object> kafkaTemplate;
 
@@ -82,9 +83,12 @@ class OrchestratorServiceTest {
         JobStateService jobState = new JobStateService(jobRepository, jobEventRepository,
             java.time.Clock.fixed(java.time.Instant.parse("2026-10-29T12:00:00Z"), java.time.ZoneOffset.UTC));
 
+        repoAccess = mock(ai.gitoracle.orchestrator.service.RepoAccessService.class);
+        when(repoAccess.isAllowed(any(), any())).thenReturn(true);
         service = new OrchestratorService(jobRepository, kafkaTemplate, workspaceService,
                                            entityManager, prOutcomeRepository, jobState,
-                                           new EscalationService(jobState, entityManager, prOutcomeRepository, escalationRows));
+                                           new EscalationService(jobState, entityManager, prOutcomeRepository, escalationRows),
+                                           repoAccess);
 
         // OrchestratorService constructs its own `new RestTemplate()` rather than
         // taking one as a constructor argument, so the only way to intercept the
@@ -809,5 +813,41 @@ class OrchestratorServiceTest {
         Map<String, Object> fix = (Map<String, Object>) payload.getValue();
         assertThat(fix).containsEntry("repo_url", "https://github.com/bettercallok/chillcall")
                        .containsEntry("target_repo", "bettercallok/chillcall");
+    }
+
+    // ─── Tenant repository allow-list (security audit D1) ─────────────────
+
+    private AgentJob runIngest(ai.gitoracle.core.kafka.event.ErrorIngestedEvent event) {
+        org.mockito.ArgumentCaptor<AgentJob> saved = org.mockito.ArgumentCaptor.forClass(AgentJob.class);
+        service.handleErrorIngested(event);
+        verify(jobRepository, org.mockito.Mockito.atLeastOnce()).save(saved.capture());
+        return saved.getAllValues().get(saved.getAllValues().size() - 1);
+    }
+
+    @Test
+    void handleErrorIngested_failsAJobForARepoNotOnTheTenantsAllowList() {
+        UUID tenant = UUID.randomUUID();
+        when(repoAccess.isAllowed(tenant, "https://github.com/someone/private")).thenReturn(false);
+
+        AgentJob job = runIngest(ai.gitoracle.core.kafka.event.ErrorIngestedEvent.builder()
+            .tenantId(tenant).errorId("e1").repoUrl("https://github.com/someone/private").build());
+
+        assertThat(job.getState()).isEqualTo("FAILED");
+        assertThat(job.getStateReason()).contains("https://github.com/someone/private", "allow-list");
+        verifyNoInteractions(kafkaTemplate);                          // nothing cloned or dispatched
+    }
+
+    @Test
+    void handleErrorIngested_failsAJobWhosePrTargetIsNotAllowed() {
+        UUID tenant = UUID.randomUUID();
+        when(repoAccess.isAllowed(tenant, "someone/elsewhere")).thenReturn(false);
+
+        AgentJob job = runIngest(ai.gitoracle.core.kafka.event.ErrorIngestedEvent.builder()
+            .tenantId(tenant).errorId("e2").repoUrl("https://github.com/me/mine")
+            .targetRepo("someone/elsewhere").build());
+
+        assertThat(job.getState()).isEqualTo("FAILED");
+        assertThat(job.getStateReason()).contains("someone/elsewhere");
+        verifyNoInteractions(kafkaTemplate);
     }
 }
