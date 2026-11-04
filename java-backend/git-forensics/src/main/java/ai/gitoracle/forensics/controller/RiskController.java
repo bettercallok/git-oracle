@@ -2,6 +2,7 @@ package ai.gitoracle.forensics.controller;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.http.HttpEntity;
@@ -37,6 +38,8 @@ public class RiskController {
     @Value("${gitoracle.internal-token:}")
     private String internalToken;
 
+    // @Autowired: with two constructors Spring won't guess, and git-forensics can't start.
+    @Autowired
     public RiskController(Neo4jClient neo4jClient) {
         this(neo4jClient, new RestTemplate());
     }
