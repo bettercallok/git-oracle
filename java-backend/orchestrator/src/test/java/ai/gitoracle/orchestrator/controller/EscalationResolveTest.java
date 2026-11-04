@@ -59,7 +59,8 @@ class EscalationResolveTest {
         JobStateService jobState = new JobStateService(mock(AgentJobRepository.class), mock(JobEventRepository.class),
             Clock.fixed(Instant.parse("2026-11-02T12:00:00Z"), ZoneOffset.UTC));
         controller = new DashboardController(entityManager, kafkaTemplate, null, null, jobState,
-                                             mock(JobEventRepository.class));
+                                             mock(JobEventRepository.class),
+                                             mock(ai.gitoracle.orchestrator.service.RepoAccessService.class));
         TestTenantContext.set(TENANT);
     }
 

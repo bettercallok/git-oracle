@@ -82,8 +82,15 @@ public class CommitController {
     @Value("${gitoracle.internal-token:}")
     private String internalToken;
 
-    public CommitController(GitHubClientService githubClientService) {
+    // Commits and diffs are read with the shared GitHub App installation, which
+    // can see every installed repo — private ones included. The tenant's
+    // allow-list is what limits a caller to its own repositories.
+    private final ai.gitoracle.orchestrator.service.RepoAccessService repoAccess;
+
+    public CommitController(GitHubClientService githubClientService,
+                            ai.gitoracle.orchestrator.service.RepoAccessService repoAccess) {
         this.githubClientService = githubClientService;
+        this.repoAccess = repoAccess;
     }
 
     private static boolean isValidRepo(String repo) {
@@ -120,6 +127,7 @@ public class CommitController {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "repo parameter must be in 'owner/repo' format"));
         }
+        repoAccess.requireAllowed(ai.gitoracle.orchestrator.security.TenantContext.requireTenantId(), repo);
 
         // Reject rather than silently clamp: a caller asking for page 100000000
         // has misunderstood something, and quietly serving them page 100 hides
@@ -243,6 +251,7 @@ public class CommitController {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "repo parameter must be in 'owner/repo' format"));
         }
+        repoAccess.requireAllowed(ai.gitoracle.orchestrator.security.TenantContext.requireTenantId(), repo);
         if (!isValidSha(sha)) {
             return ResponseEntity.badRequest().body(Map.of("error", "sha is not a valid commit SHA"));
         }
@@ -317,6 +326,7 @@ public class CommitController {
             return ResponseEntity.badRequest()
                     .body(Map.of("error", "repo parameter must be in 'owner/repo' format"));
         }
+        repoAccess.requireAllowed(ai.gitoracle.orchestrator.security.TenantContext.requireTenantId(), repo);
         if (!isValidSha(sha)) {
             return ResponseEntity.badRequest().body(Map.of("error", "sha is not a valid commit SHA"));
         }

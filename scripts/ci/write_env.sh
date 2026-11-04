@@ -33,6 +33,8 @@ cp .env.example .env
   echo "LANGFUSE_PUBLIC_KEY="
   echo "LANGFUSE_SECRET_KEY="
   echo "JWT_SECRET=$(rnd)$(rnd)"
+  # The default tenant's repository allow-list: CI only ever uses the fixture repo.
+  echo "GITORACLE_ALLOWED_REPOS=${EVAL_FIXTURE_REPO:-}"
   echo "LLM_BASE_URL=$LLM_URL"
   echo "OPENAI_API_KEY=${LLM_KEY:-unused}"
   echo "LLM_MODEL_NAME=$LLM_MODEL"

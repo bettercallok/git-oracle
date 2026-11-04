@@ -50,18 +50,27 @@ public class DashboardController {
     private final ai.gitoracle.orchestrator.repository.JobPromptVersionRepository jobPromptVersionRepository;
     private final JobStateService jobState;
     private final JobEventRepository jobEventRepository;
+    private final ai.gitoracle.orchestrator.service.RepoAccessService repoAccess;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     public DashboardController(EntityManager entityManager, KafkaTemplate<String, Object> kafkaTemplate,
                                ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository,
                                ai.gitoracle.orchestrator.repository.JobPromptVersionRepository jobPromptVersionRepository,
-                               JobStateService jobState, JobEventRepository jobEventRepository) {
+                               JobStateService jobState, JobEventRepository jobEventRepository,
+                               ai.gitoracle.orchestrator.service.RepoAccessService repoAccess) {
         this.entityManager = entityManager;
         this.kafkaTemplate = kafkaTemplate;
         this.prOutcomeRepository = prOutcomeRepository;
         this.jobPromptVersionRepository = jobPromptVersionRepository;
         this.jobState = jobState;
         this.jobEventRepository = jobEventRepository;
+        this.repoAccess = repoAccess;
+    }
+
+    /** The repositories the caller's tenant may use (its allow-list). */
+    @GetMapping("/repos")
+    public ResponseEntity<Map<String, Object>> allowedRepos() {
+        return ResponseEntity.ok(Map.of("repos", repoAccess.list(TenantContext.requireTenantId())));
     }
 
     @GetMapping("/jobs")
@@ -159,6 +168,7 @@ public class DashboardController {
         // every call for that reason — a pre-existing bug, unrelated to
         // tenancy, found while verifying this change. Every other creation path
         // (triggerFix, SemanticDedupService) already left the id unset.
+        repoAccess.requireAllowed(TenantContext.requireTenantId(), request.repoUrl());
         AgentJob job = new AgentJob();
         job.setTenantId(TenantContext.requireTenantId());
         job.setRepo(request.repoUrl());
@@ -306,6 +316,12 @@ public class DashboardController {
         // This was hardcoded to the zero UUID, so every job created through the
         // dashboard was filed against the default tenant no matter who created it.
         UUID tenantId = TenantContext.requireTenantId();
+        // The tenant's repository allow-list: both the repo read and the one the
+        // PR is opened on (403 with how to allow it).
+        repoAccess.requireAllowed(tenantId, repoUrl);
+        if (!targetRepo.isBlank()) {
+            repoAccess.requireAllowed(tenantId, targetRepo);
+        }
 
         AgentJob job = new AgentJob();
         job.setRepo(repoUrl);
@@ -516,6 +532,9 @@ public class DashboardController {
         eval.setAccuracy(request.accuracy());
         eval.setAvgLatencyMs(request.avgLatencyMs());
         eval.setCasesTotal(request.casesTotal());
+        // Scoped to the caller's tenant: the eval table used to be one global
+        // list any tenant could read or write.
+        eval.setTenantId(TenantContext.requireTenantId());
 
         entityManager.persist(eval);
         return ResponseEntity.ok(eval);
@@ -638,7 +657,13 @@ public class DashboardController {
 
     @GetMapping("/evals")
     public ResponseEntity<List<EvalRun>> getEvals() {
-        List<EvalRun> evals = entityManager.createQuery("SELECT e FROM EvalRun e ORDER BY e.createdAt DESC", EvalRun.class)
+        // Rows from before eval runs had a tenant belong to the default tenant.
+        UUID tenantId = TenantContext.requireTenantId();
+        List<EvalRun> evals = entityManager.createQuery(
+                "SELECT e FROM EvalRun e WHERE e.tenantId = :tenantId"
+                    + " OR (e.tenantId IS NULL AND :tenantId = :defaultTenant) ORDER BY e.createdAt DESC", EvalRun.class)
+            .setParameter("tenantId", tenantId)
+            .setParameter("defaultTenant", ai.gitoracle.core.model.postgres.Tenant.DEFAULT_ID)
             .setMaxResults(50)
             .getResultList();
         return ResponseEntity.ok(evals);

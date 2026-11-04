@@ -127,6 +127,8 @@ services:
       - "127.0.0.1:8082:8082"
     environment:
       <<: *java-env
+      # /api/v1/risk asks the orchestrator for the caller's repository allow-list.
+      ORCHESTRATOR_URL: http://orchestrator:8083
     logging: *default-logging
 
   github-bot:

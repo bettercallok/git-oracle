@@ -2,6 +2,9 @@
 # dashboard's own origin by default; override via GITORACLE_ALLOWED_ORIGINS for other setups.
 gitoracle:
   allowed-origins: ${GITORACLE_ALLOWED_ORIGINS:http://localhost:5173}
+  # Seeds the default tenant's repository allow-list (owner/name, comma-separated).
+  # Other tenants' lists are managed with POST/DELETE /api/v1/admin/repos.
+  allowed-repos: ${GITORACLE_ALLOWED_REPOS:}
   # Escalates jobs stuck in a working state past these limits (JobWatchdog).
   watchdog:
     enabled: ${GITORACLE_WATCHDOG_ENABLED:true}

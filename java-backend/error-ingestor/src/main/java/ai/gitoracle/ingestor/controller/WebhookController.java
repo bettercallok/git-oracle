@@ -1,6 +1,9 @@
 package ai.gitoracle.ingestor.controller;
 
 import ai.gitoracle.core.kafka.KafkaTopics;
+import ai.gitoracle.core.model.postgres.Tenant;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import ai.gitoracle.ingestor.security.DeliveryReplayGuard;
 import ai.gitoracle.ingestor.security.HmacVerifier;
 import ai.gitoracle.ingestor.service.SemanticDedupService;
@@ -51,6 +54,26 @@ public class WebhookController {
     @Value("${gitoracle.sentry-webhook-secret:}")
     private String sentryWebhookSecret;
 
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    /**
+     * The secret a tenant's Sentry webhook must be signed with. It used to be
+     * one SENTRY_WEBHOOK_SECRET for everyone, with the tenant taken from the
+     * URL, so whoever held it could file jobs under any tenant. Now each tenant
+     * has its own (set via POST /api/v1/admin/tenants/{id}/sentry-secret); the
+     * shared secret is accepted only for the default tenant, which keeps a
+     * single-tenant install working unchanged. Unknown tenant or no secret:
+     * empty, which HmacVerifier rejects.
+     */
+    String sentrySecretFor(UUID tenantId) {
+        Tenant tenant = entityManager == null ? null : entityManager.find(Tenant.class, tenantId);
+        if (tenant != null && tenant.getSentryWebhookSecret() != null && !tenant.getSentryWebhookSecret().isBlank()) {
+            return tenant.getSentryWebhookSecret();
+        }
+        return Tenant.DEFAULT_ID.equals(tenantId) ? sentryWebhookSecret : "";
+    }
+
     public WebhookController(SemanticDedupService dedupService, KafkaTemplate<String, Object> kafkaTemplate,
                               DeliveryReplayGuard replayGuard) {
         this.dedupService = dedupService;
@@ -64,7 +87,7 @@ public class WebhookController {
             @RequestBody byte[] rawBody,
             @RequestHeader(value = "X-Sentry-Signature", required = false) String sig) {
 
-        if (!HmacVerifier.verify(rawBody, sentryWebhookSecret, sig, "sha256=")) {
+        if (!HmacVerifier.verify(rawBody, sentrySecretFor(tenantId), sig, "sha256=")) {
             logger.warn("Rejected Sentry webhook for tenant {}: invalid or missing X-Sentry-Signature.", tenantId);
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
