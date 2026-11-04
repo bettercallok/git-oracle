@@ -5,6 +5,7 @@ import logging
 import asyncpg
 from pgvector.asyncpg import register_vector
 from typing import List, Dict, Optional
+from urllib.parse import urlparse
 from uuid import uuid4
 from dotenv import load_dotenv, find_dotenv
 from qdrant_client import AsyncQdrantClient
@@ -12,45 +13,35 @@ from qdrant_client.http import models as qmodels
 import redis.asyncio as redis
 from pydantic import BaseModel
 
+from shared import embeddings
+
 # Load env variables globally
 load_dotenv(find_dotenv())
 
 logger = logging.getLogger(__name__)
 
-# Fallback to local Ollama API for embeddings
-OLLAMA_API_URL = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1/chat/completions")
-OLLAMA_EMBED_URL = OLLAMA_API_URL.replace("/v1/chat/completions", "/api/embeddings")
-EMBEDDING_MODEL = "all-minilm"
+async def embed_text(content: str) -> Optional[List[float]]:
+    """The content's embedding, or None when embeddings are off or unavailable
+    (see shared/embeddings.py). Callers store and recall nothing on None —
+    an all-zero vector used to be stored instead, which made recall return
+    arbitrary memories as "similar"."""
+    return await embeddings.embed(content)
 
-_embedding_warned = False
 
-
-async def embed_text(content: str) -> List[float]:
-    """Convert text into a 384-dimensional vector using local Ollama model, or fallback to zero vector."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.post(
-                OLLAMA_EMBED_URL,
-                json={
-                    "model": EMBEDDING_MODEL,
-                    "prompt": content
-                }
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["embedding"]
-    except Exception as e:  # noqa: BLE001 — embeddings are optional; falls back to a zero vector
-        # This was debug-only, so a deployment whose LLM provider has no
-        # embeddings endpoint (e.g. Groq) ran with useless all-zero vectors and
-        # nothing ever said so. Warn once per process; debug after that.
-        global _embedding_warned
-        if not _embedding_warned:
-            _embedding_warned = True
-            logger.warning(f"Embeddings unavailable ({e}); memory recall falls back to zero vectors "
-                           f"and won't find similar past fixes. Further failures are logged at debug.")
-        else:
-            logger.debug(f"Skipping vector embedding recall: {e}")
-        return [0.0] * 384
+def repo_key(repo: str) -> str:
+    """One key per repository, whatever form the caller has. The fixer keyed
+    memories by its per-job workspace (/tmp/gitoracle-workspaces/<job>) while
+    the PR-feedback processor used the repo URL, so nothing one stored was ever
+    found by the other — or by any later job."""
+    value = (repo or "").strip()
+    parsed = urlparse(value if "://" in value else "")
+    if parsed.netloc:
+        path = parsed.path.strip("/").removesuffix(".git").lower()
+        return f"{parsed.netloc.lower().split('@')[-1]}/{path}"
+    if value.startswith("git@") and ":" in value:          # git@github.com:owner/repo.git
+        host, path = value[4:].split(":", 1)
+        return f"{host.lower()}/{path.strip('/').removesuffix('.git').lower()}"
+    return value
 
 async def get_db_connection():
     """Create an asyncpg connection and register pgvector types."""
@@ -78,12 +69,16 @@ class AgentMemory:
         metadata: Optional[Dict] = None
     ) -> str:
         """Store a new memory in PostgreSQL."""
-        if metadata is None:
-            metadata = {}
-            
+        metadata = dict(metadata or {})
+
         logger.info(f"[Episodic] Generating embedding for memory: '{content[:50]}...'")
         embedding = await embed_text(content)
-        
+        if embedding is None:
+            logger.info("[Episodic] Not storing the memory: embeddings are unavailable")
+            return ""
+        # Recall only compares vectors from the same embedding model.
+        metadata["embedding_model"] = embeddings.model_tag()
+
         conn = await get_db_connection()
         try:
             mem_id = await conn.fetchval(
@@ -92,7 +87,7 @@ class AgentMemory:
                 VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING id
                 """,
-                tenant_id, repo, memory_type, content, embedding, json.dumps(metadata)
+                tenant_id, repo_key(repo), memory_type, content, embedding, json.dumps(metadata)
             )
             return str(mem_id)
         finally:
@@ -109,18 +104,23 @@ class AgentMemory:
         """Retrieve most similar past memories using pgvector cosine distance (<=>)."""
         logger.info(f"[Episodic] Recalling memories similar to: '{query}'")
         q_embedding = await embed_text(query)
-        
+        if q_embedding is None:
+            return []
+
         conn = await get_db_connection()
         try:
+            # Same embedding model only: rows from another model (or the old
+            # all-zero vectors, which carry no tag) are not comparable.
             rows = await conn.fetch(
                 """
                 SELECT id, content, confidence, metadata, (embedding <=> $1) AS distance
                 FROM agent_memory
                 WHERE tenant_id = $2 AND repo = $3 AND memory_type = $4
+                  AND metadata->>'embedding_model' = $6
                 ORDER BY distance ASC
                 LIMIT $5
                 """,
-                q_embedding, tenant_id, repo, memory_type, top_k
+                q_embedding, tenant_id, repo_key(repo), memory_type, top_k, embeddings.model_tag()
             )
             
             memories = []
@@ -160,7 +160,7 @@ class SemanticMemory:
             await self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=qmodels.VectorParams(
-                    size=384,  # all-minilm size
+                    size=embeddings.EMBEDDING_DIM,
                     distance=qmodels.Distance.COSINE
                 )
             )
@@ -172,7 +172,9 @@ class SemanticMemory:
             
             logger.info(f"[Semantic] Learning new fact for {repo}: '{fact[:50]}...'")
             embedding = await embed_text(fact)
-            
+            if embedding is None:
+                return
+
             await self.client.upsert(
                 collection_name=self.collection_name,
                 points=[
@@ -180,10 +182,11 @@ class SemanticMemory:
                         id=str(uuid4()),
                         vector=embedding,
                         payload={
-                            "repo": repo,
+                            "repo": repo_key(repo),
                             "fact": fact,
                             "source": source,
-                            "confidence": confidence
+                            "confidence": confidence,
+                            "embedding_model": embeddings.model_tag(),
                         }
                     )
                 ]
@@ -200,7 +203,9 @@ class SemanticMemory:
             
             logger.info(f"[Semantic] Retrieving facts for {repo} similar to: '{query}'")
             query_vector = await embed_text(query)
-            
+            if query_vector is None:
+                return []
+
             search_result = await self.client.search(
                 collection_name=self.collection_name,
                 query_vector=query_vector,
@@ -208,8 +213,12 @@ class SemanticMemory:
                     must=[
                         qmodels.FieldCondition(
                             key="repo",
-                            match=qmodels.MatchValue(value=repo)
-                        )
+                            match=qmodels.MatchValue(value=repo_key(repo))
+                        ),
+                        qmodels.FieldCondition(
+                            key="embedding_model",
+                            match=qmodels.MatchValue(value=embeddings.model_tag())
+                        ),
                     ]
                 ),
                 limit=top_k

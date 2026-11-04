@@ -371,7 +371,9 @@ async def execute_fix(request: FixerRequest):
         
         # 2. Retrieve Episodic Memory
         try:
-            memories = await memory.recall(request.tenant_id, request.repo_path, request.bug_description, "episodic", top_k=2)
+            # Keyed by the repository (repo_url), not this job's workspace path —
+            # otherwise no later job could ever recall this memory.
+            memories = await memory.recall(request.tenant_id, request.repo_url or request.repo_path, request.bug_description, "episodic", top_k=2)
             past_fixes = "\n".join([f"- {m['content']} (Score: {m['metadata'].get('quality_score', 1.0)})" for m in memories])
         except Exception as e:  # noqa: BLE001 — memory is optional context; it must not block the fix
             logger.warning(f"Could not retrieve episodic memory: {e}")
@@ -502,7 +504,7 @@ Do not write a diff yourself — the unified diff is computed automatically from
             # 7. Store successful fix in episodic memory
             try:
                 episode_text = f"Fixed bug '{request.bug_description}' using strategy {request.plan.strategy}. Key change: {patch.summary}."
-                await memory.remember(request.tenant_id, request.repo_path, "episodic", episode_text, metadata={"quality_score": 1.0})
+                await memory.remember(request.tenant_id, request.repo_url or request.repo_path, "episodic", episode_text, metadata={"quality_score": 1.0})
                 logger.info("Saved success to Episodic Memory.")
             except Exception as e:  # noqa: BLE001 — storing the success in memory is best-effort
                 logger.warning(f"Failed to store memory: {e}")
