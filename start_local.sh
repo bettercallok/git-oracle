@@ -189,6 +189,24 @@ cd ..
 echo "🐍 Starting Python AI Agents..."
 cd ai_core
 source .venv/bin/activate
+# A pull that adds a Python package used to crash all seven agents on import
+# (ModuleNotFoundError, restarting forever) until someone ran pip by hand.
+# Install when requirements.txt has changed since the last successful install;
+# the checksum lives in the venv, so a recreated venv installs again. A failed
+# install isn't recorded (it retries next start) and doesn't stop the start:
+# offline, the packages already there may well be enough.
+sync_python_deps() {
+  local stamp=".venv/.requirements.cksum" current
+  current="$(cksum < requirements.txt)"
+  [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$current" ] && return 0
+  echo "📦 requirements.txt changed — installing Python dependencies..."
+  if python -m pip install -q -r requirements.txt; then
+    printf '%s\n' "$current" > "$stamp"
+  else
+    echo "⚠️  Could not install Python dependencies — agents may fail on import (see ai_core/*.log)."
+  fi
+}
+sync_python_deps
 supervise fixer fixer.log python agents/fixer/main.py
 supervise planner planner.log python agents/planner/main.py
 supervise investigator investigator.log python agents/investigator/main.py

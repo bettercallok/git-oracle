@@ -20,7 +20,7 @@ make infra-down                    # stops infra containers, keeps volumes
 
 Java services are launched with plain `java -jar`, never `./gradlew bootRun` — `bootRun` keeps a second, uncapped Gradle build-supervisor JVM resident for the service's entire runtime (6 services → 12 resident JVMs instead of 6). `start_local.sh` builds jars once via a single short-lived `./gradlew --no-daemon :<module>:bootJar -x test` invocation per service, then runs the jars directly.
 
-`start_local.sh` runs every service inside a restart loop (`supervise`): a crashed process is restarted with backoff (2s doubling to 60s) and logged to `supervisor.log`. `stop_local.sh` touches `.gitoracle-stopping` and kills the loops (via their `*.supervisor.pid` files) **before** the port sweep — if you stop services any other way, the loops will restart them.
+`start_local.sh` installs `ai_core/requirements.txt` into `ai_core/.venv` when it has changed since the last successful install. It runs every service inside a restart loop (`supervise`): a crashed process is restarted with backoff (2s doubling to 60s) and logged to `supervisor.log`. `stop_local.sh` touches `.gitoracle-stopping` and kills the loops (via their `*.supervisor.pid` files) **before** the port sweep — if you stop services any other way, the loops will restart them.
 
 After a restart, confirm a Java service is actually ready by grepping its log for `"Started <X>Application"`, not by curling its port — a dying old process can leave a port that still answers healthchecks for a moment during the handoff.
 
