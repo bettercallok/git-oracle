@@ -11,6 +11,8 @@ tests that merely import an agent module are unaffected.
 """
 import os
 import sys
+
+from shared.kafka_security import kafka_security_kwargs
 from typing import Iterable, List
 
 
@@ -30,6 +32,10 @@ def llm_url_problem(url: str) -> str | None:
 def check_startup_config(agent: str, *, needs_llm: bool) -> None:
     """Exit the process with a clear message if required settings are missing."""
     problems = [f"{n} is not set" for n in missing(["GITORACLE_INTERNAL_TOKEN"])]
+    try:
+        kafka_security_kwargs()
+    except ValueError as e:
+        problems.append(str(e))
     if needs_llm:
         if missing(["LLM_BASE_URL"]):
             problems.append("LLM_BASE_URL is not set")

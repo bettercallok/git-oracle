@@ -28,6 +28,7 @@ cp .env.example .env
   echo "GRAFANA_ADMIN_PASSWORD=$(rnd)"
   echo "LANGFUSE_NEXTAUTH_SECRET=$(rnd)"
   echo "LANGFUSE_SALT=$(rnd)"
+  echo "KAFKA_SASL_PASSWORD=$(rnd)"
   # Langfuse isn't started in CI; empty keys turn tracing off instead of
   # failing (and blocking on a flush) on every LLM call.
   echo "LANGFUSE_PUBLIC_KEY="

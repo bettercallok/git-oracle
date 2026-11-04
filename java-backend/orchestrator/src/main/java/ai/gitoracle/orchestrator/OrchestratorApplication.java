@@ -43,8 +43,13 @@ public class OrchestratorApplication {
      */
     @Bean
     public ConsumerFactory<String, String> stringValueConsumerFactory(
-            @Value("${spring.kafka.bootstrap-servers}") String bootstrapServers) {
+            @Value("${spring.kafka.bootstrap-servers}") String bootstrapServers,
+            org.springframework.boot.autoconfigure.kafka.KafkaProperties kafkaProperties) {
         Map<String, Object> props = new HashMap<>();
+        // spring.kafka.properties.* (security.protocol, SASL) — a hand-built
+        // factory doesn't get them automatically, and without them this
+        // consumer couldn't authenticate to the broker's SASL listener.
+        props.putAll(kafkaProperties.getProperties());
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);

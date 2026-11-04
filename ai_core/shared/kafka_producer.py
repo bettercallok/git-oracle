@@ -5,6 +5,8 @@ from typing import Optional
 
 from aiokafka import AIOKafkaProducer
 
+from shared.kafka_security import kafka_security_kwargs
+
 logger = logging.getLogger(__name__)
 
 class KafkaEventProducer:
@@ -18,7 +20,8 @@ class KafkaEventProducer:
         if self.producer is None:
             self.producer = AIOKafkaProducer(
                 bootstrap_servers=self.bootstrap_servers,
-                value_serializer=lambda m: json.dumps(m).encode('utf-8')
+                value_serializer=lambda m: json.dumps(m).encode('utf-8'),
+                **kafka_security_kwargs(),
             )
             await self.producer.start()
         return self.producer

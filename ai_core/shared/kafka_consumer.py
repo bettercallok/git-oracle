@@ -26,6 +26,7 @@ from aiokafka import AIOKafkaConsumer
 
 from shared import topics
 from shared.kafka_producer import get_producer
+from shared.kafka_security import kafka_security_kwargs
 from shared.metrics import KAFKA_MESSAGES, canonical_agent
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ class KafkaEventConsumer:
             # agent was still booting. Only matters for a brand-new group; after
             # that the committed offset wins.
             auto_offset_reset="earliest",
+            **kafka_security_kwargs(),
             # Raw bytes: decoding happens per message in _handle, so one
             # malformed message can be dead-lettered instead of killing the loop.
         )
