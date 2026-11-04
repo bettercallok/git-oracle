@@ -239,6 +239,8 @@ public class DashboardController {
         fixPayload.put("repo_path", repoPath);
         fixPayload.put("error_id", job.getErrorId());
         fixPayload.put("human_instructions", instructions);
+        // The investigator's suspect, so the fixer sees the bug-introducing diff.
+        fixPayload.put("root_commit", job.getRootCommit() == null ? "" : job.getRootCommit());
         // Minimal plan — fixer will use human instructions as primary guide
         Map<String, Object> plan = new HashMap<>();
         plan.put("strategy", "human_directed");

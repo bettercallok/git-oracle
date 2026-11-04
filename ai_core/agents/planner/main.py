@@ -14,6 +14,7 @@ from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 from shared.internal_auth import require_internal_token
 from shared.job_events import report_event
 from shared.body_limit import BodySizeLimitMiddleware
+from shared.git_context import commit_diff
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -83,6 +84,11 @@ async def create_plan(request: PlannerRequest):
         "Your job is to generate a strict, constrained action plan for the Fixer Agent to execute."
     )
     await report_prompt_version(request.job_id, "planner", prompt_version)
+    # What the top suspect commit actually changed. Without it the planner only
+    # had the commit message and guessed — e.g. the direction of an off-by-one.
+    top_cause = request.investigation_result.ranked_causes[0] if request.investigation_result.ranked_causes else None
+    bug_change = commit_diff(request.repo_path, top_cause.commit_sha if top_cause else None,
+                             request.investigation_result.affected_files)
     prompt_text = f"""
 {base_prompt}
 
@@ -90,15 +96,20 @@ Bug Description: {request.bug_description}
 
 Investigator Findings:
 Narrative: {request.investigation_result.narrative}
-Top Suspect Commit: {request.investigation_result.ranked_causes[0].message if request.investigation_result.ranked_causes else 'None'}
+Top Suspect Commit: {top_cause.message if top_cause else 'None'}
 Affected Files: {', '.join(request.investigation_result.affected_files)}
 Investigator's Recommended Strategy: {request.investigation_result.recommended_strategy}
+
+What the Top Suspect Commit Changed (the actual diff — base the plan on it; do not guess):
+{bug_change or 'Not available.'}
 
 Architectural Rules for this Repository (MUST OBEY):
 {architectural_rules}
 
 Generate a strict plan. You must pick exactly one FixStrategy.
-Be very specific about which functions need to change.
+Be very specific about which functions need to change, using the names that appear in the code above.
+If the diff shows the bug being introduced, say in 'reasoning' exactly which change to undo or correct,
+and in which direction (e.g. "restore `<` where the commit changed it to `<=`").
 Constrain the Fixer Agent by setting 'max_lines_to_change' to the absolute minimum needed.
 """
     messages = [
@@ -202,6 +213,9 @@ async def handle_planner_job(payload: dict):
             "human_instructions": human_instructions,
             "target_repo": target_repo,
             "branch": branch,
+            # The investigator's top suspect, so the fixer can read the same
+            # bug-introducing diff the plan was based on.
+            "root_commit": investigation.ranked_causes[0].commit_sha if investigation.ranked_causes else "",
         }
         await producer.publish(topics.JOB_FIX, fix_payload)
         logger.info(f"Published job.events.fix for job {job_id}")

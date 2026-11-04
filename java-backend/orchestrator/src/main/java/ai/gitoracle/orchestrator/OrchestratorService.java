@@ -793,6 +793,8 @@ public class OrchestratorService {
                 fixPayload.put("error_id",            job.getErrorId());
                 fixPayload.put("human_instructions",  comment);
                 fixPayload.put("target_repo",         repoForPr);
+                // The investigator's suspect, so the fixer sees the bug-introducing diff.
+                fixPayload.put("root_commit",         job.getRootCommit() == null ? "" : job.getRootCommit());
 
                 Map<String, Object> plan = new HashMap<>();
                 plan.put("strategy",            "github_review_directed");
