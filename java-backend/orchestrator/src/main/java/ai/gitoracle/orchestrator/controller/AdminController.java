@@ -3,6 +3,8 @@ package ai.gitoracle.orchestrator.controller;
 import ai.gitoracle.orchestrator.dto.Requests;
 import ai.gitoracle.orchestrator.security.TenantContext;
 import jakarta.validation.Valid;
+import ai.gitoracle.orchestrator.service.AuditLog;
+import ai.gitoracle.orchestrator.service.OrganizationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -51,16 +53,34 @@ public class AdminController {
         tenant.setOrgName(tenantName);
         entityManager.persist(tenant);
 
+        audit.record(tenant.getId(), "organization.created", tenantName, null);
         String tenantId = tenant.getId().toString();
         logger.info("Registered new tenant: {} with ID: {} (requested by tenant {})",
             tenantName, tenantId, TenantContext.tenantId());
         return ResponseEntity.ok(Map.of("tenantId", tenantId, "status", "REGISTERED"));
     }
 
-    private final jakarta.persistence.EntityManager entityManager;
+    /** How a platform admin gives a new organisation its first owner. */
+    @PostMapping("/tenants/{id}/invitations")
+    public ResponseEntity<Map<String, Object>> invite(@PathVariable("id") UUID tenantId,
+                                                      @Valid @RequestBody Requests.InviteMember request) {
+        try {
+            var invitation = organizations.invite(tenantId, new OrganizationService.Actor(TenantContext.userId(), true),
+                request.githubLogin(), ai.gitoracle.core.model.postgres.OrgRole.valueOf(request.role()));
+            return ResponseEntity.ok(OrganizationController.describe(invitation));
+        } catch (OrganizationService.OrganizationException e) {
+            return ResponseEntity.status(e.status()).body(Map.of("error", e.getMessage()));
+        }
+    }
 
-    public AdminController(jakarta.persistence.EntityManager entityManager) {
+    private final jakarta.persistence.EntityManager entityManager;
+    private final OrganizationService organizations;
+    private final AuditLog audit;
+
+    public AdminController(jakarta.persistence.EntityManager entityManager, OrganizationService organizations, AuditLog audit) {
         this.entityManager = entityManager;
+        this.organizations = organizations;
+        this.audit = audit;
     }
 
     @GetMapping("/tenants/{id}/metrics")

@@ -10,7 +10,11 @@ public final class TenantContextTestSupport {
     private TenantContextTestSupport() {}
 
     public static <T> T runAs(UUID tenantId, Set<String> scopes, Supplier<T> body) {
-        TenantContext.set(tenantId, scopes, true);
+        return runAs(tenantId, scopes, null, body);
+    }
+
+    public static <T> T runAs(UUID tenantId, Set<String> scopes, UUID userId, Supplier<T> body) {
+        TenantContext.set(tenantId, scopes, true, userId);
         try {
             return body.get();
         } finally {

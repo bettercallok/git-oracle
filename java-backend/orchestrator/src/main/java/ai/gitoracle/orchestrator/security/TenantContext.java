@@ -39,7 +39,7 @@ public final class TenantContext {
      * header — a value that must never be read as "this caller owns the
      * default tenant's jobs and nobody else's".
      */
-    private record Context(UUID tenantId, Set<String> scopes, boolean asserted) {}
+    private record Context(UUID tenantId, Set<String> scopes, boolean asserted, UUID userId) {}
 
     private static final ThreadLocal<Context> CURRENT = new ThreadLocal<>();
 
@@ -50,7 +50,17 @@ public final class TenantContext {
     }
 
     static void set(UUID tenantId, Set<String> scopes, boolean asserted) {
-        CURRENT.set(new Context(tenantId, scopes == null ? Set.of() : scopes, asserted));
+        set(tenantId, scopes, asserted, null);
+    }
+
+    static void set(UUID tenantId, Set<String> scopes, boolean asserted, UUID userId) {
+        CURRENT.set(new Context(tenantId, scopes == null ? Set.of() : scopes, asserted, userId));
+    }
+
+    /** The signed-in person making this request; null for an API key or internal caller. */
+    public static UUID userId() {
+        Context c = CURRENT.get();
+        return c == null ? null : c.userId();
     }
 
     /**

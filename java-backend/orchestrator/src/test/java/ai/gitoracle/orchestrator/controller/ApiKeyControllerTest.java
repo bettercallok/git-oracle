@@ -5,6 +5,7 @@ import ai.gitoracle.core.security.ApiKeys;
 import ai.gitoracle.orchestrator.dto.Requests;
 import ai.gitoracle.orchestrator.repository.ApiKeyRepository;
 import ai.gitoracle.orchestrator.security.TenantContextTestSupport;
+import ai.gitoracle.orchestrator.service.AuditLog;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -36,7 +37,7 @@ class ApiKeyControllerTest {
     void setUp() {
         repository = mock(ApiKeyRepository.class);
         when(repository.findByTenantIdOrderByCreatedAtDesc(TENANT)).thenReturn(List.of());
-        controller = new ApiKeyController(repository);
+        controller = new ApiKeyController(repository, mock(AuditLog.class));
     }
 
     private <T> T asUser(Supplier<T> body) {
@@ -54,6 +55,7 @@ class ApiKeyControllerTest {
         key.setTenantId(tenant);
         key.setKeyPrefix("abc");
         key.setKeyHash("secret-hash");
+        key.setCreatedByUserId(USER);
         key.setExpiresAt(expiresAt);
         key.setRevokedAt(revokedAt);
         return key;
@@ -153,5 +155,33 @@ class ApiKeyControllerTest {
 
         assertThat(asUser(() -> controller.revoke(USER, "abc")).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(theirs.getRevokedAt()).isNull();
+    }
+
+    private <T> T asOrgAdmin(Supplier<T> body) {
+        return TenantContextTestSupport.runAs(TENANT, Set.of("jobs:read", "jobs:write", "org:admin"), body);
+    }
+
+    @Test
+    void aMemberSeesAndRevokesOnlyTheirOwnKeys() {
+        ApiKey someoneElses = row(TENANT, null, null);
+        someoneElses.setCreatedByUserId(UUID.randomUUID());
+        when(repository.findByTenantIdOrderByCreatedAtDesc(TENANT)).thenReturn(List.of(someoneElses));
+        when(repository.findByKeyPrefix("abc")).thenReturn(Optional.of(someoneElses));
+
+        assertThat((List<?>) asUser(() -> controller.list(USER)).getBody()).isEmpty();
+        assertThat(asUser(() -> controller.revoke(USER, "abc")).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(someoneElses.getRevokedAt()).isNull();
+    }
+
+    @Test
+    void anOrgAdminSeesAndRevokesEveryKeyInTheOrganisation() {
+        ApiKey someoneElses = row(TENANT, null, null);
+        someoneElses.setCreatedByUserId(UUID.randomUUID());
+        when(repository.findByTenantIdOrderByCreatedAtDesc(TENANT)).thenReturn(List.of(someoneElses));
+        when(repository.findByKeyPrefix("abc")).thenReturn(Optional.of(someoneElses));
+
+        assertThat((List<?>) asOrgAdmin(() -> controller.list(USER)).getBody()).hasSize(1);
+        assertThat(asOrgAdmin(() -> controller.revoke(USER, "abc")).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(someoneElses.getRevokedAt()).isNotNull();
     }
 }

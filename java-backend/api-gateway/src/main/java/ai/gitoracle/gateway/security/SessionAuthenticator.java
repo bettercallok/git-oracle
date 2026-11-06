@@ -25,8 +25,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Built like {@link ApiKeyAuthenticator}: blocking JDBC off the event loop, a
  * short cache because the dashboard polls every few seconds, and fail-closed if
- * the database can't answer. The cache has the same revocation lag, except that
- * {@link #evict} lets signing out take effect immediately.
+ * the database can't answer. The cache is much shorter than the API key one, because
+ * removing someone from an organisation should take effect within seconds. {@link
+ * #evict} makes signing out and switching organisation immediate.
  */
 @Component
 public class SessionAuthenticator {
@@ -51,7 +52,7 @@ public class SessionAuthenticator {
     private final JdbcTemplate jdbcTemplate;
     private final ConcurrentHashMap<String, CachedSession> cache = new ConcurrentHashMap<>();
 
-    @Value("${gitoracle.api-key-cache-ttl-seconds:60}")
+    @Value("${gitoracle.session-cache-ttl-seconds:5}")
     private long cacheTtlSeconds;
 
     public SessionAuthenticator(JdbcTemplate jdbcTemplate) {

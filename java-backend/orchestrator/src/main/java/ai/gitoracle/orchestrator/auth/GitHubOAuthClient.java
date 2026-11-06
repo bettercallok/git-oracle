@@ -6,10 +6,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * GitHub's web sign-in flow, using the GitHub App's client id and secret.
@@ -74,6 +76,23 @@ public class GitHubOAuthClient {
             .queryParam("allow_signup", "false")
             .encode()
             .toUriString();
+    }
+
+    /** Finds an account by login, to tie an invitation to its permanent id. Public data: no token needed. */
+    public Optional<GitHubUser> lookupUser(String login) {
+        try {
+            JsonNode user = http.get()
+                .uri(apiUrl + "/users/{login}", login)
+                .header("Accept", "application/vnd.github+json")
+                .retrieve()
+                .body(JsonNode.class);
+            if (user == null || !user.path("id").canConvertToLong() || user.path("login").asText("").isEmpty()) {
+                return Optional.empty();
+            }
+            return Optional.of(new GitHubUser(user.path("id").asLong(), user.path("login").asText()));
+        } catch (HttpClientErrorException.NotFound e) {
+            return Optional.empty();
+        }
     }
 
     /** @throws GitHubLoginException if GitHub refuses the code or answers without a user */

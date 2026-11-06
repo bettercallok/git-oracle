@@ -4,6 +4,7 @@ import ai.gitoracle.core.model.postgres.Tenant;
 import ai.gitoracle.orchestrator.security.TenantContext;
 import ai.gitoracle.orchestrator.service.RepoAccessService;
 import jakarta.persistence.EntityManager;
+import ai.gitoracle.orchestrator.service.AuditLog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -33,10 +34,12 @@ public class RepoAllowListAdminController {
 
     private final RepoAccessService repoAccess;
     private final EntityManager entityManager;
+    private final AuditLog audit;
 
-    public RepoAllowListAdminController(RepoAccessService repoAccess, EntityManager entityManager) {
+    public RepoAllowListAdminController(RepoAccessService repoAccess, EntityManager entityManager, AuditLog audit) {
         this.repoAccess = repoAccess;
         this.entityManager = entityManager;
+        this.audit = audit;
     }
 
     @GetMapping("/repos")
@@ -54,6 +57,7 @@ public class RepoAllowListAdminController {
         }
         try {
             String slug = repoAccess.add(tenant, body.get("repo"));
+            audit.record(tenant, "repo.allowed", slug, null);
             logger.info("Allow-list: tenant {} may now use {}", tenant, slug);
             return ResponseEntity.ok(Map.of("tenantId", tenant.toString(), "repo", slug));
         } catch (IllegalArgumentException e) {
@@ -68,6 +72,7 @@ public class RepoAllowListAdminController {
         if (!repoAccess.remove(tenant, repo)) {
             return ResponseEntity.notFound().build();
         }
+        audit.record(tenant, "repo.removed", repo, null);
         logger.info("Allow-list: tenant {} may no longer use {}", tenant, repo);
         return ResponseEntity.ok(Map.of("tenantId", tenant.toString(), "removed", repo));
     }

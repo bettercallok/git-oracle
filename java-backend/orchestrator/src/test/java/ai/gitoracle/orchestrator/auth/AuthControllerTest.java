@@ -1,8 +1,12 @@
 package ai.gitoracle.orchestrator.auth;
 
+import ai.gitoracle.core.model.postgres.OrgMembership;
+import ai.gitoracle.core.model.postgres.OrgRole;
 import ai.gitoracle.core.model.postgres.UserAccount;
+import ai.gitoracle.orchestrator.dto.Requests;
 import ai.gitoracle.orchestrator.repository.UserAccountRepository;
 import ai.gitoracle.orchestrator.security.TenantContextTestSupport;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
@@ -12,6 +16,7 @@ import org.springframework.web.client.ResourceAccessException;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -28,6 +33,7 @@ class AuthControllerTest {
     private GitHubOAuthClient github;
     private LoginService logins;
     private UserAccountRepository users;
+    private final EntityManager entityManager = mock(EntityManager.class);
     private AuthController controller;
 
     @BeforeEach
@@ -41,7 +47,7 @@ class AuthControllerTest {
     }
 
     private AuthController controllerFor(String publicApiUrl) {
-        return new AuthController(github, logins, new LoginPolicy("alice", ""), users, publicApiUrl, DASHBOARD + "/");
+        return new AuthController(github, logins, new LoginPolicy("alice", ""), users, entityManager, publicApiUrl, DASHBOARD + "/");
     }
 
     private static String location(ResponseEntity<?> response) {
@@ -169,7 +175,7 @@ class AuthControllerTest {
 
     @Test
     void configSaysNoWhenNobodyIsInvitedSoAFreshForkKeepsItsKeyForm() {
-        AuthController nobodyInvited = new AuthController(github, logins, new LoginPolicy("", ""), users,
+        AuthController nobodyInvited = new AuthController(github, logins, new LoginPolicy("", ""), users, entityManager,
             "http://localhost:8080", DASHBOARD);
 
         assertThat(nobodyInvited.config()).containsEntry("githubLogin", false);
@@ -202,5 +208,36 @@ class AuthControllerTest {
         when(users.findById(any())).thenReturn(Optional.empty());
 
         assertThat(meAs(UUID.randomUUID(), false).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void meListsThePersonsOrganisationsAndTheirRoleInTheActiveOne() {
+        UUID id = UUID.randomUUID();
+        UUID active = UUID.randomUUID();
+        UserAccount user = new UserAccount();
+        user.setGithubLogin("alice");
+        when(users.findById(id)).thenReturn(Optional.of(user));
+        OrgMembership membership = new OrgMembership();
+        membership.setTenantId(active);
+        membership.setRole(OrgRole.ADMIN);
+        when(logins.organizationsOf(id)).thenReturn(List.of(membership));
+
+        Map<String, Object> body = TenantContextTestSupport.runAs(active, Set.of("jobs:read"), () -> controller.me(id)).getBody();
+
+        assertThat(body).containsEntry("role", OrgRole.ADMIN);
+        assertThat((List<?>) body.get("organizations")).hasSize(1);
+    }
+
+    @Test
+    void switchingNeedsASignedInPersonWhoBelongsToTheOrganisation() {
+        UUID session = UUID.randomUUID();
+        UUID tenant = UUID.randomUUID();
+        when(logins.switchOrganization(session, tenant)).thenReturn(false);
+
+        assertThat(controller.switchOrganization(null, new Requests.SwitchOrganization(tenant)).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(controller.switchOrganization(session, new Requests.SwitchOrganization(tenant)).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+
+        when(logins.switchOrganization(session, tenant)).thenReturn(true);
+        assertThat(controller.switchOrganization(session, new Requests.SwitchOrganization(tenant)).getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 }

@@ -74,10 +74,37 @@ class RouteAccessTest {
     void onlyAPersonCanManageKeysEvenAnAdminKeyCant() {
         assertThat(RouteAccess.allows(Access.SESSION, ADMIN, false)).isFalse();
         assertThat(RouteAccess.allows(Access.SESSION, READ, true)).isTrue();
+        assertThat(RouteAccess.allows(Access.SESSION_WRITE, ADMIN, false)).isFalse();
     }
 
     @Test
     void nobodyGetsInternalRoutesThroughTheGateway() {
         assertThat(RouteAccess.allows(Access.INTERNAL, ADMIN, true)).isFalse();
+    }
+
+    @Test
+    void aViewerCanListKeysButNotCreateThem() {
+        assertThat(RouteAccess.resolve("GET", "/api/v1/keys")).isEqualTo(Access.SESSION);
+        assertThat(RouteAccess.resolve("POST", "/api/v1/keys")).isEqualTo(Access.SESSION_WRITE);
+        assertThat(RouteAccess.allows(Access.SESSION_WRITE, READ, true)).isFalse();
+        assertThat(RouteAccess.allows(Access.SESSION_WRITE, READ_WRITE, true)).isTrue();
+    }
+
+    @Test
+    void organisationManagementNeedsAnOrgAdminWhoStillCantAdministerThePlatform() {
+        Set<String> orgAdmin = Set.of("jobs:read", "jobs:write", "org:admin");
+
+        assertThat(RouteAccess.allows(RouteAccess.resolve("POST", "/api/v1/org/invitations"), orgAdmin, true)).isTrue();
+        assertThat(RouteAccess.allows(RouteAccess.resolve("POST", "/api/v1/org/invitations"), READ_WRITE, true)).isFalse();
+        assertThat(RouteAccess.allows(RouteAccess.resolve("GET", "/api/v1/org/audit"), READ_WRITE, true)).isFalse();
+        assertThat(RouteAccess.allows(RouteAccess.resolve("GET", "/api/v1/org/members"), READ, true)).isTrue();
+        assertThat(RouteAccess.allows(RouteAccess.resolve("GET", "/api/v1/admin/repos"), orgAdmin, true)).isFalse();
+        assertThat(RouteAccess.allows(RouteAccess.resolve("GET", "/api/v1/orgXYZ"), READ, true)).isTrue();
+    }
+
+    @Test
+    void onlyAnOrgAdminCanPublishEvalResults() {
+        assertThat(RouteAccess.resolve("POST", "/api/v1/evals")).isEqualTo(Access.ORG_ADMIN);
+        assertThat(RouteAccess.resolve("GET", "/api/v1/evals")).isEqualTo(Access.READ);
     }
 }

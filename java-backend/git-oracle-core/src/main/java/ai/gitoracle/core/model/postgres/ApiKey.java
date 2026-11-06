@@ -101,6 +101,10 @@ public class ApiKey {
         public static final String JOBS_WRITE = "jobs:write";
         public static final String JOBS_READ = "jobs:read";
 
+        /** Held by a session through its organisation role, never by an API key from the keys page. */
+        public static final String ORG_ADMIN = "org:admin";
+        public static final String ORG_OWNER = "org:owner";
+
         private Scopes() {}
 
         public static Set<String> parse(String raw) {
