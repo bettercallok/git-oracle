@@ -565,7 +565,7 @@ react + typescript + vite. pages:
 - **risk heatmap** — neo4j-backed developer/file risk visualization.
 - **evaluations** — accuracy trend, PR merge rate and feedback, per-prompt-version results — all computed from real data, "—" where nothing's been measured.
 - **LLM traces** — every job's LLM calls, drawn in the dashboard (see [LLM traces](#llm-traces)).
-- **webhook simulator** — hand-craft and fire a github webhook payload at the real ingestion endpoint for testing.
+- **webhook simulator** — admins only. simulate a failed github actions run to test the whole pipeline. it starts a real job on an allowed repository, through a server route rather than a signed webhook, so the browser never holds the webhook secret.
 - **settings** — dark/light mode, token budget config.
 - **API keys** — create and revoke keys for your scripts.
 - **developer guide** — how to get access, run your own copy, and start jobs from other tools. linked at the top of every page.

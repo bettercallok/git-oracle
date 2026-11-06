@@ -149,6 +149,11 @@ OPENAI_API_KEY=<your provider key>`}</Code>
           <Inline>{'POST /api/v1/admin/tenants/<id>/sentry-secret'}</Inline>.
         </p>
 
+        <h3 className="guide-subheading">Webhook simulator</h3>
+        <p>
+          Admins can use this dashboard page to simulate a failed Actions run and test the whole pipeline. It starts a real job on an allowed repository.
+        </p>
+
         <h3 className="guide-subheading">Command line</h3>
         <p>Not ready yet: the <Inline>gitoracle</Inline> CLI doesn't send an API key, so its API calls are rejected. Use the HTTP API for now.</p>
       </Section>

@@ -135,6 +135,8 @@ Keys are `gor_<12-hex prefix>_<64-hex secret>`; only a SHA-256 hash is stored, l
 
 The login page shows GitHub sign-in when `GET /api/v1/auth/config` says `githubLogin` (App credentials set **and** someone invited), and the API key form only otherwise, so a new fork can still get in; to recover from broken GitHub sign-in, blank `GITHUB_APP_CLIENT_ID` and restart. Signed-in users manage their tenant's keys on the dashboard's API keys page (`ApiKeyController`, `/api/v1/keys`): session only (it requires `X-User-ID`, so a leaked key can't mint more), never `platform:admin`, and always expiring (default 90 days, max 365). `/api/v1/admin/api-keys` remains for operators and `scripts/setup_production_config.sh`.
 
+The dashboard's webhook simulator can't sign a webhook without holding the secret, so it posts to `POST /api/v1/admin/webhook-simulator` (error-ingestor's `WebhookSimulatorController`, with its own gateway route). It requires `platform:admin`, checked at the gateway and again in the controller, accepts only failed `workflow_run` payloads, and shares `WebhookController.handleWorkflowRun` with real deliveries. Forged PR outcomes and review comments stay impossible: those events still need a real signature.
+
 `TenantContext` is **request-scoped only**. Kafka listeners run on consumer threads with no request, so they must take the tenant from the event payload (`ErrorIngestedEvent.tenantId`); `TenantContext.requireTenantId()` throws there rather than silently defaulting.
 
 ### Storage

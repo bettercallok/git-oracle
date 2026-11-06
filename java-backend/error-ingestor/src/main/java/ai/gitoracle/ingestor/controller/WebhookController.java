@@ -153,34 +153,43 @@ public class WebhookController {
 
         // --- GitHub Actions workflow_run failure ---
         if ("workflow_run".equals(githubEvent)) {
-            String action = (String) payload.get("action");
-            @SuppressWarnings("unchecked")
-            Map<String, Object> workflowRun = (Map<String, Object>) payload.get("workflow_run");
-            @SuppressWarnings("unchecked")
-            Map<String, Object> repository = (Map<String, Object>) payload.get("repository");
-
-            if ("completed".equals(action) && workflowRun != null && repository != null) {
-                String conclusion = (String) workflowRun.get("conclusion");
-                if ("failure".equals(conclusion)) {
-                    String repoName = (String) repository.get("full_name");
-                    Long runIdLong = ((Number) workflowRun.get("id")).longValue();
-                    String runId = String.valueOf(runIdLong);
-                    logger.info("Parsed failed workflow_run for repository: {} (Run ID: {})", repoName, runId);
-                    Map<String, Object> internalPayload = Map.of(
-                        "repo",       "https://github.com/" + repoName,
-                        "error_id",   "run-" + runId,
-                        "stacktrace", "GitHub Actions Run Failed: " + runId
-                    );
-                    dedupService.ingest(tenantId, internalPayload);
-                } else {
-                    logger.info("Ignoring successful workflow_run.");
-                }
-            }
-            return ResponseEntity.accepted().build();
+            return handleWorkflowRun(tenantId, payload);
         }
 
         // Fallback: custom/mocked payload
         dedupService.ingest(tenantId, payload);
+        return ResponseEntity.accepted().build();
+    }
+
+    /**
+     * Starts a job for a failed GitHub Actions run. Callers have already
+     * authenticated the delivery: by its signature here, or as an admin in
+     * {@link WebhookSimulatorController}.
+     */
+    @SuppressWarnings("unchecked")
+    ResponseEntity<Void> handleWorkflowRun(UUID tenantId, Map<String, Object> payload) {
+        Object action = payload.get("action");
+        Map<String, Object> workflowRun = (Map<String, Object>) payload.get("workflow_run");
+        Map<String, Object> repository = (Map<String, Object>) payload.get("repository");
+
+        if ("completed".equals(action) && workflowRun != null && repository != null) {
+            String conclusion = (String) workflowRun.get("conclusion");
+            if ("failure".equals(conclusion)) {
+                if (!(repository.get("full_name") instanceof String repoName) || !(workflowRun.get("id") instanceof Number id)) {
+                    return ResponseEntity.badRequest().build();
+                }
+                String runId = String.valueOf(id.longValue());
+                logger.info("Parsed failed workflow_run for repository: {} (Run ID: {})", repoName, runId);
+                Map<String, Object> internalPayload = Map.of(
+                    "repo",       "https://github.com/" + repoName,
+                    "error_id",   "run-" + runId,
+                    "stacktrace", "GitHub Actions Run Failed: " + runId
+                );
+                dedupService.ingest(tenantId, internalPayload);
+            } else {
+                logger.info("Ignoring successful workflow_run.");
+            }
+        }
         return ResponseEntity.accepted().build();
     }
 

@@ -82,6 +82,17 @@ spring:
               args:
                 redis-rate-limiter.replenishRate: 50
                 redis-rate-limiter.burstCapacity: 100
+        # Before orchestrator_api, whose /api/v1/** would otherwise match first.
+        - id: webhook_simulator_api
+          uri: http://127.0.0.1:8081
+          predicates:
+            - Path=/api/v1/admin/webhook-simulator
+          filters:
+            - PreserveHostHeader=true
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 50
+                redis-rate-limiter.burstCapacity: 100
         - id: git_forensics_api
           uri: http://127.0.0.1:8082
           predicates:

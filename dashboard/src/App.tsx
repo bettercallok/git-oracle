@@ -215,7 +215,9 @@ function Sidebar({ open }: { open: boolean }) {
       <div className="sidebar-section">
         <div className="sidebar-section-label">System</div>
         <nav className="sidebar-nav">
-          <NavLink to="/simulator" className={linkClass}><TerminalSquare size={16} /> Webhook simulator</NavLink>
+          {(!user || user.admin) && (
+            <NavLink to="/simulator" className={linkClass}><TerminalSquare size={16} /> Webhook simulator</NavLink>
+          )}
           <NavLink to="/api-keys" className={linkClass}><KeyRound size={16} /> API keys</NavLink>
           <NavLink to="/settings" className={linkClass}><Settings size={16} /> Settings</NavLink>
         </nav>
