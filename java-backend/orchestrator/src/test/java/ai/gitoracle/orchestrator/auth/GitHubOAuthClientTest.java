@@ -95,6 +95,26 @@ class GitHubOAuthClientTest {
     }
 
     @Test
+    void aConnectionAsksGitHubWhichInstallationsThePersonCanAccess() {
+        tokenReply("{\"access_token\":\"tok\"}");
+        server.expect(requestTo("https://api.gh.test/user"))
+            .andRespond(withSuccess("{\"id\":42,\"login\":\"alice\"}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://api.gh.test/user/installations?per_page=100&page=1"))
+            .andExpect(header("Authorization", "Bearer tok"))
+            .andRespond(withSuccess("{\"installations\":[{\"id\":55},{\"id\":66}]}", MediaType.APPLICATION_JSON));
+
+        GitHubOAuthClient.UserInstallations proof = client.exchangeCodeForInstallations("the-code", CALLBACK);
+
+        assertThat(proof.user().id()).isEqualTo(42);
+        assertThat(proof.installationIds()).containsExactlyInAnyOrder(55L, 66L);
+    }
+
+    @Test
+    void theInstallPageCarriesTheState() {
+        assertThat(client.installUrl("my-app", "st")).isEqualTo("https://gh.test/apps/my-app/installations/new?state=st");
+    }
+
+    @Test
     void lookingUpAnAccountReturnsItsPermanentId() {
         server.expect(requestTo("https://api.gh.test/users/alice"))
             .andRespond(withSuccess("{\"id\":42,\"login\":\"Alice\"}", MediaType.APPLICATION_JSON));

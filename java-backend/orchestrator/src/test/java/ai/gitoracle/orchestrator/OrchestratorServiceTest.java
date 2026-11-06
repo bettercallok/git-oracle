@@ -88,7 +88,10 @@ class OrchestratorServiceTest {
         service = new OrchestratorService(jobRepository, kafkaTemplate, workspaceService,
                                            entityManager, prOutcomeRepository, jobState,
                                            new EscalationService(jobState, entityManager, prOutcomeRepository, escalationRows),
-                                           repoAccess);
+                                           repoAccess,
+                                           mock(ai.gitoracle.orchestrator.service.GitHubInstallations.class, invocation ->
+                                               invocation.getMethod().getReturnType() == java.util.Optional.class ? java.util.Optional.of("1") : "1"),
+                                           mock(ai.gitoracle.orchestrator.service.UsageLimits.class, invocation -> java.util.Optional.empty()));
 
         // OrchestratorService constructs its own `new RestTemplate()` rather than
         // taking one as a constructor argument, so the only way to intercept the

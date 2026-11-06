@@ -10,8 +10,10 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * GitHub's web sign-in flow, using the GitHub App's client id and secret.
@@ -23,6 +25,9 @@ import java.util.Optional;
 public class GitHubOAuthClient {
 
     public record GitHubUser(long id, String login) {}
+
+    /** Who a GitHub sign-in was, and which App installations GitHub says they can access. */
+    public record UserInstallations(GitHubUser user, Set<Long> installationIds) {}
 
     public static class GitHubLoginException extends RuntimeException {
         public GitHubLoginException(String message) {
@@ -78,6 +83,14 @@ public class GitHubOAuthClient {
             .toUriString();
     }
 
+    public String installUrl(String appSlug, String state) {
+        return UriComponentsBuilder.fromHttpUrl(webUrl + "/apps/{slug}/installations/new")
+            .queryParam("state", state)
+            .buildAndExpand(appSlug)
+            .encode()
+            .toUriString();
+    }
+
     /** Finds an account by login, to tie an invitation to its permanent id. Public data: no token needed. */
     public Optional<GitHubUser> lookupUser(String login) {
         try {
@@ -97,6 +110,34 @@ public class GitHubOAuthClient {
 
     /** @throws GitHubLoginException if GitHub refuses the code or answers without a user */
     public GitHubUser exchangeCode(String code, String redirectUri) {
+        return userFor(accessToken(code, redirectUri));
+    }
+
+    /** As {@link #exchangeCode}, also asking which installations the person can access. */
+    public UserInstallations exchangeCodeForInstallations(String code, String redirectUri) {
+        String token = accessToken(code, redirectUri);
+        return new UserInstallations(userFor(token), installationsFor(token));
+    }
+
+    private Set<Long> installationsFor(String token) {
+        Set<Long> ids = new HashSet<>();
+        // Bounded: nobody has anywhere near a thousand, and this runs during a redirect.
+        for (int page = 1; page <= 10; page++) {
+            JsonNode reply = http.get()
+                .uri(apiUrl + "/user/installations?per_page=100&page={page}", page)
+                .header("Authorization", "Bearer " + token)
+                .header("Accept", "application/vnd.github+json")
+                .retrieve()
+                .body(JsonNode.class);
+            JsonNode installations = reply == null ? null : reply.path("installations");
+            if (installations == null || !installations.isArray() || installations.isEmpty()) break;
+            installations.forEach(installation -> ids.add(installation.path("id").asLong()));
+            if (installations.size() < 100) break;
+        }
+        return ids;
+    }
+
+    private String accessToken(String code, String redirectUri) {
         // GitHub reports a bad code with 200 and an "error" field, not a 4xx.
         JsonNode token = http.post()
             .uri(webUrl + "/login/oauth/access_token")
@@ -114,7 +155,10 @@ public class GitHubOAuthClient {
             throw new GitHubLoginException("GitHub did not issue a token: "
                 + (token == null ? "empty reply" : token.path("error").asText("no error given")));
         }
+        return accessToken;
+    }
 
+    private GitHubUser userFor(String accessToken) {
         JsonNode user = http.get()
             .uri(apiUrl + "/user")
             .header("Authorization", "Bearer " + accessToken)

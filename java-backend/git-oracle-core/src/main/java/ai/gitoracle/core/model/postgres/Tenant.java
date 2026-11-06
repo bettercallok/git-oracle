@@ -44,6 +44,14 @@ public class Tenant {
     @Column(name = "github_app_installation_id")
     private String githubAppInstallationId;
 
+    /** Jobs per calendar month. Null means the configured default; see UsageLimits. */
+    @Column(name = "monthly_job_limit")
+    private Integer monthlyJobLimit;
+
+    /** LLM tokens per calendar month. Null means the configured default. */
+    @Column(name = "monthly_token_limit")
+    private Long monthlyTokenLimit;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(columnDefinition = "jsonb")
     private String config = "{}";

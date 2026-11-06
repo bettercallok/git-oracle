@@ -591,17 +591,19 @@ once that's set up, the login page offers github only. until then it shows an AP
 
 ### organisations and roles
 
-an organisation has members, each with one role. someone can belong to several and switch between them. a platform admin is separate: they run the system, and only they create organisations and manage repository allow-lists for now.
+an organisation has members, each with one role. someone can belong to several and switch between them. a platform admin is separate: they run the system, create organisations and set their limits.
 
 | can do | viewer | member | admin | owner |
 |---|---|---|---|---|
 | see jobs and traces | ✓ | ✓ | ✓ | ✓ |
 | start jobs, resolve escalations, create API keys | | ✓ | ✓ | ✓ |
-| invite and remove people, see the audit log, publish eval results | | | ✓ | ✓ |
-| grant or change the owner role | | | | ✓ |
+| invite and remove people, allow repositories, see the audit log, publish eval results | | | ✓ | ✓ |
+| grant or change the owner role, connect github | | | | ✓ |
 
 - **inviting:** `POST /api/v1/org/invitations` with `{"githubLogin":"...","role":"MEMBER"}`. it's accepted the next time they sign in, and expires after 7 days. the **members** page in the dashboard does this too.
 - **a new organisation:** `POST /api/v1/admin/tenants` with `{"name":"..."}`, then give it an owner with `POST /api/v1/admin/tenants/{id}/invitations`.
+- **connecting github:** an owner clicks **Connect GitHub** on the repositories page and installs the App on the repositories they choose; an admin then allows them from that list. this needs `GITHUB_APP_SLUG` in `.env`, and in the App's settings the setup URL `http://localhost:8080/api/v1/auth/github/setup`, "redirect on update" ticked, and installation allowed on any account. each organisation only ever acts through its own installation. only public repositories run end to end for now, because pipeline clones don't use a token.
+- **monthly limits:** each organisation gets `GITORACLE_ORG_MONTHLY_JOBS` jobs and `GITORACLE_ORG_MONTHLY_TOKENS` LLM tokens per calendar month, unless a platform admin sets its own with `PUT /api/v1/admin/tenants/{id}/limits`. the default organisation has no limit unless one is set. usage shows on the members page.
 - **limits:** nobody can grant or change a role above their own, and an organisation always keeps one owner.
 - **losing access:** changing someone's role or removing them ends their sign-in within seconds. removing them, or making them a viewer, also revokes the API keys they made, within a minute.
 - **record:** these changes are in the audit log, `GET /api/v1/org/audit`.

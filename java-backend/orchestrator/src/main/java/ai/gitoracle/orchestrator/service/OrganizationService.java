@@ -181,6 +181,11 @@ public class OrganizationService {
             .orElseThrow(() -> new OrganizationException(HttpStatus.NOT_FOUND, "No such member."));
     }
 
+    /** Connecting GitHub decides what the whole organisation can reach, so only an owner may. */
+    public void requireOwner(UUID tenantId, Actor actor) {
+        requireRank(tenantId, actor, OrgRole.OWNER);
+    }
+
     /** Refuses unless the actor's own role in this organisation is at least {@code needed}. */
     private void requireRank(UUID tenantId, Actor actor, OrgRole needed) {
         if (actor.platformAdmin()) return;

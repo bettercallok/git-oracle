@@ -1592,3 +1592,8 @@ textarea.code-block:focus { border-color: var(--border-focus); box-shadow: 0 0 0
 .org-switcher { padding: 0 12px; margin-bottom: 10px; }
 .org-switcher .form-select { margin-top: 4px; height: 34px; font-size: 0.84rem; }
 .org-switcher-name { font-size: 0.86rem; font-weight: 500; color: var(--text-primary); margin-top: 2px; }
+
+.github-connection { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.usage-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.usage-card { padding: 16px; }
+.usage-value { font-size: 1.15rem; font-weight: 600; color: var(--text-primary); margin-top: 4px; }

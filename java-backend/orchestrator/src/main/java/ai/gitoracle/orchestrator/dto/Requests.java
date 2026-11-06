@@ -76,6 +76,21 @@ public final class Requests {
         String role
     ) {}
 
+    /** POST /api/v1/org/repos. */
+    public record AllowRepo(
+        @NotBlank(message = "repo is required")
+        @Size(max = 256, message = "repo must be at most 256 characters")
+        String repo
+    ) {}
+
+    /** PUT /api/v1/admin/tenants/{id}/limits. A null limit means the configured default. */
+    public record UsageLimitsRequest(
+        @jakarta.validation.constraints.Min(value = 0, message = "monthlyJobLimit can't be negative")
+        Integer monthlyJobLimit,
+        @jakarta.validation.constraints.Min(value = 0, message = "monthlyTokenLimit can't be negative")
+        Long monthlyTokenLimit
+    ) {}
+
     /** PUT /api/v1/org. */
     public record RenameOrganization(
         @NotBlank(message = "name is required")

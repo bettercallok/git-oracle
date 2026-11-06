@@ -55,8 +55,7 @@ class ReviewCommentAuthorizationTest {
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec(SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         String sig = "sha256=" + HexFormat.of().formatHex(mac.doFinal(raw));
-        controller.githubWebhook(UUID.fromString("00000000-0000-0000-0000-000000000000"),
-            "issue_comment", UUID.randomUUID().toString(), sig, raw);
+        controller.githubWebhook("issue_comment", UUID.randomUUID().toString(), sig, raw);
     }
 
     private static String issueComment(String association, String senderType, boolean isPullRequest) {

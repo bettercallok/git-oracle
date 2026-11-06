@@ -12,6 +12,13 @@ interface Member {
   joinedAt: string | null;
 }
 
+interface Usage {
+  jobs: number;
+  jobLimit: number | null;
+  tokens: number;
+  tokenLimit: number | null;
+}
+
 interface Invitation {
   id: string;
   githubLogin: string;
@@ -20,9 +27,9 @@ interface Invitation {
 }
 
 const errorMessage = (error: unknown): string => {
-  const data = (error as { response?: { data?: { error?: string; message?: string; errors?: Record<string, string> } } }).response?.data;
+  const data = (error as { response?: { data?: { error?: string; message?: string; errors?: Record<string, string>; detail?: string } } }).response?.data;
   const fieldError = data?.errors ? Object.values(data.errors)[0] : undefined;
-  return data?.error && data.error !== 'Forbidden' ? data.error : fieldError ?? data?.message ?? 'Something went wrong. Please try again.';
+  return data?.error && data.error !== 'Forbidden' ? data.error : fieldError ?? data?.detail ?? data?.message ?? 'Something went wrong. Please try again.';
 };
 
 const formatDate = (raw: string | null): string =>
@@ -43,6 +50,11 @@ export default function Members() {
   const members = useQuery({
     queryKey: ['org-members'],
     queryFn: async () => (await apiClient.get('/org/members')).data as Member[],
+  });
+
+  const usage = useQuery({
+    queryKey: ['org-usage'],
+    queryFn: async () => (await apiClient.get('/org/usage')).data as Usage,
   });
 
   const invitations = useQuery({
@@ -100,6 +112,21 @@ export default function Members() {
       <PageHeader title="Members" description={`Who can use ${activeOrganization?.name ?? 'this organisation'}, and what they can do.`} />
 
       {failure && <div style={{ marginBottom: 16 }}><Alert tone="danger">{errorMessage(failure)}</Alert></div>}
+
+      {usage.data && (
+        <div className="usage-grid">
+          <div className="card usage-card">
+            <div className="status-label">Jobs this month</div>
+            <div className="usage-value">{usage.data.jobs.toLocaleString()}{usage.data.jobLimit !== null && ` of ${usage.data.jobLimit.toLocaleString()}`}</div>
+            {usage.data.jobLimit === null && <div className="status-hint">No limit</div>}
+          </div>
+          <div className="card usage-card">
+            <div className="status-label">LLM tokens this month</div>
+            <div className="usage-value">{usage.data.tokens.toLocaleString()}{usage.data.tokenLimit !== null && ` of ${usage.data.tokenLimit.toLocaleString()}`}</div>
+            {usage.data.tokenLimit === null && <div className="status-hint">No limit</div>}
+          </div>
+        </div>
+      )}
 
       {canManageOrg && (
         <form

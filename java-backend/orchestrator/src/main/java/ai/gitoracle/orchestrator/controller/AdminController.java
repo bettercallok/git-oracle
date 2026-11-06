@@ -60,6 +60,20 @@ public class AdminController {
         return ResponseEntity.ok(Map.of("tenantId", tenantId, "status", "REGISTERED"));
     }
 
+    /** An organisation's monthly limits. Only the platform admin, because it's their money. */
+    @PutMapping("/tenants/{id}/limits")
+    @org.springframework.transaction.annotation.Transactional
+    public ResponseEntity<Map<String, Object>> setLimits(@PathVariable("id") UUID tenantId,
+                                                         @Valid @RequestBody Requests.UsageLimitsRequest request) {
+        ai.gitoracle.core.model.postgres.Tenant tenant = entityManager.find(ai.gitoracle.core.model.postgres.Tenant.class, tenantId);
+        if (tenant == null) return ResponseEntity.notFound().build();
+        tenant.setMonthlyJobLimit(request.monthlyJobLimit());
+        tenant.setMonthlyTokenLimit(request.monthlyTokenLimit());
+        audit.record(tenantId, "limits.changed", tenant.getOrgName(),
+            "jobs=" + request.monthlyJobLimit() + " tokens=" + request.monthlyTokenLimit());
+        return ResponseEntity.ok(Map.of("tenantId", tenantId.toString(), "status", "UPDATED"));
+    }
+
     /** How a platform admin gives a new organisation its first owner. */
     @PostMapping("/tenants/{id}/invitations")
     public ResponseEntity<Map<String, Object>> invite(@PathVariable("id") UUID tenantId,

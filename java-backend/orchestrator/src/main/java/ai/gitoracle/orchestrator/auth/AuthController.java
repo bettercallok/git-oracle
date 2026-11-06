@@ -7,6 +7,8 @@ import ai.gitoracle.core.security.SessionTokens;
 import ai.gitoracle.orchestrator.dto.Requests;
 import ai.gitoracle.orchestrator.repository.UserAccountRepository;
 import ai.gitoracle.orchestrator.security.TenantContext;
+import ai.gitoracle.orchestrator.service.GitHubConnectService;
+import ai.gitoracle.orchestrator.service.OrganizationService;
 import jakarta.persistence.EntityManager;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
@@ -33,7 +35,7 @@ import java.util.UUID;
 /**
  * Sign in with GitHub, reached through the api-gateway.
  *
- * <p>The gateway lets {@code config}, {@code github/login} and
+ * <p>The gateway lets {@code config}, {@code github/login}, {@code github/setup} and
  * {@code github/callback} through without a credential, since a caller has none
  * yet. For {@code me} and {@code logout} it has already resolved the session and
  * sends {@code X-User-ID} / {@code X-Session-ID}, stripping any client-supplied
@@ -59,6 +61,7 @@ public class AuthController {
     private final GitHubOAuthClient github;
     private final LoginService logins;
     private final LoginPolicy policy;
+    private final GitHubConnectService connects;
     private final UserAccountRepository users;
     private final EntityManager entityManager;
     private final String publicApiUrl;
@@ -68,6 +71,7 @@ public class AuthController {
     public AuthController(GitHubOAuthClient github,
                           LoginService logins,
                           LoginPolicy policy,
+                          GitHubConnectService connects,
                           UserAccountRepository users,
                           EntityManager entityManager,
                           @Value("${gitoracle.auth.public-api-url:http://localhost:8080}") String publicApiUrl,
@@ -75,6 +79,7 @@ public class AuthController {
         this.github = github;
         this.logins = logins;
         this.policy = policy;
+        this.connects = connects;
         this.users = users;
         this.entityManager = entityManager;
         this.publicApiUrl = stripTrailingSlash(publicApiUrl);
@@ -122,6 +127,17 @@ public class AuthController {
             return redirectToLogin("cancelled").header(HttpHeaders.SET_COOKIE, clearState).build();
         }
 
+        if (connects.isConnecting(state)) {
+            GitHubConnectService.Outcome outcome;
+            try {
+                outcome = connects.complete(state, github.exchangeCodeForInstallations(code, callbackUrl()));
+            } catch (GitHubOAuthClient.GitHubLoginException | RestClientException | OrganizationService.OrganizationException e) {
+                logger.warn("Connecting GitHub failed: {}", e.getMessage());
+                outcome = GitHubConnectService.Outcome.FAILED;
+            }
+            return redirectToRepositories(outcome).header(HttpHeaders.SET_COOKIE, clearState).build();
+        }
+
         Optional<LoginService.IssuedSession> session;
         try {
             session = logins.signIn(github.exchangeCode(code, callbackUrl()));
@@ -137,6 +153,22 @@ public class AuthController {
             .header(HttpHeaders.SET_COOKIE, clearState)
             .header(HttpHeaders.SET_COOKIE, sessionCookie(session.get().token(), session.get().ttl()).toString())
             .build();
+    }
+
+    /** GitHub's redirect after installing the App: its Setup URL. See GitHubConnectService. */
+    @GetMapping("/github/setup")
+    public ResponseEntity<Void> setup(@RequestParam(required = false) String state,
+                                      @RequestParam(name = "installation_id", required = false) String installationId,
+                                      @RequestParam(name = "setup_action", required = false) String setupAction) {
+        Optional<GitHubConnectService.Outcome> ended = connects.recordInstallation(state, installationId, setupAction);
+        if (ended.isPresent()) return redirectToRepositories(ended.get()).build();
+        return redirect(github.authorizeUrl(state, callbackUrl()))
+            .header(HttpHeaders.SET_COOKIE, stateCookie(state, STATE_TTL).toString())
+            .build();
+    }
+
+    private ResponseEntity.HeadersBuilder<?> redirectToRepositories(GitHubConnectService.Outcome outcome) {
+        return redirect(dashboardUrl + "/repos?github=" + outcome.name().toLowerCase(java.util.Locale.ROOT));
     }
 
     /** Who the gateway resolved this request to. A request authenticated by API key has no user. */

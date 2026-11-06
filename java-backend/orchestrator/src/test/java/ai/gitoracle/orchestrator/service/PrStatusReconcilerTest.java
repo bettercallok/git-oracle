@@ -33,7 +33,7 @@ class PrStatusReconcilerTest {
 
     private static final String PR = "https://github.com/bettercallok/chillcall/pull/18";
     private static final String STATUS_URL =
-        "http://bot/pull-request/status?url=https://github.com/bettercallok/chillcall/pull/18";
+        "http://bot/pull-request/status?url=https://github.com/bettercallok/chillcall/pull/18&installationId=55";
 
     private AgentJobRepository jobRepository;
     private OrchestratorService orchestrator;
@@ -47,7 +47,9 @@ class PrStatusReconcilerTest {
         orchestrator = mock(OrchestratorService.class);
         RestTemplate rest = new RestTemplate();
         github = MockRestServiceServer.createServer(rest);
-        reconciler = new PrStatusReconciler(jobRepository, orchestrator, rest, "http://bot", "secret");
+        GitHubInstallations installations = mock(GitHubInstallations.class);
+        org.mockito.Mockito.when(installations.require(org.mockito.ArgumentMatchers.any())).thenReturn("55");
+        reconciler = new PrStatusReconciler(jobRepository, orchestrator, installations, rest, "http://bot", "secret");
 
         job = new AgentJob();
         job.setId(UUID.randomUUID());
@@ -98,7 +100,7 @@ class PrStatusReconcilerTest {
         other.setPrUrl("https://github.com/bettercallok/chillcall/pull/19");
         when(jobRepository.findByState("PR_OPENED")).thenReturn(List.of(job, other));
         github.expect(requestTo(STATUS_URL)).andRespond(withServerError());
-        github.expect(requestTo("http://bot/pull-request/status?url=https://github.com/bettercallok/chillcall/pull/19"))
+        github.expect(requestTo("http://bot/pull-request/status?url=https://github.com/bettercallok/chillcall/pull/19&installationId=55"))
             .andRespond(withSuccess("{\"state\":\"closed\",\"merged\":true,\"by\":\"x\"}", MediaType.APPLICATION_JSON));
 
         reconciler.reconcileOpenPullRequests();

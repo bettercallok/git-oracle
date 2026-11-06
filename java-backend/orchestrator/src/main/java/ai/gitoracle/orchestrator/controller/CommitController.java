@@ -1,6 +1,8 @@
 package ai.gitoracle.orchestrator.controller;
 
 import ai.gitoracle.orchestrator.service.GitHubClientService;
+import ai.gitoracle.orchestrator.security.TenantContext;
+import ai.gitoracle.orchestrator.service.GitHubNotConnectedException;
 import org.kohsuke.github.GHCommit;
 import org.kohsuke.github.GHRepository;
 import org.kohsuke.github.GitHub;
@@ -82,13 +84,16 @@ public class CommitController {
     @Value("${gitoracle.internal-token:}")
     private String internalToken;
 
-    // Commits and diffs are read with the shared GitHub App installation, which
-    // can see every installed repo — private ones included. The tenant's
-    // allow-list is what limits a caller to its own repositories.
+    // Commits and diffs are read with the organisation's own GitHub App installation,
+    // which can see private repos, and the allow-list limits it further.
     private final ai.gitoracle.orchestrator.service.RepoAccessService repoAccess;
 
+    private final ai.gitoracle.orchestrator.service.GitHubInstallations installations;
+
     public CommitController(GitHubClientService githubClientService,
-                            ai.gitoracle.orchestrator.service.RepoAccessService repoAccess) {
+                            ai.gitoracle.orchestrator.service.RepoAccessService repoAccess,
+                            ai.gitoracle.orchestrator.service.GitHubInstallations installations) {
+        this.installations = installations;
         this.githubClientService = githubClientService;
         this.repoAccess = repoAccess;
     }
@@ -154,7 +159,7 @@ public class CommitController {
         logger.info("Listing commits for {} (page={}, perPage={})", repo, safePage, safePerPage);
 
         try {
-            GitHub github = githubClientService.getAuthenticatedClient();
+            GitHub github = githubClientService.getAuthenticatedClient(installations.require(TenantContext.requireTenantId()));
             GHRepository ghRepo = github.getRepository(repo);
 
             // Fetch commits — GitHub Java SDK paginates automatically via PagedIterable
@@ -223,6 +228,8 @@ public class CommitController {
             response.put("commits", commits);
             return ResponseEntity.ok(response);
 
+        } catch (GitHubNotConnectedException e) {
+            throw e; // ApiExceptionHandler says what to do about it
         } catch (IOException e) {
             String msg = e.getMessage();
             if (msg != null && msg.contains("404")) {
@@ -259,7 +266,7 @@ public class CommitController {
         logger.info("Fetching diff for commit {} in {}", sha, repo);
 
         try {
-            GitHub github = githubClientService.getAuthenticatedClient();
+            GitHub github = githubClientService.getAuthenticatedClient(installations.require(TenantContext.requireTenantId()));
             GHRepository ghRepo  = github.getRepository(repo);
             GHCommit commit      = ghRepo.getCommit(sha);
             GHCommit.ShortInfo info = commit.getCommitShortInfo();
@@ -296,6 +303,8 @@ public class CommitController {
             return ResponseEntity.ok(response);
 
 
+        } catch (GitHubNotConnectedException e) {
+            throw e; // ApiExceptionHandler says what to do about it
         } catch (IOException e) {
             String msg = e.getMessage();
             if (msg != null && msg.contains("404")) {
@@ -347,7 +356,7 @@ public class CommitController {
         String combinedDiff;
         String commitMessage;
         try {
-            GitHub github = githubClientService.getAuthenticatedClient();
+            GitHub github = githubClientService.getAuthenticatedClient(installations.require(TenantContext.requireTenantId()));
             GHRepository ghRepo = github.getRepository(repo);
             GHCommit commit     = ghRepo.getCommit(sha);
             commitMessage       = commit.getCommitShortInfo().getMessage().split("\n")[0];
@@ -371,6 +380,8 @@ public class CommitController {
             if (combinedDiff.length() > 8000) {
                 combinedDiff = combinedDiff.substring(0, 8000) + "\n... [diff truncated for context window]";
             }
+        } catch (GitHubNotConnectedException e) {
+            throw e; // ApiExceptionHandler says what to do about it
         } catch (IOException e) {
             String msg = e.getMessage();
             if (msg != null && msg.contains("404")) {
