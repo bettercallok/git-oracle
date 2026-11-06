@@ -53,11 +53,15 @@ public class DashboardController {
     private final ai.gitoracle.orchestrator.service.RepoAccessService repoAccess;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
+    private final ai.gitoracle.orchestrator.service.UsageLimits usageLimits;
+
     public DashboardController(EntityManager entityManager, KafkaTemplate<String, Object> kafkaTemplate,
                                ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository,
                                ai.gitoracle.orchestrator.repository.JobPromptVersionRepository jobPromptVersionRepository,
                                JobStateService jobState, JobEventRepository jobEventRepository,
-                               ai.gitoracle.orchestrator.service.RepoAccessService repoAccess) {
+                               ai.gitoracle.orchestrator.service.RepoAccessService repoAccess,
+                               ai.gitoracle.orchestrator.service.UsageLimits usageLimits) {
+        this.usageLimits = usageLimits;
         this.entityManager = entityManager;
         this.kafkaTemplate = kafkaTemplate;
         this.prOutcomeRepository = prOutcomeRepository;
@@ -169,6 +173,7 @@ public class DashboardController {
         // tenancy, found while verifying this change. Every other creation path
         // (triggerFix, SemanticDedupService) already left the id unset.
         repoAccess.requireAllowed(TenantContext.requireTenantId(), request.repoUrl());
+        usageLimits.requireRoomForNewJob(TenantContext.requireTenantId());
         AgentJob job = new AgentJob();
         job.setTenantId(TenantContext.requireTenantId());
         job.setRepo(request.repoUrl());
@@ -225,6 +230,10 @@ public class DashboardController {
         // The "instructions is required" check now lives on the record as
         // @NotBlank, so an empty body is rejected before this method runs.
         String instructions = request.instructions();
+        // A new fix cycle spends tokens, so it respects the token limit. The job already exists.
+        usageLimits.refusal(job.getTenantId(), false).ifPresent(reason -> {
+            throw new ai.gitoracle.orchestrator.service.UsageLimitExceededException(reason);
+        });
 
         logger.info("Dashboard feedback received for job {} — triggering new fix cycle", jobId);
 
@@ -324,6 +333,7 @@ public class DashboardController {
         if (!targetRepo.isBlank()) {
             repoAccess.requireAllowed(tenantId, targetRepo);
         }
+        usageLimits.requireRoomForNewJob(tenantId);
 
         AgentJob job = new AgentJob();
         job.setRepo(repoUrl);

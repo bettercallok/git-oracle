@@ -6,6 +6,7 @@ import ai.gitoracle.core.model.postgres.UserAccount;
 import ai.gitoracle.orchestrator.dto.Requests;
 import ai.gitoracle.orchestrator.repository.UserAccountRepository;
 import ai.gitoracle.orchestrator.security.TenantContextTestSupport;
+import ai.gitoracle.orchestrator.service.GitHubConnectService;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,7 @@ class AuthControllerTest {
     private LoginService logins;
     private UserAccountRepository users;
     private final EntityManager entityManager = mock(EntityManager.class);
+    private final GitHubConnectService connects = mock(GitHubConnectService.class);
     private AuthController controller;
 
     @BeforeEach
@@ -47,7 +49,7 @@ class AuthControllerTest {
     }
 
     private AuthController controllerFor(String publicApiUrl) {
-        return new AuthController(github, logins, new LoginPolicy("alice", ""), users, entityManager, publicApiUrl, DASHBOARD + "/");
+        return new AuthController(github, logins, new LoginPolicy("alice", ""), connects, users, entityManager, publicApiUrl, DASHBOARD + "/");
     }
 
     private static String location(ResponseEntity<?> response) {
@@ -175,7 +177,7 @@ class AuthControllerTest {
 
     @Test
     void configSaysNoWhenNobodyIsInvitedSoAFreshForkKeepsItsKeyForm() {
-        AuthController nobodyInvited = new AuthController(github, logins, new LoginPolicy("", ""), users, entityManager,
+        AuthController nobodyInvited = new AuthController(github, logins, new LoginPolicy("", ""), connects, users, entityManager,
             "http://localhost:8080", DASHBOARD);
 
         assertThat(nobodyInvited.config()).containsEntry("githubLogin", false);
@@ -239,5 +241,46 @@ class AuthControllerTest {
 
         when(logins.switchOrganization(session, tenant)).thenReturn(true);
         assertThat(controller.switchOrganization(session, new Requests.SwitchOrganization(tenant)).getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void anInstallationRedirectGoesOnToSignInWithItsStateInACookie() {
+        when(connects.recordInstallation("st", "55", "install")).thenReturn(Optional.empty());
+
+        ResponseEntity<Void> response = controller.setup("st", "55", "install");
+
+        assertThat(location(response)).isEqualTo("https://github.com/authorize");
+        assertThat(cookies(response).get(0)).startsWith("gitoracle_oauth_state=st");
+        verify(github).authorizeUrl("st", "https://api.example.com/api/v1/auth/github/callback");
+    }
+
+    @Test
+    void anInvalidInstallationRedirectEndsOnTheRepositoriesPage() {
+        when(connects.recordInstallation(any(), any(), any())).thenReturn(Optional.of(GitHubConnectService.Outcome.FAILED));
+
+        assertThat(location(controller.setup("nope", "55", "install"))).isEqualTo(DASHBOARD + "/repos?github=failed");
+    }
+
+    @Test
+    void aCallbackForAConnectionConnectsRatherThanSigningIn() {
+        when(connects.isConnecting("st")).thenReturn(true);
+        var proof = new GitHubOAuthClient.UserInstallations(new GitHubOAuthClient.GitHubUser(7, "alice"), Set.of(55L));
+        when(github.exchangeCodeForInstallations(anyString(), anyString())).thenReturn(proof);
+        when(connects.complete("st", proof)).thenReturn(GitHubConnectService.Outcome.CONNECTED);
+
+        ResponseEntity<Void> response = controller.callback("code", "st", null, "st");
+
+        assertThat(location(response)).isEqualTo(DASHBOARD + "/repos?github=connected");
+        assertThat(cookies(response)).noneMatch(c -> c.startsWith("gitoracle_session="));
+        verify(logins, never()).signIn(any());
+    }
+
+    @Test
+    void aConnectionStillNeedsTheStateCookieFromTheSameBrowser() {
+        when(connects.isConnecting(any())).thenReturn(true);
+
+        assertThat(location(controller.callback("code", "st", null, "other"))).endsWith("/login?error=login_failed");
+
+        verify(connects, never()).complete(any(), any());
     }
 }

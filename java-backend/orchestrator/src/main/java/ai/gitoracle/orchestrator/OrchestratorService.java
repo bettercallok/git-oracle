@@ -48,12 +48,18 @@ public class OrchestratorService {
     private String internalToken;
 
     private final ai.gitoracle.orchestrator.service.RepoAccessService repoAccess;
+    private final ai.gitoracle.orchestrator.service.GitHubInstallations installations;
+    private final ai.gitoracle.orchestrator.service.UsageLimits usageLimits;
 
     public OrchestratorService(AgentJobRepository jobRepository, KafkaTemplate<String, Object> kafkaTemplate,
                                WorkspaceService workspaceService, EntityManager entityManager,
                                ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository,
                                JobStateService jobState, EscalationService escalations,
-                               ai.gitoracle.orchestrator.service.RepoAccessService repoAccess) {
+                               ai.gitoracle.orchestrator.service.RepoAccessService repoAccess,
+                               ai.gitoracle.orchestrator.service.GitHubInstallations installations,
+                               ai.gitoracle.orchestrator.service.UsageLimits usageLimits) {
+        this.installations = installations;
+        this.usageLimits = usageLimits;
         this.jobRepository = jobRepository;
         this.kafkaTemplate = kafkaTemplate;
         this.workspaceService = workspaceService;
@@ -234,6 +240,19 @@ public class OrchestratorService {
                     + "(an admin can add it with POST /api/v1/admin/repos)", "orchestrator");
                 return;
             }
+        }
+
+        // Webhooks and Sentry reports arrive here too, with no HTTP caller to refuse.
+        java.util.Optional<String> overLimit = usageLimits.refusal(job.getTenantId(), false);
+        if (overLimit.isPresent()) {
+            jobState.transition(job, "FAILED", overLimit.get(), "orchestrator");
+            return;
+        }
+        // Everyone but the default organisation needs its own GitHub connection.
+        if (!job.getTenantId().equals(ai.gitoracle.core.model.postgres.Tenant.DEFAULT_ID)
+                && installations.find(job.getTenantId()).isEmpty()) {
+            jobState.transition(job, "FAILED", new ai.gitoracle.orchestrator.service.GitHubNotConnectedException().getMessage(), "orchestrator");
+            return;
         }
 
         jobState.transition(job, "INVESTIGATING", "Cloning the repo and starting investigation", "orchestrator");
@@ -648,6 +667,11 @@ public class OrchestratorService {
             prRequest.put("causalChainNarrative", investigationNarrative(jobRow));
             if (existingPrUrl != null) {
                 prRequest.put("existingPrUrl", existingPrUrl);
+            }
+            // Which installation acts decides what this PR can touch. Never sent for
+            // an organisation with none: github-bot would fall back to the default one.
+            if (jobRow != null) {
+                prRequest.put("installationId", installations.require(jobRow.getTenantId()));
             }
 
             ResponseEntity<Map> response = restTemplate.postForEntity(

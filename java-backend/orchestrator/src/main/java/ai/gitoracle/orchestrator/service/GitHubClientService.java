@@ -1,6 +1,7 @@
 package ai.gitoracle.orchestrator.service;
 
 import io.github.cdimascio.dotenv.Dotenv;
+import org.kohsuke.github.GHRepository;
 import org.kohsuke.github.GitHub;
 import org.kohsuke.github.GitHubBuilder;
 import org.slf4j.Logger;
@@ -14,6 +15,8 @@ import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Base64;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Shared GitHub App authentication service for the Orchestrator.
@@ -33,6 +36,9 @@ public class GitHubClientService {
     private final String installationId;
     private final String privateKeyPath;
 
+    @org.springframework.beans.factory.annotation.Value("${gitoracle.auth.github-api-url:https://api.github.com}")
+    private String apiUrl = "https://api.github.com";
+
     public GitHubClientService() {
         // Root .env (exported by start_local.sh) first; the legacy github-bot/.env
         // second. start_local.sh launches this service from java-backend/, so the
@@ -48,10 +54,10 @@ public class GitHubClientService {
     }
 
     /**
-     * Returns a fresh GitHub installation token (valid for ~1 hour).
+     * Returns a fresh token for one installation (valid for ~1 hour).
      * Tokens are not cached — generate a fresh one per request to be safe.
      */
-    public String getInstallationToken() throws Exception {
+    public String getInstallationToken(String installationId) throws Exception {
         String keyContent = new String(Files.readAllBytes(Paths.get(privateKeyPath)), StandardCharsets.UTF_8)
                 .replaceAll("-----BEGIN PRIVATE KEY-----", "")
                 .replaceAll("-----END PRIVATE KEY-----", "")
@@ -77,7 +83,7 @@ public class GitHubClientService {
         String sigB64 = Base64.getUrlEncoder().withoutPadding().encodeToString(sig.sign());
         String jwt = dataToSign + "." + sigB64;
 
-        GitHub appClient = new GitHubBuilder().withJwtToken(jwt).build();
+        GitHub appClient = new GitHubBuilder().withEndpoint(apiUrl).withJwtToken(jwt).build();
         String token = appClient.getApp()
                 .getInstallationById(Long.parseLong(installationId))
                 .createToken()
@@ -87,10 +93,22 @@ public class GitHubClientService {
         return token;
     }
 
-    /**
-     * Returns an authenticated GitHub client using the installation token.
-     */
-    public GitHub getAuthenticatedClient() throws Exception {
-        return new GitHubBuilder().withAppInstallationToken(getInstallationToken()).build();
+    /** Returns a client acting as this installation. See {@link GitHubInstallations} for which one. */
+    public GitHub getAuthenticatedClient(String installationId) throws Exception {
+        return new GitHubBuilder().withEndpoint(apiUrl).withAppInstallationToken(getInstallationToken(installationId)).build();
+    }
+
+    /** The repositories this installation can see, as owner/name. */
+    public List<String> repositoriesOf(String installationId) throws Exception {
+        List<String> names = new ArrayList<>();
+        for (GHRepository repo : getAuthenticatedClient(installationId).getInstallation().listRepositories()) {
+            names.add(repo.getFullName());
+        }
+        return names;
+    }
+
+    /** GITHUB_INSTALLATION_ID: the default organisation's installation, and nobody else's. */
+    public String defaultInstallationId() {
+        return installationId;
     }
 }

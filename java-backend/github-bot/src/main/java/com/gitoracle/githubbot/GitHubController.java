@@ -71,8 +71,8 @@ public class GitHubController {
             String markdown = generateMarkdown(request);
 
             // Connect to GitHub
-            GitHub github = githubClient.getAuthenticatedGitHub();
-            token = githubClient.getLatestInstallationToken();
+            GitHub github = githubClient.getAuthenticatedGitHub(request.getInstallationId());
+            token = githubClient.getLatestInstallationToken(request.getInstallationId());
             Map<String, String> auth = gitAuthEnv(token);
             GHRepository repo = github.getRepository(request.getRepoFullName());
             String defaultBranch = repo.getDefaultBranch();
@@ -233,7 +233,8 @@ public class GitHubController {
      * report it can't reach a local deployment (it never had).
      */
     @GetMapping("/pull-request/status")
-    public ResponseEntity<?> pullRequestStatus(@RequestParam("url") String prUrl) {
+    public ResponseEntity<?> pullRequestStatus(@RequestParam("url") String prUrl,
+                                               @RequestParam(name = "installationId", required = false) String installationId) {
         String repoFullName = repositoryOf(prUrl);
         Integer number = repoFullName == null ? null : pullRequestNumber(prUrl, repoFullName);
         if (number == null) {
@@ -241,7 +242,7 @@ public class GitHubController {
         }
         try {
             RepoRefValidator.validateRepoUrl("https://github.com/" + repoFullName);
-            GHRepository repo = githubClient.getAuthenticatedGitHub().getRepository(repoFullName);
+            GHRepository repo = githubClient.getAuthenticatedGitHub(installationId).getRepository(repoFullName);
             GHPullRequest pr = repo.getPullRequest(number);
             boolean open = pr.getState() == org.kohsuke.github.GHIssueState.OPEN;
             boolean merged = !open && pr.isMerged();

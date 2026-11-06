@@ -35,7 +35,20 @@ public class GitHubClient {
         logger.info("Initialized GitHubClient for App ID: {} (from {})", this.appId, creds.source());
     }
 
-    public String getLatestInstallationToken() throws Exception {
+    /**
+     * The orchestrator says which installation a request acts as, because that decides
+     * which repositories it can touch. No value means the configured default, which
+     * only the default organisation ever uses.
+     */
+    private String resolveInstallation(String requested) {
+        if (requested == null || requested.isBlank()) return installationId;
+        if (!requested.matches("\\d{1,20}")) {
+            throw new IllegalArgumentException("installationId must be a number");
+        }
+        return requested;
+    }
+
+    public String getLatestInstallationToken(String requestedInstallation) throws Exception {
         String keyContent = new String(Files.readAllBytes(Paths.get(privateKeyPath)), StandardCharsets.UTF_8)
             .replaceAll("-----BEGIN PRIVATE KEY-----", "")
             .replaceAll("-----END PRIVATE KEY-----", "")
@@ -65,11 +78,11 @@ public class GitHubClient {
         String jwt = dataToSign + "." + signatureB64;
 
         GitHub appClient = new GitHubBuilder().withJwtToken(jwt).build();
-        return appClient.getApp().getInstallationById(Long.parseLong(installationId)).createToken().create().getToken();
+        return appClient.getApp().getInstallationById(Long.parseLong(resolveInstallation(requestedInstallation))).createToken().create().getToken();
     }
 
-    public GitHub getAuthenticatedGitHub() throws Exception {
-        String installationToken = getLatestInstallationToken();
+    public GitHub getAuthenticatedGitHub(String requestedInstallation) throws Exception {
+        String installationToken = getLatestInstallationToken(requestedInstallation);
         return new GitHubBuilder().withAppInstallationToken(installationToken).build();
     }
 }

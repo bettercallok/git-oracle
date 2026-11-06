@@ -3,6 +3,7 @@ package com.gitoracle.githubbot;
 public class PullRequestRequest {
     private String jobId;
     private String repoFullName; // e.g. "omkhatri/test-repo"
+    private String installationId; // whose GitHub connection acts; blank means the default one
     private String patchDiff;
     private String commitMessage;
     private String rootCommit;
@@ -167,4 +168,7 @@ public class PullRequestRequest {
     public void setPatchSummary(String patchSummary) {
         this.patchSummary = patchSummary;
     }
+
+    public String getInstallationId() { return installationId; }
+    public void setInstallationId(String installationId) { this.installationId = installationId; }
 }

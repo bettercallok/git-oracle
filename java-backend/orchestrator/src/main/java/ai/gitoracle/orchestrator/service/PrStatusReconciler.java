@@ -35,6 +35,7 @@ public class PrStatusReconciler {
 
     private static final Logger logger = LoggerFactory.getLogger(PrStatusReconciler.class);
 
+    private final GitHubInstallations installations;
     private final AgentJobRepository jobRepository;
     private final OrchestratorService orchestrator;
     private final RestTemplate restTemplate;
@@ -43,13 +44,16 @@ public class PrStatusReconciler {
 
     @Autowired
     public PrStatusReconciler(AgentJobRepository jobRepository, OrchestratorService orchestrator,
+                              GitHubInstallations installations,
                               @Value("${gitoracle.github-bot-url:http://localhost:8085}") String githubBotUrl,
                               @Value("${gitoracle.internal-token:}") String internalToken) {
-        this(jobRepository, orchestrator, new RestTemplate(), githubBotUrl, internalToken);
+        this(jobRepository, orchestrator, installations, new RestTemplate(), githubBotUrl, internalToken);
     }
 
-    PrStatusReconciler(AgentJobRepository jobRepository, OrchestratorService orchestrator, RestTemplate restTemplate,
+    PrStatusReconciler(AgentJobRepository jobRepository, OrchestratorService orchestrator,
+                       GitHubInstallations installations, RestTemplate restTemplate,
                        String githubBotUrl, String internalToken) {
+        this.installations = installations;
         this.jobRepository = jobRepository;
         this.orchestrator = orchestrator;
         this.restTemplate = restTemplate;
@@ -76,6 +80,7 @@ public class PrStatusReconciler {
     private void reconcile(AgentJob job) {
         String url = UriComponentsBuilder.fromHttpUrl(githubBotUrl + "/pull-request/status")
             .queryParam("url", job.getPrUrl())
+            .queryParam("installationId", installations.require(job.getTenantId()))
             .encode()
             .toUriString();
         HttpHeaders headers = new HttpHeaders();

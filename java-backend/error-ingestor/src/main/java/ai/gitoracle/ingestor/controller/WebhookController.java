@@ -17,7 +17,9 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -51,6 +53,9 @@ public class WebhookController {
     @Value("${gitoracle.github-webhook-secret:}")
     private String githubWebhookSecret;
 
+    @Value("${GITHUB_INSTALLATION_ID:}")
+    private String defaultInstallationId;
+
     @Value("${gitoracle.sentry-webhook-secret:}")
     private String sentryWebhookSecret;
 
@@ -81,6 +86,26 @@ public class WebhookController {
         this.replayGuard = replayGuard;
     }
 
+    /**
+     * No installation in the payload (the App's own events always have one, but a plain
+     * repository webhook doesn't) and the shared GITHUB_INSTALLATION_ID both mean the
+     * default organisation, which keeps a single-operator install working.
+     */
+    @SuppressWarnings("unchecked")
+    Optional<UUID> tenantForInstallation(Map<String, Object> payload) {
+        Object id = payload.get("installation") instanceof Map<?, ?> installation ? installation.get("id") : null;
+        if (id == null) return Optional.of(Tenant.DEFAULT_ID);
+        String installationId = String.valueOf(id);
+        if (entityManager != null) {
+            List<UUID> tenants = entityManager.createQuery(
+                    "SELECT t.id FROM Tenant t WHERE t.githubAppInstallationId = :installation", UUID.class)
+                .setParameter("installation", installationId)
+                .getResultList();
+            if (!tenants.isEmpty()) return Optional.of(tenants.get(0));
+        }
+        return installationId.equals(defaultInstallationId) ? Optional.of(Tenant.DEFAULT_ID) : Optional.empty();
+    }
+
     @PostMapping("/{tenantId}/sentry")
     public ResponseEntity<Void> sentryWebhook(
             @PathVariable UUID tenantId,
@@ -104,7 +129,6 @@ public class WebhookController {
 
     @PostMapping("/github")
     public ResponseEntity<Void> githubWebhook(
-            @RequestHeader(value = "X-Tenant-ID", defaultValue = "00000000-0000-0000-0000-000000000000") UUID tenantId,
             @RequestHeader(value = "X-GitHub-Event", required = false) String githubEvent,
             @RequestHeader(value = "X-GitHub-Delivery", required = false) String deliveryId,
             @RequestHeader(value = "X-Hub-Signature-256", required = false) String signature,
@@ -123,6 +147,15 @@ public class WebhookController {
         Map<String, Object> payload = parseBody(rawBody);
         if (payload == null) {
             return ResponseEntity.badRequest().build();
+        }
+
+        // The delivery is signed, so its installation id can be trusted, and that's
+        // what says whose repository this is. Anything unrecognised is dropped rather
+        // than filed under the default organisation.
+        UUID tenantId = tenantForInstallation(payload).orElse(null);
+        if (tenantId == null) {
+            logger.info("Ignoring GitHub webhook from an installation no organisation has connected (event={})", githubEvent);
+            return ResponseEntity.accepted().build();
         }
 
         logger.info("Received GitHub webhook for tenant: {} (Event: {})", tenantId, githubEvent);

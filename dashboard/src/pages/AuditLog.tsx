@@ -25,6 +25,9 @@ const ACTION_LABEL: Record<string, string> = {
   'api_key.revoked': 'Revoked API key',
   'repo.allowed': 'Allowed repository',
   'repo.removed': 'Removed repository',
+  'github.connected': 'Connected GitHub installation',
+  'github.disconnected': 'Disconnected GitHub installation',
+  'limits.changed': 'Changed the monthly limits of',
 };
 
 export default function AuditLog() {

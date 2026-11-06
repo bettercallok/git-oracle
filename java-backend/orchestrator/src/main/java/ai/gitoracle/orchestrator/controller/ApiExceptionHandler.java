@@ -121,6 +121,22 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem;
     }
 
+    @ExceptionHandler(ai.gitoracle.orchestrator.service.UsageLimitExceededException.class)
+    public ProblemDetail onUsageLimit(ai.gitoracle.orchestrator.service.UsageLimitExceededException ex) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.TOO_MANY_REQUESTS);
+        problem.setTitle("Monthly limit reached");
+        problem.setDetail(ex.getMessage());
+        return problem;
+    }
+
+    @ExceptionHandler(ai.gitoracle.orchestrator.service.GitHubNotConnectedException.class)
+    public ProblemDetail onGitHubNotConnected(ai.gitoracle.orchestrator.service.GitHubNotConnectedException ex) {
+        ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        problem.setTitle("GitHub not connected");
+        problem.setDetail(ex.getMessage());
+        return problem;
+    }
+
     /**
      * A constraint on a path variable or request parameter. Not covered by the
      * superclass, so it stays an explicit handler.

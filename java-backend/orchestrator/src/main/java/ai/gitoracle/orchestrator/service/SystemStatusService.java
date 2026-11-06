@@ -38,7 +38,8 @@ public class SystemStatusService {
 
     private record AgentResult(ServiceStatus status, Map<String, Object> config) {}
 
-    private static final int TIMEOUT_MILLIS = 2_000;
+    /** Long enough for a service's first health check after a start, which can take seconds. */
+    private static final int TIMEOUT_MILLIS = 5_000;
 
     private final SystemStatusProperties properties;
     private final RestTemplate http;
@@ -108,7 +109,7 @@ public class SystemStatusService {
                 ? new ServiceStatus(name, kind, "degraded", "Running, but reports itself unhealthy")
                 : new ServiceStatus(name, kind, "down", "Answered HTTP " + e.getStatusCode().value());
         } catch (RestClientException e) {
-            return new ServiceStatus(name, kind, "down", "Not reachable");
+            return new ServiceStatus(name, kind, "down", "No answer within 5 seconds");
         }
     }
 

@@ -50,7 +50,7 @@ export default function DeveloperGuide() {
         <ol className="guide-steps">
           <li>Ask an admin of your organisation to invite your GitHub username. An invitation lasts 7 days.</li>
           <li>Open the dashboard and click <strong>Sign in with GitHub</strong>.</li>
-          <li>Jobs only run on repositories on your organisation's list; the person who runs GitOracle adds them for now.</li>
+          <li>On <strong>Repositories</strong>, an owner connects your GitHub account or organisation, then an admin chooses which repositories to allow.</li>
           <li>Go to <strong>Ask to fix</strong> and describe a bug.</li>
         </ol>
       </Section>

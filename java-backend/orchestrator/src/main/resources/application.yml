@@ -15,6 +15,13 @@ gitoracle:
     invited-github-users: ${GITORACLE_INVITED_GITHUB_USERS:}
     admin-github-ids: ${GITORACLE_ADMIN_GITHUB_IDS:}
     session-ttl: ${GITORACLE_SESSION_TTL:P7D}
+    # The App's URL name, from github.com/apps/<slug>. Needed to connect organisations.
+    github-app-slug: ${GITHUB_APP_SLUG:}
+  # What an organisation may use per calendar month, unless a platform admin sets
+  # its own. 0 means no limit. The default organisation has none unless one is set.
+  limits:
+    monthly-jobs: ${GITORACLE_ORG_MONTHLY_JOBS:50}
+    monthly-tokens: ${GITORACLE_ORG_MONTHLY_TOKENS:5000000}
   # Escalates jobs stuck in a working state past these limits (JobWatchdog).
   watchdog:
     enabled: ${GITORACLE_WATCHDOG_ENABLED:true}

@@ -41,7 +41,7 @@ public final class RouteAccess {
     }
 
     private static final Set<String> PUBLIC_PATHS = Set.of(
-        "/api/v1/auth/config", "/api/v1/auth/github/login", "/api/v1/auth/github/callback");
+        "/api/v1/auth/config", "/api/v1/auth/github/login", "/api/v1/auth/github/callback", "/api/v1/auth/github/setup");
 
     /** Agents call these directly on the orchestrator with the internal token. */
     private static final List<Pattern> INTERNAL_WRITES = List.of(
@@ -64,7 +64,8 @@ public final class RouteAccess {
             return read ? Access.SESSION : Access.SESSION_WRITE;
         }
         if (path.equals("/api/v1/org") || path.startsWith("/api/v1/org/")) {
-            return read && (path.equals("/api/v1/org") || path.equals("/api/v1/org/members")) ? Access.READ : Access.ORG_ADMIN;
+            boolean forEveryMember = path.equals("/api/v1/org") || path.equals("/api/v1/org/members") || path.equals("/api/v1/org/usage");
+            return read && forEveryMember ? Access.READ : Access.ORG_ADMIN;
         }
         // An eval result says how good the system is, so not everyone may publish one.
         if (path.equals("/api/v1/evals") && !read) return Access.ORG_ADMIN;
