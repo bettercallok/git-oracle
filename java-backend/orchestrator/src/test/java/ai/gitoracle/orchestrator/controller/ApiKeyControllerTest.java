@@ -61,7 +61,7 @@ class ApiKeyControllerTest {
 
     @Test
     void anApiKeyCannotManageKeys() {
-        Requests.CreateApiKey request = new Requests.CreateApiKey("ci", 30);
+        Requests.CreateApiKey request = new Requests.CreateApiKey("ci", 30, null);
 
         assertThat(asUser(() -> controller.list(null)).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(asUser(() -> controller.create(null, request)).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
@@ -71,7 +71,7 @@ class ApiKeyControllerTest {
 
     @Test
     void aNewKeyBelongsToTheCallerAndIsNeverAdmin() {
-        asUser(() -> controller.create(USER, new Requests.CreateApiKey(" ci ", 30)));
+        asUser(() -> controller.create(USER, new Requests.CreateApiKey(" ci ", 30, null)));
 
         ApiKey key = saved();
         assertThat(key.getTenantId()).isEqualTo(TENANT);
@@ -83,7 +83,7 @@ class ApiKeyControllerTest {
     @Test
     @SuppressWarnings("unchecked")
     void theFullKeyIsReturnedOnceAndOnlyItsHashIsStored() {
-        ResponseEntity<?> response = asUser(() -> controller.create(USER, new Requests.CreateApiKey("ci", 30)));
+        ResponseEntity<?> response = asUser(() -> controller.create(USER, new Requests.CreateApiKey("ci", 30, null)));
 
         String presented = (String) ((Map<String, Object>) response.getBody()).get("apiKey");
         ApiKey key = saved();
@@ -93,7 +93,7 @@ class ApiKeyControllerTest {
 
     @Test
     void aKeyAlwaysExpiresAndDefaultsTo90Days() {
-        asUser(() -> controller.create(USER, new Requests.CreateApiKey("ci", null)));
+        asUser(() -> controller.create(USER, new Requests.CreateApiKey("ci", null, null)));
 
         assertThat(saved().getExpiresAt()).isBetween(
             OffsetDateTime.now().plusDays(90).minusMinutes(1), OffsetDateTime.now().plusDays(90).plusMinutes(1));
@@ -108,7 +108,7 @@ class ApiKeyControllerTest {
         keys.add(row(TENANT, past, null));
         keys.add(row(TENANT, future, past));
         when(repository.findByTenantIdOrderByCreatedAtDesc(TENANT)).thenReturn(keys);
-        Requests.CreateApiKey request = new Requests.CreateApiKey("ci", 30);
+        Requests.CreateApiKey request = new Requests.CreateApiKey("ci", 30, null);
 
         assertThat(asUser(() -> controller.create(USER, request)).getStatusCode()).isEqualTo(HttpStatus.OK);
 
@@ -117,6 +117,13 @@ class ApiKeyControllerTest {
 
         assertThat(asUser(() -> controller.create(USER, request)).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         verify(repository, never()).save(any());
+    }
+
+    @Test
+    void aKeyCanBeReadOnly() {
+        asUser(() -> controller.create(USER, new Requests.CreateApiKey("reports", 30, "read")));
+
+        assertThat(saved().scopeSet()).containsExactly("jobs:read");
     }
 
     @Test

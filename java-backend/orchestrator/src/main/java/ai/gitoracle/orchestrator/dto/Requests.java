@@ -66,7 +66,11 @@ public final class Requests {
         // Optional, but a self-service key always expires: see ApiKeyController.
         @jakarta.validation.constraints.Min(value = 1, message = "expiresInDays must be at least 1")
         @jakarta.validation.constraints.Max(value = 365, message = "expiresInDays must be at most 365")
-        Integer expiresInDays
+        Integer expiresInDays,
+
+        // Optional, defaulting to read-write.
+        @jakarta.validation.constraints.Pattern(regexp = "read|read-write", message = "access must be read or read-write")
+        String access
     ) {}
 
     /** POST /api/v1/jobs — the CLI's entry point. */
