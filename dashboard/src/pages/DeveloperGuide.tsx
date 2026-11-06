@@ -89,6 +89,14 @@ OPENAI_API_KEY=<your provider key>`}</Code>
         </ol>
         <p>Stop it with <Inline>./stop_local.sh</Inline>.</p>
 
+        <h3 className="guide-subheading">To use a local LLM</h3>
+        <p>
+          Point <Inline>LLM_BASE_URL</Inline> at your server's full chat-completions URL, such as{' '}
+          <Inline>http://localhost:11434/v1/chat/completions</Inline> for Ollama, and set <Inline>LLM_MODEL_NAME</Inline>.
+          Blank <Inline>OPENAI_API_KEY</Inline> so your cloud key isn't sent there, and leave <Inline>LLM_FALLBACK_BASE_URL</Inline> unset
+          so your code never goes to the cloud. Restart, then check the <strong>System status</strong> page.
+        </p>
+
         <h3 className="guide-subheading">To open real pull requests</h3>
         <p>
           Create your own GitHub App and install it on your repositories, then set <Inline>GITHUB_APP_ID</Inline>,{' '}

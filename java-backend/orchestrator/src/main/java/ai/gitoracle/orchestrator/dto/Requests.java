@@ -172,13 +172,6 @@ public final class Requests {
         String name
     ) {}
 
-    /** POST /api/v1/admin/prompts/{agent}/activate. */
-    public record ActivatePrompt(
-        @NotBlank(message = "version is required")
-        @Pattern(regexp = "\\d{1,9}", message = "version must be a positive integer")
-        String version
-    ) {}
-
     /** POST /api/v1/commits/{sha}/analyze. */
     public record AnalyzeCommit(
         @NotBlank(message = "question is required")

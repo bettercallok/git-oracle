@@ -88,12 +88,12 @@ class TenantContextFilterTest {
 
     @Test
     void adminSubPathsAreGatedTheSameAsTheAdminRootPath() throws Exception {
-        // /api/v1/admin/api-keys, prompts/activate, eval/results — every
+        // /api/v1/admin/api-keys, system/status, repos — every
         // present and future endpoint under the prefix, not just /tenants.
         for (String path : new String[] {
             "/api/v1/admin/api-keys",
-            "/api/v1/admin/prompts/fixer/activate",
-            "/api/v1/admin/eval/results"
+            "/api/v1/admin/system/status",
+            "/api/v1/admin/repos"
         }) {
             MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
             MockHttpServletResponse response = new MockHttpServletResponse();

@@ -14,11 +14,13 @@ data, only liveness.
 import time
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 
+from shared.internal_auth import require_internal_token
 from shared.kafka_consumer import KafkaEventConsumer
 from shared.metrics import KAFKA_CONSUMER_UP, add_metrics_route, canonical_agent, preregister_agent
+from shared.runtime_config import runtime_config
 
 
 def add_health_route(app: FastAPI, agent: str, consumer: Optional[KafkaEventConsumer] = None) -> None:
@@ -27,6 +29,12 @@ def add_health_route(app: FastAPI, agent: str, consumer: Optional[KafkaEventCons
     preregister_agent(agent, consumer.topic if consumer is not None else None)
     if consumer is not None:
         KAFKA_CONSUMER_UP.labels(agent=canonical_agent(agent), topic=consumer.topic).set_function(lambda: 1 if consumer.alive else 0)
+
+    # Unlike /health this describes the deployment, so it needs the internal token
+    # even on an app that doesn't apply it globally.
+    @app.get("/runtime-config", dependencies=[Depends(require_internal_token)])
+    async def get_runtime_config() -> dict:
+        return runtime_config()
 
     @app.get("/health")
     async def health() -> JSONResponse:

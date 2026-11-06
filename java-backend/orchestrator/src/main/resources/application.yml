@@ -26,6 +26,23 @@ gitoracle:
       FIXING: PT20M
       TESTING: PT15M
       REGENERATING: PT20M
+  # What the admin System status page checks (SystemStatusService). The
+  # orchestrator isn't listed: if it answers the page, it's up.
+  system-status:
+    java-services:
+      api-gateway: http://localhost:8080
+      error-ingestor: http://localhost:8081
+      git-forensics: http://localhost:8082
+      test-runner: http://localhost:8084
+      github-bot: http://localhost:8085
+    agents:
+      investigator: http://localhost:9001
+      fixer: http://localhost:9002
+      reviewer: http://localhost:9003
+      commit-analyst: http://localhost:9004
+      prompt-registry: http://localhost:9005
+      guardrails: http://localhost:9006
+      planner: http://localhost:9007
   # Asks GitHub (via github-bot) whether each PR_OPENED job's PR was merged or
   # closed (PrStatusReconciler) — the pull_request webhook can't reach a local
   # deployment. One GitHub API call per open PR per interval.

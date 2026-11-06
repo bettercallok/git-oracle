@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Link, NavLink, Navigate, useLocation } fr
 import { AnimatePresence, motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import {
-  ShieldAlert, GitMerge, Flame, BarChart3, BrainCircuit, Settings, TerminalSquare,
+  ShieldAlert, GitMerge, Flame, BarChart3, BrainCircuit, Activity, TerminalSquare,
   Wand2, FolderGit2, GitCommitHorizontal, Sun, Moon, LogOut, Menu, X, Plus, BookOpen, KeyRound,
 } from 'lucide-react';
 import Login from './pages/Login';
@@ -22,7 +22,7 @@ const EscalationQueue = lazy(() => import('./pages/EscalationQueue'));
 const RiskHeatmap = lazy(() => import('./pages/RiskHeatmap'));
 const EvalDashboard = lazy(() => import('./pages/EvalDashboard'));
 const LangfuseEmbed = lazy(() => import('./pages/LangfuseEmbed'));
-const AdminSettings = lazy(() => import('./pages/AdminSettings'));
+const SystemStatus = lazy(() => import('./pages/SystemStatus'));
 const Simulator = lazy(() => import('./pages/Simulator'));
 const FixCommand = lazy(() => import('./pages/FixCommand'));
 const RepoManager = lazy(() => import('./pages/RepoManager'));
@@ -43,7 +43,7 @@ const PAGE_TITLES: [RegExp, string][] = [
   [/^\/eval/, 'Evaluations'],
   [/^\/langfuse/, 'LLM traces'],
   [/^\/simulator/, 'Webhook simulator'],
-  [/^\/settings/, 'Settings'],
+  [/^\/system/, 'System status'],
   [/^\/guide/, 'Developer guide'],
   [/^\/api-keys/, 'API keys'],
 ];
@@ -127,7 +127,9 @@ function AnimatedRoutes() {
         <Route path="/eval" element={<PageWrapper><EvalDashboard /></PageWrapper>} />
         <Route path="/langfuse" element={<PageWrapper><LangfuseEmbed /></PageWrapper>} />
         <Route path="/simulator" element={<PageWrapper><Simulator /></PageWrapper>} />
-        <Route path="/settings" element={<PageWrapper><AdminSettings /></PageWrapper>} />
+        <Route path="/system" element={<PageWrapper><SystemStatus /></PageWrapper>} />
+        {/* The old mock settings page, in case anyone bookmarked it. */}
+        <Route path="/settings" element={<Navigate to="/system" replace />} />
         <Route path="/guide" element={<PageWrapper><DeveloperGuide /></PageWrapper>} />
         <Route path="/api-keys" element={<PageWrapper><ApiKeys /></PageWrapper>} />
       </Routes>
@@ -218,8 +220,10 @@ function Sidebar({ open }: { open: boolean }) {
           {(!user || user.admin) && (
             <NavLink to="/simulator" className={linkClass}><TerminalSquare size={16} /> Webhook simulator</NavLink>
           )}
+          {(!user || user.admin) && (
+            <NavLink to="/system" className={linkClass}><Activity size={16} /> System status</NavLink>
+          )}
           <NavLink to="/api-keys" className={linkClass}><KeyRound size={16} /> API keys</NavLink>
-          <NavLink to="/settings" className={linkClass}><Settings size={16} /> Settings</NavLink>
         </nav>
       </div>
 
