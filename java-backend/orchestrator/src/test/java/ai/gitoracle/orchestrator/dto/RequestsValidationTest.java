@@ -197,14 +197,6 @@ class RequestsValidationTest {
     }
 
     @Test
-    void activatePromptRequiresANumericVersion() {
-        assertThat(violations(new Requests.ActivatePrompt("3"))).isEmpty();
-        assertThat(violations(new Requests.ActivatePrompt("latest"))).containsExactly("version");
-        assertThat(violations(new Requests.ActivatePrompt("-1"))).containsExactly("version");
-        assertThat(violations(new Requests.ActivatePrompt(null))).containsExactly("version");
-    }
-
-    @Test
     void recordPromptVersionRejectsMissingOrNonPositiveValues() {
         assertThat(violations(new Requests.RecordPromptVersion(null, 1))).containsExactly("agentName");
         assertThat(violations(new Requests.RecordPromptVersion("fixer", null))).containsExactly("version");

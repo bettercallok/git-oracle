@@ -549,7 +549,7 @@ routed through the api-gateway (`:8080`) and scoped to the caller's tenant unles
 - `GET /api/v1/prompts/stats` — per-prompt-version success rate and per-agent average tokens.
 - `GET /api/v1/evals` / `POST /api/v1/evals` — eval harness run history.
 - `GET /api/v1/budget/{jobId}` — a job's token budget.
-- `/api/v1/admin/**` (requires `platform:admin`) — tenants, tenant config, prompt activation, and `POST` / `GET` / `DELETE /api/v1/admin/api-keys`.
+- `/api/v1/admin/**` (requires `platform:admin`) — tenants and their metrics, `GET /api/v1/admin/system/status`, the repository allow-lists, the webhook simulator, and `POST` / `GET` / `DELETE /api/v1/admin/api-keys`.
 - **service-internal** (not gateway-routed, `X-Internal-Token` required): `POST :9006/validate/patch` (guardrails), `POST :8084/test` (test runner), `POST :8085/pull-request` and `GET :8085/pull-request/status` (github-bot), `POST /api/v1/budget/{jobId}/record`, `POST /api/v1/jobs/{id}/events`, `POST /api/v1/jobs/{id}/prompt-version` (from agents), `GET :9005/prompts/{agent}/{key}` and `.../active`, `PUT :9005/prompts/{agent}/{key}/activate/{version}`.
 
 ## frontend dashboard
@@ -566,7 +566,7 @@ react + typescript + vite. pages:
 - **evaluations** — accuracy trend, PR merge rate and feedback, per-prompt-version results — all computed from real data, "—" where nothing's been measured.
 - **LLM traces** — every job's LLM calls, drawn in the dashboard (see [LLM traces](#llm-traces)).
 - **webhook simulator** — admins only. simulate a failed github actions run to test the whole pipeline. it starts a real job on an allowed repository, through a server route rather than a signed webhook, so the browser never holds the webhook secret.
-- **settings** — dark/light mode, token budget config.
+- **system status** — admins only. live health of every service and agent, and the settings really in use: which LLM host and model, whether code leaves your network, kafka and qdrant. read-only: to change a setting, edit `.env` and restart.
 - **API keys** — create and revoke keys for your scripts.
 - **developer guide** — how to get access, run your own copy, and start jobs from other tools. linked at the top of every page.
 

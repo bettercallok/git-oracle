@@ -1568,3 +1568,23 @@ textarea.code-block:focus { border-color: var(--border-focus); box-shadow: 0 0 0
 
 .api-key-form { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; padding: 16px; margin-bottom: 16px; }
 .api-key-field-name { flex: 1; min-width: 200px; }
+
+/* ════════════════════════════════════════
+   SYSTEM STATUS
+   ════════════════════════════════════════ */
+.status-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 16px; margin-bottom: 16px; align-items: start; }
+.status-card { padding: 20px; }
+.status-heading { display: flex; align-items: center; gap: 8px; font-size: 0.95rem; font-weight: 600; color: var(--text-primary); margin: 0 0 14px; }
+.status-row { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-top: 1px solid var(--border-subtle); }
+.status-label { font-size: 0.84rem; color: var(--text-muted); }
+.status-value { font-size: 0.84rem; color: var(--text-primary); overflow-wrap: anywhere; }
+.status-hint { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
+.status-rule { font-size: 0.85rem; line-height: 1.55; color: var(--text-secondary); margin: 0 0 12px; }
+.status-pill { font-size: 0.8rem; font-weight: 500; }
+.status-pill.up { color: var(--success); }
+.status-pill.degraded { color: var(--warning); }
+.status-pill.down { color: var(--danger); }
+
+@media (max-width: 900px) {
+  .status-grid { grid-template-columns: minmax(0, 1fr); }
+}

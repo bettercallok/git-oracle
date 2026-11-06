@@ -1,7 +1,6 @@
 package ai.gitoracle.orchestrator.controller;
 
 import ai.gitoracle.orchestrator.dto.Requests;
-import ai.gitoracle.orchestrator.model.TenantConfig;
 import ai.gitoracle.orchestrator.security.TenantContext;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
@@ -29,11 +28,7 @@ import java.util.UUID;
  * why the check exists twice (gateway + this service) rather than once.
  *
  * <h2>What this endpoint set does NOT do</h2>
- * Tenant creation here is an operator action, not a signup flow — there is no
- * user/session system in front of it (see CLAUDE.md's "Missing entirely"
- * list), and {@link #updateTenantConfig} has never persisted anything (see its
- * own doc). Neither gap is addressed by this authorization fix; both require
- * product work well beyond "who is allowed to call this."
+ * Tenant creation here is an operator action, not a signup flow.
  */
 // No @CrossOrigin: reached only through the API Gateway, which already sets
 // Access-Control-Allow-Origin globally — a duplicate here breaks CORS entirely
@@ -60,23 +55,6 @@ public class AdminController {
         logger.info("Registered new tenant: {} with ID: {} (requested by tenant {})",
             tenantName, tenantId, TenantContext.tenantId());
         return ResponseEntity.ok(Map.of("tenantId", tenantId, "status", "REGISTERED"));
-    }
-
-    /**
-     * NOTE: this does not persist anything. It logs the requested values and
-     * returns {@code "status":"UPDATED"} regardless of whether any row
-     * changed — found while reviewing this controller for H3. It predates
-     * this change and is not an authorization gap (the caller genuinely does
-     * need platform:admin to reach it), so fixing the response to match
-     * reality is left for whoever implements real per-tenant budget/risk
-     * config, rather than folded into an authorization-only change.
-     */
-    @PutMapping("/tenants/{id}/config")
-    public ResponseEntity<Map<String, String>> updateTenantConfig(@PathVariable("id") String tenantId,
-                                                                  @RequestBody TenantConfig config) {
-        logger.info("Updating config for tenant {}: Budget {}, Risk {}",
-            tenantId, config.getTokenBudget(), config.getRiskScoreThreshold());
-        return ResponseEntity.ok(Map.of("status", "UPDATED", "tenantId", tenantId));
     }
 
     private final jakarta.persistence.EntityManager entityManager;
@@ -115,11 +93,16 @@ public class AdminController {
                 .setParameter("tenantId", tenantUuid)
                 .getSingleResult();
 
+            Long tokensUsed = entityManager.createQuery(
+                "SELECT COALESCE(SUM(j.tokenBudgetUsed), 0) FROM AgentJob j WHERE j.tenantId = :tenantId", Long.class)
+                .setParameter("tenantId", tenantUuid)
+                .getSingleResult();
+
             double avgSuccessRate = totalJobs > 0 ? (double) jobsCompleted / totalJobs : 0.0;
 
             return ResponseEntity.ok(Map.of(
                 "tenantId", tenantId,
-                "tokensUsed", 45000, // Still hardcoded as token tracking requires external API aggregator in this version
+                "tokensUsed", tokensUsed,
                 "jobsCompleted", jobsCompleted,
                 "avgSuccessRate", avgSuccessRate
             ));
@@ -133,25 +116,4 @@ public class AdminController {
             ));
         }
     }
-
-    @PostMapping("/prompts/{agent}/activate")
-    public ResponseEntity<Map<String, String>> switchPromptVersion(@PathVariable("agent") String agent,
-                                                                   @Valid @RequestBody Requests.ActivatePrompt request) {
-        String version = request.version();
-        logger.info("Switching active prompt for agent '{}' to version '{}'", agent, version);
-        return ResponseEntity.ok(Map.of("agent", agent, "activeVersion", version));
-    }
-
-    @GetMapping("/eval/results")
-    public ResponseEntity<Map<String, Object>> getEvalResults() {
-        logger.info("Fetching latest LLM eval harness results");
-        // Mock eval results
-        return ResponseEntity.ok(Map.of(
-            "runId", "eval-994",
-            "accuracy", 0.98,
-            "regressionDetected", false
-        ));
-    }
-
-
 }
