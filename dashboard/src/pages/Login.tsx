@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   KeyRound, ArrowRight, Eye, EyeOff, Search, ListChecks, Wrench, FlaskConical,
-  GitPullRequest, AlertCircle, Clock, Terminal, LogIn,
+  GitPullRequest, AlertCircle, Clock, Terminal, LogIn, BookOpen,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Logo } from '../components/Logo';
@@ -87,6 +87,7 @@ export default function Login() {
       </aside>
 
       <main className="auth-main">
+        <Link to="/guide" className="btn btn-ghost btn-sm auth-top-link"><BookOpen size={14} /> Developer guide</Link>
         <motion.div
           className="auth-panel"
           initial={{ opacity: 0, y: 10 }}
@@ -159,8 +160,9 @@ export default function Login() {
             <div className="auth-note-row">
               <Terminal size={14} />
               <span>
-                First run? The bootstrap key is <code className="inline">GITORACLE_API_KEY</code> in your <code className="inline">.env</code>.
-                Mint per-tenant keys at <code className="inline">/api/v1/admin/api-keys</code>.
+                Running your own copy? <code className="inline">./start_local.sh</code> created a key: it's{' '}
+                <code className="inline">GITORACLE_API_KEY</code> in your <code className="inline">.env</code>.{' '}
+                See the <Link to="/guide">developer guide</Link>.
               </span>
             </div>
           </div>

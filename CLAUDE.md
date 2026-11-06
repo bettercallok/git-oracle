@@ -10,7 +10,7 @@ GitOracle is an event-driven, multi-agent autonomous coding system: point it at 
 
 ### Local dev (the normal workflow)
 ```bash
-cp .env.example .env               # fill in LLM_BASE_URL/LLM_MODEL_NAME/OPENAI_API_KEY, GITORACLE_API_KEY, github app creds
+cp .env.example .env               # fill in LLM_BASE_URL/LLM_MODEL_NAME/OPENAI_API_KEY, github app creds (start_local.sh generates GITORACLE_API_KEY and GITORACLE_INTERNAL_TOKEN)
 make infra-up                      # kafka, postgres+pgvector, neo4j, qdrant, redis, langfuse, prometheus, grafana, kafka UI
 ./start_local.sh                   # builds all 6 java jars (~10 min first time), starts all 6 java services + 7 python agents + dashboard as local processes
 ./stop_local.sh                    # stops app processes only (NOT infra)
@@ -66,7 +66,7 @@ Each case is on its own branch (`main` = correct code, all tests pass → bug co
 
 GitHub App credentials (`GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_PRIVATE_KEY_PATH`) live in the root `.env`. `GitHubAppCredentials` (one copy in orchestrator, one in github-bot — github-bot can't depend on core; change both) takes all three from the environment when `GITHUB_APP_ID` is a real value (blank and `your_*` placeholders don't count), else from the deprecated `java-backend/github-bot/.env`, never mixing the two. `start_local.sh` makes a relative key path absolute (services run from `java-backend/`). `GITORACLE_REQUIRE_GITHUB_APP=true` turns missing credentials into a startup failure (the CI eval sets it).
 
-Startup fails fast on missing config: every Java service refuses to boot without `GITORACLE_INTERNAL_TOKEN` (a `@PostConstruct` in each `InternalAuthFilter` / the gateway's `TenantContextFilter`; `@SpringBootTest`s set `gitoracle.internal-token` in their `properties`), and every Python agent's `__main__` calls `shared/config.check_startup_config` (internal token; `LLM_BASE_URL` must be the full `/chat/completions` URL). `ci.yml` is the per-PR gate and does not run evals.
+Startup fails fast on missing config: every Java service refuses to boot without `GITORACLE_INTERNAL_TOKEN`, or with the public `change_me*`/`your_*` placeholder from `.env.example` (a `@PostConstruct` in each `InternalAuthFilter` / the gateway's `TenantContextFilter`; `@SpringBootTest`s set `gitoracle.internal-token` in their `properties`), the gateway likewise refuses a placeholder `GITORACLE_API_KEY` while the legacy key is enabled (`start_local.sh`'s `ensure_secret` replaces both placeholders with random values in `.env`), and every Python agent's `__main__` calls `shared/config.check_startup_config` (internal token; `LLM_BASE_URL` must be the full `/chat/completions` URL). `ci.yml` is the per-PR gate and does not run evals.
 Note: `run_evals.py` drives cases through `POST /trigger`, which **defaults to `investigateFirst=true`** — so evals run the full investigate → plan → fix pipeline, not the direct-fix shortcut (pass `"investigateFirst": false` for that). Two gates: patch accuracy (LLM judge ≥7/10 vs the golden patch; stored as `accuracy`) and cause accuracy (the investigator's top commit == the bug commit; `--min-cause-score`). Cases are defined in `setup_test_repo.py`'s `CASES`: each bug is an edit of correct code (`_edit`), so the golden patch is generated (bug → correct) rather than hand-written, and `followups` keep the bug commit below HEAD.
 
 `ci.yml`'s `pipeline-e2e` job runs eval case1 through the real stack with the LLM replaced by `ai_core/tests/mock_llm_server.py` (port 18089; it answers by the schema `title` that `llm_structured` puts in the system message) and asserts the timeline and patch (`scripts/ci/e2e_check.py`). It needs the fixture repo's `case/npe` branch, which the Golden Dataset Eval publishes. Both workflows share `scripts/ci/write_env.sh` and `scripts/ci/start_stack.sh`.
@@ -149,7 +149,7 @@ The full stack targets 8GB RAM minimum: `java-backend/gradle.properties` (`org.g
 ## Project structure
 - `java-backend/` — 6 Java microservices (each its own gradle subproject) + `git-oracle-core` shared library.
 - `ai_core/` — 7 Python FastAPI agents (`agents/`), shared LLM/kafka/memory/prompt-registry helpers (`shared/`), regression suite (`tests/`).
-- `dashboard/` — React + TypeScript + Vite web UI (`dashboard/src/api/client.ts` is the single axios client every page uses; base URL via `VITE_API_URL`).
+- `dashboard/` — React + TypeScript + Vite web UI (`dashboard/src/api/client.ts` is the single axios client every page uses; base URL via `VITE_API_URL`). `pages/DeveloperGuide.tsx` (`/guide`, linked at the top of every page, readable without signing in) lists the ways to use GitOracle: keep it in step when setup, sign-in or job entry points change.
 - `cli/` — the `gitOracle` click-based terminal client.
 - `eval/` — golden-dataset generator (`setup_test_repo.py`) and harness (`run_evals.py`, `check_regression.py`).
 - `infrastructure/` — prometheus/grafana config.

@@ -59,6 +59,11 @@ public class InternalAuthFilter extends OncePerRequestFilter {
                 + "service call would be rejected with 401, so this service refuses to start. "
                 + "Set it in the root .env (any long random string, the same for every service).");
         }
+        if (configuredToken != null && (configuredToken.startsWith("change_me") || configuredToken.startsWith("your_"))) {
+            throw new IllegalStateException("GITORACLE_INTERNAL_TOKEN still has the placeholder value from "
+                + ".env.example, which is public, so anyone could call this service with it. This service "
+                + "refuses to start. ./start_local.sh replaces it for you, or set your own with: openssl rand -hex 32");
+        }
     }
 
     @Override

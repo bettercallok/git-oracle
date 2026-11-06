@@ -1,10 +1,10 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import {
   ShieldAlert, GitMerge, Flame, BarChart3, BrainCircuit, Settings, TerminalSquare,
-  Wand2, FolderGit2, GitCommitHorizontal, Sun, Moon, LogOut, Menu, X, Plus,
+  Wand2, FolderGit2, GitCommitHorizontal, Sun, Moon, LogOut, Menu, X, Plus, BookOpen,
 } from 'lucide-react';
 import Login from './pages/Login';
 import { RepoProvider, useRepos } from './context/RepoContext';
@@ -28,6 +28,7 @@ const FixCommand = lazy(() => import('./pages/FixCommand'));
 const RepoManager = lazy(() => import('./pages/RepoManager'));
 const CommitExplorer = lazy(() => import('./pages/CommitExplorer'));
 const CommitDetail = lazy(() => import('./pages/CommitDetail'));
+const DeveloperGuide = lazy(() => import('./pages/DeveloperGuide'));
 
 const PAGE_TITLES: [RegExp, string][] = [
   [/^\/$/, 'Jobs'],
@@ -42,6 +43,7 @@ const PAGE_TITLES: [RegExp, string][] = [
   [/^\/langfuse/, 'LLM traces'],
   [/^\/simulator/, 'Webhook simulator'],
   [/^\/settings/, 'Settings'],
+  [/^\/guide/, 'Developer guide'],
 ];
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -51,6 +53,21 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   // Wait for /auth/me, so a signed-in reload doesn't flash the login page.
   if (isLoading) {
     return <LoadingState />;
+  }
+
+  // The guide is how someone new finds out how to get access, so it can't require it.
+  if (!isAuthenticated && location.pathname === '/guide') {
+    return (
+      <div className="guide-public">
+        <header className="guide-public-bar">
+          <Link to="/login" className="sidebar-logo" style={{ padding: 0 }}><Logo size={24} /></Link>
+          <Link to="/login" className="btn btn-secondary btn-sm">Sign in</Link>
+        </header>
+        <main className="guide-public-main">
+          <Suspense fallback={<LoadingState />}><DeveloperGuide /></Suspense>
+        </main>
+      </div>
+    );
   }
 
   // Including on /login itself, where the app shell's navigation would otherwise
@@ -109,6 +126,7 @@ function AnimatedRoutes() {
         <Route path="/langfuse" element={<PageWrapper><LangfuseEmbed /></PageWrapper>} />
         <Route path="/simulator" element={<PageWrapper><Simulator /></PageWrapper>} />
         <Route path="/settings" element={<PageWrapper><AdminSettings /></PageWrapper>} />
+        <Route path="/guide" element={<PageWrapper><DeveloperGuide /></PageWrapper>} />
       </Routes>
     </AnimatePresence>
   );
@@ -245,6 +263,9 @@ function Shell() {
       <Sidebar open={drawerOpen} />
       <main className="main-content">
         <div className="main-inner">
+          <div className="main-top-links">
+            <Link to="/guide" className="btn btn-ghost btn-sm"><BookOpen size={14} /> Developer guide</Link>
+          </div>
           <AnimatedRoutes />
         </div>
       </main>

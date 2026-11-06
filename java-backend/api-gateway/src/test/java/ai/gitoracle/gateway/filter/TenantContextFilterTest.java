@@ -222,4 +222,13 @@ class TenantContextFilterTest {
 
         verify(sessions, never()).evict(any());
     }
+
+    @Test
+    void aPlaceholderInternalTokenRefusesToStart() {
+        ReflectionTestUtils.setField(filter, "configuredInternalToken", "change_me_internal_service_token");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(filter::requireInternalTokenConfigured)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("placeholder");
+    }
 }

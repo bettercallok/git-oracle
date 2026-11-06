@@ -100,6 +100,21 @@ public class ApiKeyAuthenticator {
     }
 
     /**
+     * The placeholder is in the public .env.example, and this key grants
+     * platform:admin, so booting on it would hand the installation to anyone who
+     * has read the repository. Not a concern once the legacy key is turned off.
+     */
+    @jakarta.annotation.PostConstruct
+    void refusePlaceholderLegacyKey() {
+        if (legacyApiKeyEnabled && legacyApiKey != null
+                && (legacyApiKey.startsWith("change_me") || legacyApiKey.startsWith("your_"))) {
+            throw new IllegalStateException("GITORACLE_API_KEY still has the placeholder value from .env.example, "
+                + "and it grants platform:admin, so the gateway refuses to start. ./start_local.sh replaces it "
+                + "for you, or set your own with: openssl rand -hex 32");
+        }
+    }
+
+    /**
      * @return the resolved principal, or empty if the key is absent, malformed,
      *         unknown, revoked, or expired. The caller must not distinguish
      *         between those cases in its response — telling an attacker that a

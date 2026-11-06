@@ -32,6 +32,9 @@ def llm_url_problem(url: str) -> str | None:
 def check_startup_config(agent: str, *, needs_llm: bool) -> None:
     """Exit the process with a clear message if required settings are missing."""
     problems = [f"{n} is not set" for n in missing(["GITORACLE_INTERNAL_TOKEN"])]
+    if os.environ.get("GITORACLE_INTERNAL_TOKEN", "").strip().startswith(("change_me", "your_")):
+        problems.append("GITORACLE_INTERNAL_TOKEN still has the public placeholder value from .env.example "
+                        "(./start_local.sh replaces it, or use: openssl rand -hex 32)")
     try:
         kafka_security_kwargs()
     except ValueError as e:
