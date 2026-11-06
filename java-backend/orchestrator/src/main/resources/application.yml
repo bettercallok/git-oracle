@@ -5,6 +5,16 @@ gitoracle:
   # Seeds the default tenant's repository allow-list (owner/name, comma-separated).
   # Other tenants' lists are managed with POST/DELETE /api/v1/admin/repos.
   allowed-repos: ${GITORACLE_ALLOWED_REPOS:}
+  # Sign in with GitHub (AuthController). The client id and secret are the GitHub
+  # App's; its callback URL must be <public-api-url>/api/v1/auth/github/callback.
+  auth:
+    github-client-id: ${GITHUB_APP_CLIENT_ID:}
+    github-client-secret: ${GITHUB_APP_CLIENT_SECRET:}
+    public-api-url: ${GITORACLE_PUBLIC_API_URL:http://localhost:8080}
+    dashboard-url: ${GITORACLE_DASHBOARD_URL:http://localhost:5173}
+    invited-github-users: ${GITORACLE_INVITED_GITHUB_USERS:}
+    admin-github-ids: ${GITORACLE_ADMIN_GITHUB_IDS:}
+    session-ttl: ${GITORACLE_SESSION_TTL:P7D}
   # Escalates jobs stuck in a working state past these limits (JobWatchdog).
   watchdog:
     enabled: ${GITORACLE_WATCHDOG_ENABLED:true}

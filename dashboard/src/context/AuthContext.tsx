@@ -7,9 +7,19 @@ import {
   subscribe,
   purgeLegacyPersistedKey,
 } from '../auth/apiKeyStore';
+import { apiClient } from '../api/client';
+
+export interface SignedInUser {
+  login: string;
+  admin: boolean;
+}
 
 interface AuthContextType {
   apiKey: string | null;
+  /** Set when signed in with GitHub. */
+  user: SignedInUser | null;
+  /** True until the first /auth/me answers. */
+  isLoading: boolean;
   login: (key: string) => void;
   logout: () => void;
   isAuthenticated: boolean;
@@ -18,7 +28,9 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 /**
- * The key lives in the in-memory store, not in localStorage — see
+ * Two ways in. Sign in with GitHub sets an httpOnly cookie this code can't read,
+ * so the only way to learn about it is to ask the server (/auth/me). The API key
+ * fallback lives in the in-memory store, not in localStorage — see
  * src/auth/apiKeyStore.ts for why, and for what this does and does not buy.
  *
  * React state here mirrors the store so components re-render on login/logout;
@@ -32,14 +44,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     purgeLegacyPersistedKey();
     return getApiKey();
   });
+  const [user, setUser] = useState<SignedInUser | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => subscribe(setApiKeyState), []);
 
+  useEffect(() => {
+    apiClient.get('/auth/me')
+      .then(({ data }) => {
+        if (data.kind === 'user') setUser({ login: data.login, admin: data.admin });
+      })
+      .catch(() => { /* Not signed in, or an older gateway: the login page handles both. */ })
+      .finally(() => setIsLoading(false));
+  }, []);
+
   const login = (key: string) => setStoredApiKey(key);
-  const logout = () => clearApiKey();
+
+  const logout = () => {
+    clearApiKey();
+    if (!user) return;
+    // A full page load, so nothing fetched for this user stays in memory.
+    apiClient.post('/auth/logout')
+      .catch(() => { /* The cookie may remain; the session still expires on its own. */ })
+      .finally(() => { window.location.href = '/login'; });
+  };
 
   return (
-    <AuthContext.Provider value={{ apiKey, login, logout, isAuthenticated: !!apiKey }}>
+    <AuthContext.Provider value={{ apiKey, user, isLoading, login, logout, isAuthenticated: !!apiKey || !!user }}>
       {children}
     </AuthContext.Provider>
   );

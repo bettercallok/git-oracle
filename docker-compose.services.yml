@@ -75,6 +75,13 @@ services:
       - "127.0.0.1:8083:8083"
     environment:
       <<: *java-env
+      # Sign in with GitHub. Optional: unset means the login page offers API keys only.
+      GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID:-}
+      GITHUB_APP_CLIENT_SECRET: ${GITHUB_APP_CLIENT_SECRET:-}
+      GITORACLE_PUBLIC_API_URL: ${GITORACLE_PUBLIC_API_URL:-http://localhost:8080}
+      GITORACLE_DASHBOARD_URL: ${GITORACLE_DASHBOARD_URL:-http://localhost:5173}
+      GITORACLE_INVITED_GITHUB_USERS: ${GITORACLE_INVITED_GITHUB_USERS:-}
+      GITORACLE_ADMIN_GITHUB_IDS: ${GITORACLE_ADMIN_GITHUB_IDS:-}
       # The dashboard's LLM-trace views are read through the orchestrator
       # (TraceController), which needs the same project keys the agents trace
       # with. Optional: unset means "tracing off" and the views say so.

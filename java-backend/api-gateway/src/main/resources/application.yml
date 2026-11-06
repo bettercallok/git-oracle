@@ -68,6 +68,9 @@ spring:
               - DELETE
               - OPTIONS
             allowedHeaders: "*"
+            # The dashboard's session cookie. This rules out allowedOrigins "*",
+            # which would let any website call the API as the signed-in user.
+            allowCredentials: true
       routes:
         - id: error_ingestor_api
           uri: http://127.0.0.1:8081
