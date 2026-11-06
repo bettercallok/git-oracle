@@ -54,6 +54,11 @@ public class LoginPolicy {
         return new Decision(false, false, Set.of());
     }
 
+    /** With both lists empty nobody can sign in, so GitHub sign-in can't be anyone's only way in. */
+    public boolean admitsAnyone() {
+        return !invitedLogins.isEmpty() || !adminIds.isEmpty();
+    }
+
     private static Set<String> entries(String raw) {
         return Arrays.stream(raw == null ? new String[0] : raw.split(","))
             .map(String::trim)

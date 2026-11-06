@@ -35,8 +35,12 @@ apiClient.interceptors.response.use(
     console.error('API Error:', error.response?.data || error.message);
     // /auth/* is exempt: a 401 from /auth/me just means "not signed in", and
     // answering it by reloading /login, which asks again, would loop forever.
-    const isAuthCall = String(error.config?.url ?? '').startsWith('/auth/');
-    if (error.response?.status === 401 && !isAuthCall) {
+    // /webhook/* too: its 401 means the delivery's signature was wrong, which
+    // says nothing about the signed-in user.
+    const url = String(error.config?.url ?? '');
+    const isAuthCall = url.startsWith('/auth/');
+    const isWebhookCall = url.includes('/webhook/');
+    if (error.response?.status === 401 && !isAuthCall && !isWebhookCall) {
       clearApiKey();
       window.location.href = '/login';
     }

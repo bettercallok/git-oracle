@@ -34,10 +34,10 @@ export default function Simulator() {
       // Validate JSON first
       const parsed = JSON.parse(payload);
 
-      // Go through apiClient rather than a bare fetch: the gateway's
-      // TenantContextFilter requires X-API-Key on every non-exempt path, and
-      // /webhook/** is not exempt. The raw fetch sent no key, so every click
-      // silently 401'd and the button appeared to do nothing at all.
+      // The gateway lets /webhook/** through without a credential, and the
+      // error-ingestor then verifies the HMAC signature. A browser can't sign,
+      // since that would mean shipping the secret to it, so this currently
+      // always gets 401; the Response panel explains that.
       const res = await apiClient.post(WEBHOOK_URL, parsed);
       setResponse({ status: res.status, data: res.data });
     } catch (err: any) {
@@ -183,6 +183,13 @@ export default function Simulator() {
                 }}>
                   {typeof response.data === 'object' ? JSON.stringify(response.data, null, 2) : response.data}
                 </pre>
+                {response.status === 401 && (
+                  <p style={{ margin: '12px 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                    Rejected because the request has no valid signature. Webhooks must be signed with{' '}
+                    <code className="inline">GITHUB_APP_WEBHOOK_SECRET</code>, and a browser can't do that safely, so
+                    this page can't start a job yet. Use <strong>Ask to fix</strong> instead.
+                  </p>
+                )}
               </motion.div>
             )}
           </div>

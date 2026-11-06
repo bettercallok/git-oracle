@@ -480,7 +480,7 @@ the dashboard JSON is generated — edit `infrastructure/grafana/scripts/build_d
    ```
    fill in, all in this one root `.env`:
    - `LLM_BASE_URL` (the **full** chat-completions URL, e.g. `https://api.groq.com/openai/v1/chat/completions`), `LLM_MODEL_NAME`, `OPENAI_API_KEY`
-   - `GITORACLE_API_KEY` (bootstrap key for scripts and the first sign-in) and `GITORACLE_INTERNAL_TOKEN` (any long random string — every service refuses to start without it)
+   - nothing for `GITORACLE_API_KEY` (the bootstrap key for scripts and the first sign-in) or `GITORACLE_INTERNAL_TOKEN`: `./start_local.sh` replaces their placeholders with random values in `.env`. every service refuses to start on a placeholder, so if you start them another way, generate your own with `openssl rand -hex 32`.
    - `GITHUB_APP_WEBHOOK_SECRET` / `SENTRY_WEBHOOK_SECRET` if you send webhooks — unsigned or wrongly signed deliveries are rejected
    - `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` for LLM traces (optional; without them the trace views say tracing is off)
    - for real PR creation, your GitHub App: `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, and `GITHUB_PRIVATE_KEY_PATH`. Put the key in `secrets/` (gitignored) in **PKCS#8** form — GitHub gives you PKCS#1, convert once with `openssl pkcs8 -topk8 -nocrypt -in downloaded.pem -out secrets/github-app.pem`. A relative path is resolved from the repo root.
@@ -506,7 +506,7 @@ the dashboard JSON is generated — edit `infrastructure/grafana/scripts/build_d
    ```
 
 5. **interact with gitoracle**
-   open the dashboard (`http://localhost:5173`) and sign in with GitHub, or with an API key if that isn't set up (see [sign-in](#sign-in)). from there:
+   open the dashboard (`http://localhost:5173`) and sign in with GitHub, or with an API key if that isn't set up (see [sign-in](#sign-in)). your generated key is `GITORACLE_API_KEY` in `.env`. the **developer guide** link at the top of every page (`/guide`, no sign-in needed) lists every way to use and connect gitoracle. from there:
    - **ask to fix** — describe a bug in plain english, optionally pick a branch, choose whether to run full investigation or the fast direct path, and watch it turn into a PR.
    - **jobs / job page** — live state, the job's timeline, its LLM trace, and "regenerate fix" with your own instructions.
    - **commit explorer** — browse commit history, inspect diffs, chat with `commit_analyst` about any commit.
@@ -567,8 +567,12 @@ react + typescript + vite. pages:
 - **LLM traces** — every job's LLM calls, drawn in the dashboard (see [LLM traces](#llm-traces)).
 - **webhook simulator** — hand-craft and fire a github webhook payload at the real ingestion endpoint for testing.
 - **settings** — dark/light mode, token budget config.
+- **API keys** — create and revoke keys for your scripts.
+- **developer guide** — how to get access, run your own copy, and start jobs from other tools. linked at the top of every page.
 
 ### sign-in
+
+if you fork gitoracle, your copy is separate: nobody issues you a key, and `./start_local.sh` generates your own in `.env`.
 
 people sign in with github; API keys are for scripts, the CLI and CI. to turn it on, in your GitHub App's settings set the callback URL to `http://localhost:8080/api/v1/auth/github/callback` and generate a client secret, then set in `.env`:
 
@@ -578,7 +582,13 @@ people sign in with github; API keys are for scripts, the CLI and CI. to turn it
 
 when hosting, also set `GITORACLE_PUBLIC_API_URL`, `GITORACLE_DASHBOARD_URL` and `GITORACLE_ALLOWED_ORIGINS` to your real https addresses.
 
-a sign-in lasts 7 days and survives reloads. the session is in an `httpOnly` cookie that page scripts can't read. the API-key fallback on the login page holds the key in memory for the tab only, so reloading signs you out.
+a sign-in lasts 7 days and survives reloads. the session is in an `httpOnly` cookie that page scripts can't read.
+
+once that's set up, the login page offers github only. until then it shows an API key form, which holds the key in memory for the tab only, so reloading signs you out. to get back in if github sign-in breaks, blank `GITHUB_APP_CLIENT_ID` and restart.
+
+### API keys
+
+keys are for scripts and CI. after signing in, create them on the **API keys** page: each one is shown once, belongs to your tenant, can't do admin work, and expires (90 days by default, 1 year at most). revoking one takes effect within a minute. a key can't create or revoke other keys. operators can still use `/api/v1/admin/api-keys`.
 
 ## CLI reference
 

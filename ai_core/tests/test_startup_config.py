@@ -57,3 +57,14 @@ def test_a_malformed_embeddings_url_stops_startup(monkeypatch):
 def test_an_empty_embeddings_url_just_turns_memory_off(monkeypatch):
     monkeypatch.setenv("EMBEDDINGS_BASE_URL", "")
     check_startup_config("fixer", needs_llm=True)
+
+
+@pytest.mark.parametrize("placeholder", ["change_me_internal_service_token", "your_internal_token"])
+def test_a_placeholder_internal_token_is_refused(monkeypatch, placeholder):
+    monkeypatch.setenv("GITORACLE_INTERNAL_TOKEN", placeholder)
+    monkeypatch.setenv("LLM_BASE_URL", "https://llm.example/v1/chat/completions")
+
+    with pytest.raises(SystemExit) as exit_info:
+        check_startup_config("fixer", needs_llm=True)
+
+    assert "placeholder" in str(exit_info.value)

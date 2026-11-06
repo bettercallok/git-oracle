@@ -13,6 +13,29 @@ if ! grep -qE '^KAFKA_SASL_PASSWORD=.+' .env; then
   printf '\nKAFKA_SASL_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env
 fi
 
+# .env.example ships placeholders for these two, and the example file is public,
+# so a stack left on them can be taken over by anyone who has read the repo.
+# Replace them, once, so a new checkout needs no manual step. Services also refuse
+# to start on a placeholder, for anyone who starts them another way.
+ensure_secret() {
+  local name=$1 current value
+  # tail -1: a later line wins when .env is sourced (CI appends its overrides).
+  current=$(grep -E "^$name=" .env | tail -1 | cut -d= -f2-)
+  case "$current" in
+    ""|change_me*|your_*) ;;
+    *) return 0 ;;
+  esac
+  echo "🔑 Generating $name in .env"
+  value=$(openssl rand -hex 32)
+  if grep -qE "^$name=" .env; then
+    sed -i.bak "s/^$name=.*/$name=$value/" .env && rm -f .env.bak
+  else
+    printf '\n%s=%s\n' "$name" "$value" >> .env
+  fi
+}
+ensure_secret GITORACLE_API_KEY
+ensure_secret GITORACLE_INTERNAL_TOKEN
+
 # ─── Clear zombie processes on all service ports ───────────────
 # IMPORTANT: Only kill Java/Python/Node processes — never Docker processes.
 #

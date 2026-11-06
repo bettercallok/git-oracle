@@ -225,4 +225,22 @@ class ApiKeyAuthenticatorTest {
         assertThat(auth("legacy-shared-secretX")).isEmpty();
         assertThat(auth("LEGACY-SHARED-SECRET")).isEmpty();
     }
+
+    @Test
+    void aPlaceholderLegacyKeyRefusesToStartWhileEnabled() {
+        ReflectionTestUtils.setField(authenticator, "legacyApiKey", "change_me_secret_api_key");
+        ReflectionTestUtils.setField(authenticator, "legacyApiKeyEnabled", true);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(authenticator::refusePlaceholderLegacyKey)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("placeholder");
+    }
+
+    @Test
+    void aPlaceholderLegacyKeyDoesNotMatterOnceDisabled() {
+        ReflectionTestUtils.setField(authenticator, "legacyApiKey", "change_me_secret_api_key");
+        ReflectionTestUtils.setField(authenticator, "legacyApiKeyEnabled", false);
+
+        org.assertj.core.api.Assertions.assertThatCode(authenticator::refusePlaceholderLegacyKey).doesNotThrowAnyException();
+    }
 }
