@@ -1,75 +1,78 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
-
-const uuidv4 = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-  const r = Math.random() * 16 | 0;
-  return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-});
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { apiClient } from '../api/client';
+import { useAuth } from './AuthContext';
 
 export interface Repo {
-  id: string;
+  id: string;         // "owner/repo"
   fullName: string;   // "owner/repo"
   url: string;        // "https://github.com/owner/repo"
-  addedAt: string;
 }
 
 interface RepoContextValue {
   repos: Repo[];
   activeRepo: Repo | null;
-  addRepo: (url: string) => Repo | null;
-  removeRepo: (id: string) => void;
   setActiveRepo: (id: string) => void;
+  isLoading: boolean;
+  loadFailed: boolean;
+  refresh: () => void;
 }
 
-const STORAGE_KEY = 'gitoracle:repos';
-const ACTIVE_KEY  = 'gitoracle:activeRepoId';
-
-function parseGitHubUrl(input: string): { fullName: string; url: string } | null {
-  const trimmed = input.trim().replace(/\.git$/, '');
-  // Accept "https://github.com/owner/repo" or "owner/repo"
-  const httpsMatch = trimmed.match(/github\.com\/([^/]+\/[^/]+)$/);
-  if (httpsMatch) return { fullName: httpsMatch[1], url: `https://github.com/${httpsMatch[1]}` };
-  const shortMatch = trimmed.match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)$/);
-  if (shortMatch) return { fullName: shortMatch[1], url: `https://github.com/${shortMatch[1]}` };
-  return null;
-}
+const ACTIVE_KEY = 'gitoracle:activeRepoId';
+/** The list used to live in this browser, where it had no effect on what jobs could use. */
+const OLD_LIST_KEY = 'gitoracle:repos';
 
 const RepoContext = createContext<RepoContextValue>({
-  repos: [], activeRepo: null,
-  addRepo: () => null, removeRepo: () => {}, setActiveRepo: () => {}
+  repos: [], activeRepo: null, setActiveRepo: () => {}, isLoading: false, loadFailed: false, refresh: () => {},
 });
 
-export function RepoProvider({ children }: { children: ReactNode }) {
-  const [repos, setRepos] = useState<Repo[]>(() => {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch { return []; }
-  });
-  const [activeId, setActiveId] = useState<string | null>(() =>
-    localStorage.getItem(ACTIVE_KEY)
-  );
+const readActive = (): string | null => {
+  try {
+    localStorage.removeItem(OLD_LIST_KEY);
+    return localStorage.getItem(ACTIVE_KEY);
+  } catch {
+    return null;
+  }
+};
 
-  useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(repos)); }, [repos]);
-  useEffect(() => { if (activeId) localStorage.setItem(ACTIVE_KEY, activeId); }, [activeId]);
+/**
+ * The repositories are the organisation's real allow-list from the server. Only
+ * which one is "active", a convenience for pre-filling forms, stays in the browser.
+ */
+export function RepoProvider({ children }: { children: ReactNode }) {
+  const { isAuthenticated } = useAuth();
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(readActive);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  const refresh = useCallback(() => {
+    setIsLoading(true);
+    apiClient.get('/repos')
+      .then(({ data }) => {
+        setRepos((data.repos as string[]).map(fullName => ({ id: fullName, fullName, url: `https://github.com/${fullName}` })));
+        setLoadFailed(false);
+      })
+      .catch(() => setLoadFailed(true))
+      .finally(() => setIsLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (isAuthenticated) refresh();
+  }, [isAuthenticated, refresh]);
+
+  const setActiveRepo = (id: string) => {
+    setActiveId(id);
+    try {
+      localStorage.setItem(ACTIVE_KEY, id);
+    } catch {
+      // Storage can be unavailable. It only means the choice isn't remembered.
+    }
+  };
 
   const activeRepo = repos.find(r => r.id === activeId) ?? repos[0] ?? null;
 
-  const addRepo = (input: string): Repo | null => {
-    const parsed = parseGitHubUrl(input);
-    if (!parsed) return null;
-    if (repos.some(r => r.fullName === parsed.fullName)) return repos.find(r => r.fullName === parsed.fullName)!;
-    const repo: Repo = { id: uuidv4(), ...parsed, addedAt: new Date().toISOString() };
-    setRepos(prev => [...prev, repo]);
-    if (!activeId) setActiveId(repo.id);
-    return repo;
-  };
-
-  const removeRepo = (id: string) => {
-    setRepos(prev => prev.filter(r => r.id !== id));
-    if (activeId === id) setActiveId(repos.find(r => r.id !== id)?.id ?? null);
-  };
-
-  const setActiveRepo = (id: string) => setActiveId(id);
-
   return (
-    <RepoContext.Provider value={{ repos, activeRepo, addRepo, removeRepo, setActiveRepo }}>
+    <RepoContext.Provider value={{ repos, activeRepo, setActiveRepo, isLoading, loadFailed, refresh }}>
       {children}
     </RepoContext.Provider>
   );

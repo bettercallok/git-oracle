@@ -263,4 +263,29 @@ class OrganizationServiceTest {
 
         refused(() -> service.removeMember(ORG, actor(owner), UUID.randomUUID()), HttpStatus.NOT_FOUND);
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void renamingNeedsAnAdminAndAFreeNameAndIsAudited() {
+        EntityManager entityManager = mock(EntityManager.class);
+        Tenant tenant = new Tenant();
+        tenant.setOrgName("old");
+        when(entityManager.find(eq(Tenant.class), any())).thenReturn(tenant);
+        jakarta.persistence.TypedQuery<Long> query = mock(jakarta.persistence.TypedQuery.class);
+        when(entityManager.createQuery(any(String.class), eq(Long.class))).thenReturn(query);
+        when(query.setParameter(any(String.class), any())).thenReturn(query);
+        when(query.getSingleResult()).thenReturn(0L, 1L);
+        OrganizationService renaming = new OrganizationService(memberships, invitations, users, sessions, apiKeys, github, audit, entityManager);
+        UUID admin = memberWith(OrgRole.ADMIN);
+        UUID member = memberWith(OrgRole.MEMBER);
+
+        refused(() -> renaming.rename(ORG, actor(member), "new"), HttpStatus.FORBIDDEN);
+
+        renaming.rename(ORG, actor(admin), "new");
+        assertThat(tenant.getOrgName()).isEqualTo("new");
+        verify(audit).record(ORG, "organization.renamed", "new", "was old");
+
+        refused(() -> renaming.rename(ORG, actor(admin), "taken"), HttpStatus.CONFLICT);
+        assertThat(tenant.getOrgName()).isEqualTo("new");
+    }
 }

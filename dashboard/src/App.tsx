@@ -4,11 +4,11 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import {
   ShieldAlert, GitMerge, Flame, BarChart3, BrainCircuit, Activity, TerminalSquare,
-  Wand2, FolderGit2, GitCommitHorizontal, Sun, Moon, LogOut, Menu, X, Plus, BookOpen, KeyRound,
+  Wand2, FolderGit2, GitCommitHorizontal, Sun, Moon, LogOut, Menu, X, Plus, BookOpen, KeyRound, Users, ScrollText,
 } from 'lucide-react';
 import Login from './pages/Login';
 import { RepoProvider, useRepos } from './context/RepoContext';
-import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthProvider, useAuth, ROLE_LABEL } from './context/AuthContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { Logo } from './components/Logo';
 import { LoadingState } from './components/ui';
@@ -30,6 +30,8 @@ const CommitExplorer = lazy(() => import('./pages/CommitExplorer'));
 const CommitDetail = lazy(() => import('./pages/CommitDetail'));
 const DeveloperGuide = lazy(() => import('./pages/DeveloperGuide'));
 const ApiKeys = lazy(() => import('./pages/ApiKeys'));
+const Members = lazy(() => import('./pages/Members'));
+const AuditLog = lazy(() => import('./pages/AuditLog'));
 
 const PAGE_TITLES: [RegExp, string][] = [
   [/^\/$/, 'Jobs'],
@@ -46,6 +48,8 @@ const PAGE_TITLES: [RegExp, string][] = [
   [/^\/system/, 'System status'],
   [/^\/guide/, 'Developer guide'],
   [/^\/api-keys/, 'API keys'],
+  [/^\/members/, 'Members'],
+  [/^\/audit/, 'Audit log'],
 ];
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -132,8 +136,45 @@ function AnimatedRoutes() {
         <Route path="/settings" element={<Navigate to="/system" replace />} />
         <Route path="/guide" element={<PageWrapper><DeveloperGuide /></PageWrapper>} />
         <Route path="/api-keys" element={<PageWrapper><ApiKeys /></PageWrapper>} />
+        <Route path="/members" element={<PageWrapper><Members /></PageWrapper>} />
+        <Route path="/audit" element={<PageWrapper><AuditLog /></PageWrapper>} />
       </Routes>
     </AnimatePresence>
+  );
+}
+
+function OrganizationSwitcher() {
+  const { organizations, activeOrganization, role } = useAuth();
+  const [failed, setFailed] = useState(false);
+  if (!activeOrganization) return null;
+
+  const switchTo = (tenantId: string) => {
+    setFailed(false);
+    apiClient.post('/auth/switch-org', { tenantId })
+      // A full page load, so nothing fetched for the last organisation stays on screen.
+      .then(() => { window.location.href = '/'; })
+      .catch(() => setFailed(true));
+  };
+
+  return (
+    <div className="org-switcher">
+      <div className="repo-pill-label">Organisation{role ? ` · ${ROLE_LABEL[role]}` : ''}</div>
+      {organizations.length > 1 ? (
+        <select
+          className="form-select"
+          aria-label="Switch organisation"
+          value={activeOrganization.id}
+          onChange={e => switchTo(e.target.value)}
+        >
+          {organizations.map(organization => (
+            <option key={organization.id} value={organization.id}>{organization.name ?? organization.id}</option>
+          ))}
+        </select>
+      ) : (
+        <div className="org-switcher-name truncate" title={activeOrganization.name ?? undefined}>{activeOrganization.name}</div>
+      )}
+      {failed && <div className="form-error">Couldn't switch. Please try again.</div>}
+    </div>
   );
 }
 
@@ -176,20 +217,21 @@ const linkClass = ({ isActive }: { isActive: boolean }) => `nav-link ${isActive 
 
 function Sidebar({ open }: { open: boolean }) {
   const { theme, toggleTheme } = useTheme();
-  const { logout, isAuthenticated, user } = useAuth();
+  const { logout, isAuthenticated, user, isPlatformAdmin, canWrite, canManageOrg } = useAuth();
   const escalations = useEscalationCount(isAuthenticated);
 
   return (
     <aside className={`sidebar ${open ? 'open' : ''}`} aria-label="Main navigation">
       <NavLink to="/" className="sidebar-logo hide-mobile"><Logo size={26} /></NavLink>
 
+      <OrganizationSwitcher />
       <ActiveRepoPill />
 
       <div className="sidebar-section">
         <div className="sidebar-section-label">Pipeline</div>
         <nav className="sidebar-nav">
           <NavLink to="/" end className={linkClass}><GitMerge size={16} /> Jobs</NavLink>
-          <NavLink to="/fix" className={linkClass}><Wand2 size={16} /> Ask to fix</NavLink>
+          {canWrite && <NavLink to="/fix" className={linkClass}><Wand2 size={16} /> Ask to fix</NavLink>}
           <NavLink to="/escalations" className={linkClass}>
             <ShieldAlert size={16} /> Escalations
             {escalations > 0 && <span className="nav-hint" style={{ color: 'var(--warning)', background: 'var(--warning-bg)' }}>{escalations}</span>}
@@ -214,13 +256,23 @@ function Sidebar({ open }: { open: boolean }) {
         </nav>
       </div>
 
+      {user && (
+        <div className="sidebar-section">
+          <div className="sidebar-section-label">Organisation</div>
+          <nav className="sidebar-nav">
+            <NavLink to="/members" className={linkClass}><Users size={16} /> Members</NavLink>
+            {canManageOrg && <NavLink to="/audit" className={linkClass}><ScrollText size={16} /> Audit log</NavLink>}
+          </nav>
+        </div>
+      )}
+
       <div className="sidebar-section">
         <div className="sidebar-section-label">System</div>
         <nav className="sidebar-nav">
-          {(!user || user.admin) && (
+          {isPlatformAdmin && (
             <NavLink to="/simulator" className={linkClass}><TerminalSquare size={16} /> Webhook simulator</NavLink>
           )}
-          {(!user || user.admin) && (
+          {isPlatformAdmin && (
             <NavLink to="/system" className={linkClass}><Activity size={16} /> System status</NavLink>
           )}
           <NavLink to="/api-keys" className={linkClass}><KeyRound size={16} /> API keys</NavLink>

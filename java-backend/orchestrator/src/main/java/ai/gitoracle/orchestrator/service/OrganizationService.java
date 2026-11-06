@@ -78,6 +78,25 @@ public class OrganizationService {
     }
 
     @Transactional
+    public void rename(UUID tenantId, Actor actor, String name) {
+        requireRank(tenantId, actor, OrgRole.ADMIN);
+        Tenant tenant = entityManager.find(Tenant.class, tenantId);
+        if (tenant == null) {
+            throw new OrganizationException(HttpStatus.NOT_FOUND, "No such organisation.");
+        }
+        Long taken = entityManager.createQuery("SELECT COUNT(t) FROM Tenant t WHERE t.orgName = :name AND t.id <> :id", Long.class)
+            .setParameter("name", name)
+            .setParameter("id", tenantId)
+            .getSingleResult();
+        if (taken > 0) {
+            throw new OrganizationException(HttpStatus.CONFLICT, "Another organisation already has that name.");
+        }
+        String old = tenant.getOrgName();
+        tenant.setOrgName(name);
+        audit.record(tenantId, "organization.renamed", name, "was " + old);
+    }
+
+    @Transactional
     public OrgInvitation invite(UUID tenantId, Actor actor, String githubLogin, OrgRole role) {
         requireRank(tenantId, actor, role);
         if (entityManager.find(Tenant.class, tenantId) == null) {
