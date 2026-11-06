@@ -1,16 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { GitBranch, ArrowRight, CheckCircle2, Loader2, Search, Zap, FolderGit2, GitPullRequest } from 'lucide-react';
+import { GitBranch, ArrowRight, CheckCircle2, Loader2, Search, Zap, FolderGit2, GitPullRequest, Wand2 } from 'lucide-react';
 import { apiClient } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import { useRepos } from '../context/RepoContext';
 import { containerVariants, itemVariants } from '../utils/motion';
 import { errorMessage } from '../utils/format';
-import { PageHeader, Alert } from '../components/ui';
+import { PageHeader, Alert, EmptyState } from '../components/ui';
 
 type Status = 'idle' | 'loading' | 'success' | 'error';
 
 export default function FixCommand() {
+  const { canWrite } = useAuth();
   const navigate = useNavigate();
   const { repos, activeRepo } = useRepos();
   const [searchParams] = useSearchParams();
@@ -27,6 +29,13 @@ export default function FixCommand() {
   // against was always whatever `git clone` picks with no branch specified.
   const [branch, setBranch]         = useState('');
   const [status, setStatus]         = useState<Status>('idle');
+
+  // The repositories arrive from the server after this page first renders.
+  useEffect(() => {
+    if (!activeRepo) return;
+    setRepoUrl(current => current || activeRepo.url);
+    setTargetRepo(current => current || activeRepo.fullName);
+  }, [activeRepo]);
   const [errorMsg, setErrorMsg]     = useState('');
   const [jobId, setJobId]           = useState('');
   // Default on: run the real Investigator → Planner → Fixer chain. Turning it off
@@ -58,6 +67,16 @@ export default function FixCommand() {
   };
 
   const reset = () => { setStatus('idle'); setRepoUrl(''); setIssueDesc(''); setTargetRepo(''); setBranch(''); setJobId(''); };
+
+  if (!canWrite) {
+    return (
+      <EmptyState
+        icon={<Wand2 size={20} />}
+        title="Your role can't start jobs"
+        description="You're a viewer in this organisation. Ask an admin if you need more access."
+      />
+    );
+  }
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show" style={{ maxWidth: 760 }}>

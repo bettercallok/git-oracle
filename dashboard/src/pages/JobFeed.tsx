@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, CheckCircle2, AlertTriangle, Layers, Search, Wand2, Inbox, WifiOff, XCircle } from 'lucide-react';
 import { apiClient } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import { stateMeta, isRunning, isSucceeded, GROUPS, type StateGroup } from '../utils/jobState';
 import { containerVariants, itemVariants } from '../utils/motion';
 import { formatNumber, formatTime, relativeTime, shortRepo } from '../utils/format';
@@ -67,6 +68,7 @@ function StatusBadge({ state }: { state: string }) {
 }
 
 export default function JobFeed() {
+  const { canWrite } = useAuth();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
@@ -126,7 +128,7 @@ export default function JobFeed() {
       <PageHeader
         title="Jobs"
         description="Every bug GitOracle is working on, from first report to pull request. Updates live."
-        actions={<Link to="/fix" className="btn btn-primary"><Wand2 size={15} /> Ask to fix</Link>}
+        actions={canWrite ? <Link to="/fix" className="btn btn-primary"><Wand2 size={15} /> Ask to fix</Link> : undefined}
       />
 
       <motion.div variants={itemVariants} className="stat-grid">
@@ -232,7 +234,7 @@ export default function JobFeed() {
             tone="accent"
             title="No jobs yet"
             description="Describe a bug in plain English, or send a GitHub webhook, and GitOracle will start investigating."
-            action={<Link to="/fix" className="btn btn-primary"><Wand2 size={15} /> Ask to fix</Link>}
+            action={canWrite ? <Link to="/fix" className="btn btn-primary"><Wand2 size={15} /> Ask to fix</Link> : undefined}
           />
         )}
         {!isLoading && !isError && jobs.length > 0 && visible.length === 0 && (

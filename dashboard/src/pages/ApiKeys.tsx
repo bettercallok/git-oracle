@@ -64,7 +64,7 @@ function NewKeyNotice({ created, onDone }: { created: CreatedKey; onDone: () => 
 }
 
 export default function ApiKeys() {
-  const { user } = useAuth();
+  const { user, canWrite } = useAuth();
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [days, setDays] = useState(90);
@@ -125,7 +125,9 @@ export default function ApiKeys() {
 
       {created && <div style={{ marginBottom: 16 }}><NewKeyNotice created={created} onDone={() => setCreated(null)} /></div>}
 
-      <form className="card api-key-form" onSubmit={submit}>
+      {!canWrite && <div style={{ marginBottom: 16 }}><Alert tone="info">Viewers can't create API keys. Ask an admin if you need one.</Alert></div>}
+
+      {canWrite && <form className="card api-key-form" onSubmit={submit}>
         <div className="api-key-field-name">
           <label className="form-label" htmlFor="api-key-name">Name</label>
           <input
@@ -153,7 +155,7 @@ export default function ApiKeys() {
         <button type="submit" className="btn btn-primary" disabled={!name.trim() || create.isPending}>
           {create.isPending ? 'Creating…' : 'Create key'}
         </button>
-      </form>
+      </form>}
 
       {create.isError && <div style={{ marginBottom: 16 }}><Alert tone="danger">{errorMessage(create.error)}</Alert></div>}
       {revoke.isError && <div style={{ marginBottom: 16 }}><Alert tone="danger">{errorMessage(revoke.error)}</Alert></div>}

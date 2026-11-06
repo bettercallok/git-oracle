@@ -62,6 +62,7 @@ class RouteAccessMatrixTest {
         entry("DELETE /api/v1/keys/{keyPrefix}", Access.SESSION_WRITE),
 
         entry("GET /api/v1/org", Access.READ),
+        entry("PUT /api/v1/org", Access.ORG_ADMIN),
         entry("GET /api/v1/org/members", Access.READ),
         entry("PUT /api/v1/org/members/{userId}/role", Access.ORG_ADMIN),
         entry("DELETE /api/v1/org/members/{userId}", Access.ORG_ADMIN),

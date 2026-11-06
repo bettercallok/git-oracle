@@ -69,16 +69,16 @@ function ServiceTable({ title, services }: { title: string; services: ServiceSta
 }
 
 export default function SystemStatus() {
-  const { user } = useAuth();
+  const { isPlatformAdmin } = useAuth();
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['system-status'],
     queryFn: async () => (await apiClient.get('/admin/system/status')).data as SystemStatusResponse,
     refetchInterval: 15_000,
-    enabled: !user || user.admin,
+    enabled: isPlatformAdmin,
   });
 
-  if (user && !user.admin) {
+  if (!isPlatformAdmin) {
     return (
       <EmptyState
         icon={<Activity size={20} />}

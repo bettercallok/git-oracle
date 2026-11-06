@@ -1588,3 +1588,7 @@ textarea.code-block:focus { border-color: var(--border-focus); box-shadow: 0 0 0
 @media (max-width: 900px) {
   .status-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+.org-switcher { padding: 0 12px; margin-bottom: 10px; }
+.org-switcher .form-select { margin-top: 4px; height: 34px; font-size: 0.84rem; }
+.org-switcher-name { font-size: 0.86rem; font-weight: 500; color: var(--text-primary); margin-top: 2px; }

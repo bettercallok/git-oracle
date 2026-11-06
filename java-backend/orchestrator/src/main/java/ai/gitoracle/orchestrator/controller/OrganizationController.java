@@ -78,6 +78,12 @@ public class OrganizationController {
         return body;
     }
 
+    @PutMapping
+    public ResponseEntity<Void> rename(@Valid @RequestBody Requests.RenameOrganization request) {
+        organizations.rename(TenantContext.requireTenantId(), actor(), request.name().trim());
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/members")
     public List<Map<String, Object>> members() {
         List<Map<String, Object>> out = new ArrayList<>();

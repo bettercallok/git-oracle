@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import { stateMeta, isRunning, PIPELINE_STAGES, stageIndex } from '../utils/jobState';
 import { containerVariants, itemVariants } from '../utils/motion';
 import { duration, formatNumber, formatTime, shortRepo, shortSha } from '../utils/format';
@@ -110,6 +111,7 @@ const STEP_SUB: Partial<Record<StepStatus, string>> = {
 };
 
 export default function JobDetail() {
+  const { canWrite } = useAuth();
   const { jobId } = useParams<{ jobId: string }>();
   const queryClient = useQueryClient();
   const [instructions, setInstructions] = useState('');
@@ -310,7 +312,7 @@ export default function JobDetail() {
         </motion.div>
 
         {/* Human feedback */}
-        <motion.div variants={itemVariants} className="card" style={{ position: 'sticky', top: 24 }}>
+        {canWrite && <motion.div variants={itemVariants} className="card" style={{ position: 'sticky', top: 24 }}>
           <div className="card-title" style={{ marginBottom: 4 }}>
             <RefreshCw size={15} /> Regenerate fix
           </div>
@@ -360,7 +362,7 @@ export default function JobDetail() {
                 : <><Send size={14} /> Regenerate fix</>}
             </button>
           </div>
-        </motion.div>
+        </motion.div>}
       </div>
 
       {/* Every LLM call this job made, read from its Langfuse trace (one trace per job). */}

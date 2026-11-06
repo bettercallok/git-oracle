@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { TerminalSquare, Play, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
@@ -19,11 +19,14 @@ const buildPayload = (repo: string) => JSON.stringify({
 }, null, 2);
 
 export default function Simulator() {
-  const { user } = useAuth();
+  const { isPlatformAdmin } = useAuth();
   const { activeRepo } = useRepos();
   const defaultRepo = activeRepo?.fullName ?? '<owner>/<repo>';
   const [payload, setPayload] = useState(() => buildPayload(defaultRepo));
   const [isLoading, setIsLoading] = useState(false);
+
+  // The repositories arrive from the server after this page first renders.
+  useEffect(() => setPayload(buildPayload(defaultRepo)), [defaultRepo]);
   const [response, setResponse] = useState<{ status: number, data: any } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,7 +57,7 @@ export default function Simulator() {
     }
   };
 
-  if (user && !user.admin) {
+  if (!isPlatformAdmin) {
     return (
       <EmptyState
         icon={<TerminalSquare size={20} />}

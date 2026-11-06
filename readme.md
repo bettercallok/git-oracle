@@ -569,6 +569,8 @@ react + typescript + vite. pages:
 - **webhook simulator** — admins only. simulate a failed github actions run to test the whole pipeline. it starts a real job on an allowed repository, through a server route rather than a signed webhook, so the browser never holds the webhook secret.
 - **system status** — admins only. live health of every service and agent, and the settings really in use: which LLM host and model, whether code leaves your network, kafka and qdrant. read-only: to change a setting, edit `.env` and restart.
 - **API keys** — create and revoke keys for your scripts.
+- **members** — who's in the organisation: invite people, change roles, remove them, and rename it. the sidebar switches between organisations you belong to.
+- **audit log** — admins only. who changed access, and when.
 - **developer guide** — how to get access, run your own copy, and start jobs from other tools. linked at the top of every page.
 
 ### sign-in
@@ -598,7 +600,7 @@ an organisation has members, each with one role. someone can belong to several a
 | invite and remove people, see the audit log, publish eval results | | | ✓ | ✓ |
 | grant or change the owner role | | | | ✓ |
 
-- **inviting:** `POST /api/v1/org/invitations` with `{"githubLogin":"...","role":"MEMBER"}`. it's accepted the next time they sign in, and expires after 7 days. the dashboard page for this is coming; the API works now.
+- **inviting:** `POST /api/v1/org/invitations` with `{"githubLogin":"...","role":"MEMBER"}`. it's accepted the next time they sign in, and expires after 7 days. the **members** page in the dashboard does this too.
 - **a new organisation:** `POST /api/v1/admin/tenants` with `{"name":"..."}`, then give it an owner with `POST /api/v1/admin/tenants/{id}/invitations`.
 - **limits:** nobody can grant or change a role above their own, and an organisation always keeps one owner.
 - **losing access:** changing someone's role or removing them ends their sign-in within seconds. removing them, or making them a viewer, also revokes the API keys they made, within a minute.

@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Check, X, ShieldAlert, AlertCircle } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 
 const formatTime = (raw: string | null | undefined): string => {
   if (!raw) return '—';
@@ -56,6 +57,7 @@ const itemVariants = {
 };
 
 export default function EscalationQueue() {
+  const { canWrite } = useAuth();
   const queryClient = useQueryClient();
 
   const { data: escalations = [], isLoading, isError } = useQuery({
@@ -191,14 +193,14 @@ export default function EscalationQueue() {
                       <ShieldAlert size={14} /> {esc.reason}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  {canWrite && <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                     <motion.button disabled={mutation.isPending} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.95 }} className="btn btn-success" onClick={() => handleAction(esc.id, 'approve')}>
                       <Check size={16} /> {pendingAction?.id === esc.id && pendingAction.action === 'approve' ? 'Approving…' : 'Approve'}
                     </motion.button>
                     <motion.button disabled={mutation.isPending} whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.95 }} className="btn btn-outline" onClick={() => handleAction(esc.id, 'reject')} style={{ color: 'var(--danger)', borderColor: 'var(--danger-bg)' }}>
                       <X size={16} /> {pendingAction?.id === esc.id && pendingAction.action === 'reject' ? 'Rejecting…' : 'Reject'}
                     </motion.button>
-                  </div>
+                  </div>}
                 </div>
               </motion.div>
             ))}

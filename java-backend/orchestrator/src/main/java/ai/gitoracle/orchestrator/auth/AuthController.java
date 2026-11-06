@@ -152,6 +152,7 @@ public class AuthController {
         return users.findById(userId)
             .map(user -> {
                 body.put("kind", "user");
+                body.put("id", userId.toString());
                 body.put("login", user.getGithubLogin());
                 List<Map<String, Object>> organizations = new ArrayList<>();
                 UUID active = TenantContext.requireTenantId();

@@ -76,6 +76,13 @@ public final class Requests {
         String role
     ) {}
 
+    /** PUT /api/v1/org. */
+    public record RenameOrganization(
+        @NotBlank(message = "name is required")
+        @Size(max = 100, message = "name must be at most 100 characters")
+        String name
+    ) {}
+
     /** POST /api/v1/auth/switch-org. */
     public record SwitchOrganization(@jakarta.validation.constraints.NotNull(message = "tenantId is required") java.util.UUID tenantId) {}
 
