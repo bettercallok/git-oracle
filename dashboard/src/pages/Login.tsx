@@ -29,7 +29,6 @@ export default function Login() {
   const signInError = SIGN_IN_ERRORS[searchParams.get('error') ?? ''];
   // null until the server answers. An error means the same as "not available".
   const [githubLogin, setGithubLogin] = useState<boolean | null>(null);
-  const [showKeyForm, setShowKeyForm] = useState(false);
   const [key, setKey] = useState('');
   const [reveal, setReveal] = useState(false);
   const [error, setError] = useState('');
@@ -109,13 +108,8 @@ export default function Login() {
             </a>
           )}
 
-          {githubLogin && !showKeyForm && (
-            <button type="button" className="btn btn-ghost btn-sm btn-block" style={{ marginTop: 12 }} onClick={() => setShowKeyForm(true)}>
-              Use an API key instead
-            </button>
-          )}
-
-          {githubLogin !== null && (!githubLogin || showKeyForm) && <>
+          {/* Only for a copy without GitHub sign-in. People shouldn't handle long-lived keys, and scripts don't log in here. */}
+          {githubLogin === false && <>
           <form onSubmit={handleSubmit} style={{ marginTop: 28 }} noValidate>
             <label className="form-label" htmlFor="api-key">API key</label>
             <div className="input-wrap">

@@ -41,7 +41,7 @@ class AuthControllerTest {
     }
 
     private AuthController controllerFor(String publicApiUrl) {
-        return new AuthController(github, logins, users, publicApiUrl, DASHBOARD + "/");
+        return new AuthController(github, logins, new LoginPolicy("alice", ""), users, publicApiUrl, DASHBOARD + "/");
     }
 
     private static String location(ResponseEntity<?> response) {
@@ -158,6 +158,21 @@ class AuthControllerTest {
     @Test
     void configReportsWhetherGitHubSignInIsAvailable() {
         assertThat(controller.config()).containsEntry("githubLogin", true);
+    }
+
+    @Test
+    void configSaysNoWithoutAppCredentials() {
+        when(github.isConfigured()).thenReturn(false);
+
+        assertThat(controller.config()).containsEntry("githubLogin", false);
+    }
+
+    @Test
+    void configSaysNoWhenNobodyIsInvitedSoAFreshForkKeepsItsKeyForm() {
+        AuthController nobodyInvited = new AuthController(github, logins, new LoginPolicy("", ""), users,
+            "http://localhost:8080", DASHBOARD);
+
+        assertThat(nobodyInvited.config()).containsEntry("githubLogin", false);
     }
 
     private ResponseEntity<java.util.Map<String, Object>> meAs(UUID userId, boolean admin) {

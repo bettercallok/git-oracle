@@ -21,8 +21,8 @@
  * People should normally not be here at all
  * -----------------------------------------
  * Sign in with GitHub sets an `httpOnly` session cookie, which JavaScript cannot
- * read, so the browser never holds a credential. This store only serves the
- * "use an API key" fallback on the login page.
+ * read, so the browser never holds a credential. This store only serves the key
+ * form the login page shows on a copy without GitHub sign-in set up.
  *
  * The cost, stated plainly
  * ------------------------

@@ -83,7 +83,7 @@ OPENAI_API_KEY=<your provider key>`}</Code>
 ./start_local.sh`}</Code>
           </li>
           <li>
-            Open <Inline>http://localhost:5173</Inline>, choose the API key option, and sign in with your generated key:
+            Open <Inline>http://localhost:5173</Inline> and sign in with your generated key:
             <Code>{`grep '^GITORACLE_API_KEY=' .env`}</Code>
           </li>
         </ol>
@@ -102,6 +102,7 @@ OPENAI_API_KEY=<your provider key>`}</Code>
           <li>Set <Inline>GITORACLE_ADMIN_GITHUB_IDS</Inline> to your numeric id, the <Inline>id</Inline> at <Inline>{'https://api.github.com/users/<you>'}</Inline>.</li>
           <li>Add anyone else to <Inline>GITORACLE_INVITED_GITHUB_USERS</Inline>, then restart.</li>
         </ol>
+        <p>The login page then offers GitHub only, without the API key form.</p>
       </Section>
 
       <Section id="access" title="Ways to sign in">
@@ -110,16 +111,15 @@ OPENAI_API_KEY=<your provider key>`}</Code>
             <thead><tr><th>Method</th><th>Best for</th><th>How to get it</th></tr></thead>
             <tbody>
               <tr><td><strong>Sign in with GitHub</strong></td><td>People using the dashboard</td><td>An admin invites your GitHub account.</td></tr>
-              <tr><td><strong>API key</strong></td><td>Scripts and CI</td><td>An admin creates one for your tenant. It's shown only once.</td></tr>
-              <tr><td><strong>Bootstrap key</strong></td><td>The first sign-in on your own copy</td><td><Inline>GITORACLE_API_KEY</Inline> in your <Inline>.env</Inline>. Turn it off before hosting.</td></tr>
+              <tr><td><strong>API key</strong></td><td>Scripts and CI</td><td>Create one on the <strong>API keys</strong> page after signing in. It's shown only once.</td></tr>
+              <tr><td><strong>Bootstrap key</strong></td><td>Your own copy, before GitHub sign-in is set up</td><td><Inline>GITORACLE_API_KEY</Inline> in your <Inline>.env</Inline>. Turn it off before hosting.</td></tr>
             </tbody>
           </table>
         </div>
-        <p>An admin creates an API key like this:</p>
-        <Code>{`curl -X POST http://localhost:8080/api/v1/admin/api-keys \\
-  -H "X-API-Key: $ADMIN_KEY" -H 'Content-Type: application/json' \\
-  -d '{"name":"ci","tenantId":"<tenant id>","expiresInDays":90}'`}</Code>
-        <p>Keep keys out of the repository and out of chat. If one leaks, revoke it with <Inline>{'DELETE /api/v1/admin/api-keys/<prefix>'}</Inline>.</p>
+        <p>
+          API keys are for code, not for signing in to the dashboard. They always expire, can't do admin work, and can't create other keys.
+          Keep them out of the repository and out of chat. If one leaks, revoke it on the same page; it stops working within a minute.
+        </p>
       </Section>
 
       <Section id="jobs" title="Ways to start a job">

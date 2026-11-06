@@ -1565,3 +1565,6 @@ textarea.code-block:focus { border-color: var(--border-focus); box-shadow: 0 0 0
   .guide-public-main { padding: 24px 16px 64px; }
   .main-top-links { margin-top: 0; }
 }
+
+.api-key-form { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; padding: 16px; margin-bottom: 16px; }
+.api-key-field-name { flex: 1; min-width: 200px; }

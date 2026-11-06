@@ -567,6 +567,7 @@ react + typescript + vite. pages:
 - **LLM traces** — every job's LLM calls, drawn in the dashboard (see [LLM traces](#llm-traces)).
 - **webhook simulator** — hand-craft and fire a github webhook payload at the real ingestion endpoint for testing.
 - **settings** — dark/light mode, token budget config.
+- **API keys** — create and revoke keys for your scripts.
 - **developer guide** — how to get access, run your own copy, and start jobs from other tools. linked at the top of every page.
 
 ### sign-in
@@ -581,7 +582,13 @@ people sign in with github; API keys are for scripts, the CLI and CI. to turn it
 
 when hosting, also set `GITORACLE_PUBLIC_API_URL`, `GITORACLE_DASHBOARD_URL` and `GITORACLE_ALLOWED_ORIGINS` to your real https addresses.
 
-a sign-in lasts 7 days and survives reloads. the session is in an `httpOnly` cookie that page scripts can't read. the API-key fallback on the login page holds the key in memory for the tab only, so reloading signs you out.
+a sign-in lasts 7 days and survives reloads. the session is in an `httpOnly` cookie that page scripts can't read.
+
+once that's set up, the login page offers github only. until then it shows an API key form, which holds the key in memory for the tab only, so reloading signs you out. to get back in if github sign-in breaks, blank `GITHUB_APP_CLIENT_ID` and restart.
+
+### API keys
+
+keys are for scripts and CI. after signing in, create them on the **API keys** page: each one is shown once, belongs to your tenant, can't do admin work, and expires (90 days by default, 1 year at most). revoking one takes effect within a minute. a key can't create or revoke other keys. operators can still use `/api/v1/admin/api-keys`.
 
 ## CLI reference
 

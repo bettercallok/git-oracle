@@ -57,6 +57,18 @@ public final class Requests {
 
     private Requests() {}
 
+    /** POST /api/v1/keys — a signed-in user creating a key for their scripts. */
+    public record CreateApiKey(
+        @NotBlank(message = "name is required")
+        @Size(max = 100, message = "name must be at most 100 characters")
+        String name,
+
+        // Optional, but a self-service key always expires: see ApiKeyController.
+        @jakarta.validation.constraints.Min(value = 1, message = "expiresInDays must be at least 1")
+        @jakarta.validation.constraints.Max(value = 365, message = "expiresInDays must be at most 365")
+        Integer expiresInDays
+    ) {}
+
     /** POST /api/v1/jobs — the CLI's entry point. */
     public record CreateJob(
         @NotBlank(message = "repoUrl is required")

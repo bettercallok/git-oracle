@@ -51,6 +51,7 @@ public class AuthController {
 
     private final GitHubOAuthClient github;
     private final LoginService logins;
+    private final LoginPolicy policy;
     private final UserAccountRepository users;
     private final String publicApiUrl;
     private final String dashboardUrl;
@@ -58,20 +59,27 @@ public class AuthController {
 
     public AuthController(GitHubOAuthClient github,
                           LoginService logins,
+                          LoginPolicy policy,
                           UserAccountRepository users,
                           @Value("${gitoracle.auth.public-api-url:http://localhost:8080}") String publicApiUrl,
                           @Value("${gitoracle.auth.dashboard-url:http://localhost:5173}") String dashboardUrl) {
         this.github = github;
         this.logins = logins;
+        this.policy = policy;
         this.users = users;
         this.publicApiUrl = stripTrailingSlash(publicApiUrl);
         this.dashboardUrl = stripTrailingSlash(dashboardUrl);
         this.secureCookies = this.publicApiUrl.startsWith("https://");
     }
 
+    /**
+     * The login page offers GitHub when this is true and an API key form otherwise,
+     * so it must only be true when someone can really get in that way: a new fork
+     * with App credentials but nobody invited still needs its bootstrap key.
+     */
     @GetMapping("/config")
     public Map<String, Object> config() {
-        return Map.of("githubLogin", github.isConfigured());
+        return Map.of("githubLogin", github.isConfigured() && policy.admitsAnyone());
     }
 
     @GetMapping("/github/login")

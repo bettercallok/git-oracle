@@ -46,6 +46,10 @@ public class ApiKey {
     @Column(name = "key_hash", nullable = false, length = 128)
     private String keyHash;
 
+    /** The signed-in user who created this key; null for keys minted through the admin API. */
+    @Column(name = "created_by_user_id")
+    private UUID createdByUserId;
+
     /** Human label so an operator can tell two keys apart when revoking one. */
     @Column(name = "name")
     private String name;
