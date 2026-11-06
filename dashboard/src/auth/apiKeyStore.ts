@@ -18,15 +18,11 @@
  * rather than reading a value left behind for them earlier. That is a real
  * reduction, and it is the honest description of what this buys.
  *
- * Why this is not the real fix
- * ----------------------------
- * The correct answer is that the browser never holds the credential at all: a
- * real login endpoint sets an `httpOnly; Secure; SameSite=Strict` session
- * cookie, which JavaScript cannot read by construction. That needs a user and
- * session system, which this product does not have yet (see CLAUDE.md's
- * "Missing entirely" list — there is no signup, login, user model, or session
- * anywhere; there is one API key). Building it is a project, not a patch, and
- * pretending otherwise here would be worse than saying so.
+ * People should normally not be here at all
+ * -----------------------------------------
+ * Sign in with GitHub sets an `httpOnly` session cookie, which JavaScript cannot
+ * read, so the browser never holds a credential. This store only serves the
+ * "use an API key" fallback on the login page.
  *
  * The cost, stated plainly
  * ------------------------

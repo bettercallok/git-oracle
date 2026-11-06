@@ -2,10 +2,13 @@ import axios from 'axios';
 import { getApiKey, clearApiKey } from '../auth/apiKeyStore';
 
 // Connects to the Java API Gateway
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api/v1';
+export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api/v1';
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
+  // Sends the session cookie from Sign in with GitHub. The API is on another
+  // origin in local development, where a browser would otherwise leave it off.
+  withCredentials: true,
   // No X-Tenant-ID. The tenant is derived server-side from the API key at the
   // gateway, and any client-supplied value is stripped before routing — sending
   // one here would have no effect beyond suggesting to a reader that the
@@ -30,7 +33,10 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     console.error('API Error:', error.response?.data || error.message);
-    if (error.response?.status === 401) {
+    // /auth/* is exempt: a 401 from /auth/me just means "not signed in", and
+    // answering it by reloading /login, which asks again, would loop forever.
+    const isAuthCall = String(error.config?.url ?? '').startsWith('/auth/');
+    if (error.response?.status === 401 && !isAuthCall) {
       clearApiKey();
       window.location.href = '/login';
     }

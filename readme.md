@@ -480,7 +480,7 @@ the dashboard JSON is generated — edit `infrastructure/grafana/scripts/build_d
    ```
    fill in, all in this one root `.env`:
    - `LLM_BASE_URL` (the **full** chat-completions URL, e.g. `https://api.groq.com/openai/v1/chat/completions`), `LLM_MODEL_NAME`, `OPENAI_API_KEY`
-   - `GITORACLE_API_KEY` (bootstrap login key for the dashboard) and `GITORACLE_INTERNAL_TOKEN` (any long random string — every service refuses to start without it)
+   - `GITORACLE_API_KEY` (bootstrap key for scripts and the first sign-in) and `GITORACLE_INTERNAL_TOKEN` (any long random string — every service refuses to start without it)
    - `GITHUB_APP_WEBHOOK_SECRET` / `SENTRY_WEBHOOK_SECRET` if you send webhooks — unsigned or wrongly signed deliveries are rejected
    - `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` for LLM traces (optional; without them the trace views say tracing is off)
    - for real PR creation, your GitHub App: `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, and `GITHUB_PRIVATE_KEY_PATH`. Put the key in `secrets/` (gitignored) in **PKCS#8** form — GitHub gives you PKCS#1, convert once with `openssl pkcs8 -topk8 -nocrypt -in downloaded.pem -out secrets/github-app.pem`. A relative path is resolved from the repo root.
@@ -506,7 +506,7 @@ the dashboard JSON is generated — edit `infrastructure/grafana/scripts/build_d
    ```
 
 5. **interact with gitoracle**
-   open the dashboard (`http://localhost:5173`) and sign in with an API key. from there:
+   open the dashboard (`http://localhost:5173`) and sign in with GitHub, or with an API key if that isn't set up (see [sign-in](#sign-in)). from there:
    - **ask to fix** — describe a bug in plain english, optionally pick a branch, choose whether to run full investigation or the fast direct path, and watch it turn into a PR.
    - **jobs / job page** — live state, the job's timeline, its LLM trace, and "regenerate fix" with your own instructions.
    - **commit explorer** — browse commit history, inspect diffs, chat with `commit_analyst` about any commit.
@@ -568,7 +568,17 @@ react + typescript + vite. pages:
 - **webhook simulator** — hand-craft and fire a github webhook payload at the real ingestion endpoint for testing.
 - **settings** — dark/light mode, token budget config.
 
-the API key is held in memory for the tab only (never written to disk), so reloading the page signs you out.
+### sign-in
+
+people sign in with github; API keys are for scripts, the CLI and CI. to turn it on, in your GitHub App's settings set the callback URL to `http://localhost:8080/api/v1/auth/github/callback` and generate a client secret, then set in `.env`:
+
+- `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`
+- `GITORACLE_ADMIN_GITHUB_IDS` — your numeric github id (the `id` at `https://api.github.com/users/<login>`). admins work in the default tenant.
+- `GITORACLE_INVITED_GITHUB_USERS` — logins of anyone else, comma-separated. each gets an empty tenant of their own; add repositories to it with `POST /api/v1/admin/repos`.
+
+when hosting, also set `GITORACLE_PUBLIC_API_URL`, `GITORACLE_DASHBOARD_URL` and `GITORACLE_ALLOWED_ORIGINS` to your real https addresses.
+
+a sign-in lasts 7 days and survives reloads. the session is in an `httpOnly` cookie that page scripts can't read. the API-key fallback on the login page holds the key in memory for the tab only, so reloading signs you out.
 
 ## CLI reference
 

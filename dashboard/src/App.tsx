@@ -45,10 +45,17 @@ const PAGE_TITLES: [RegExp, string][] = [
 ];
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
   const location = useLocation();
 
-  if (!isAuthenticated && location.pathname !== '/login') {
+  // Wait for /auth/me, so a signed-in reload doesn't flash the login page.
+  if (isLoading) {
+    return <LoadingState />;
+  }
+
+  // Including on /login itself, where the app shell's navigation would otherwise
+  // appear around the login page for someone who isn't signed in.
+  if (!isAuthenticated) {
     return <Login />;
   }
 
@@ -146,7 +153,7 @@ const linkClass = ({ isActive }: { isActive: boolean }) => `nav-link ${isActive 
 
 function Sidebar({ open }: { open: boolean }) {
   const { theme, toggleTheme } = useTheme();
-  const { logout, isAuthenticated } = useAuth();
+  const { logout, isAuthenticated, user } = useAuth();
   const escalations = useEscalationCount(isAuthenticated);
 
   return (
@@ -197,9 +204,9 @@ function Sidebar({ open }: { open: boolean }) {
           className="btn btn-ghost btn-sm"
           style={{ flex: 1, justifyContent: 'flex-start' }}
           onClick={logout}
-          title="Forget the API key held by this tab"
+          title={user ? `Signed in as ${user.login}` : 'Forget the API key held by this tab'}
         >
-          <LogOut size={14} /> Sign out
+          <LogOut size={14} /> <span className="truncate">Sign out{user ? ` ${user.login}` : ''}</span>
         </button>
         <button
           className="btn btn-ghost btn-sm btn-icon"

@@ -1,12 +1,13 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   KeyRound, ArrowRight, Eye, EyeOff, Search, ListChecks, Wrench, FlaskConical,
-  GitPullRequest, AlertCircle, Clock, Terminal,
+  GitPullRequest, AlertCircle, Clock, Terminal, LogIn,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Logo } from '../components/Logo';
+import { API_BASE_URL, apiClient } from '../api/client';
 
 const STAGES = [
   { icon: <Search size={14} />, name: 'Investigate', desc: 'Ranks the commits most likely to have caused the bug.' },
@@ -16,12 +17,30 @@ const STAGES = [
   { icon: <GitPullRequest size={14} />, name: 'Open a pull request', desc: 'Ready for a human to review, merge or send back.' },
 ];
 
+const SIGN_IN_ERRORS: Record<string, string> = {
+  not_invited: 'This GitHub account has not been invited. Ask the person who runs this GitOracle to add you.',
+  cancelled: 'Sign-in was cancelled on GitHub.',
+  login_failed: 'Sign-in with GitHub failed. Please try again.',
+  not_configured: 'Sign in with GitHub is not set up on this server.',
+};
+
 export default function Login() {
+  const [searchParams] = useSearchParams();
+  const signInError = SIGN_IN_ERRORS[searchParams.get('error') ?? ''];
+  // null until the server answers. An error means the same as "not available".
+  const [githubLogin, setGithubLogin] = useState<boolean | null>(null);
+  const [showKeyForm, setShowKeyForm] = useState(false);
   const [key, setKey] = useState('');
   const [reveal, setReveal] = useState(false);
   const [error, setError] = useState('');
   const { login } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    apiClient.get('/auth/config')
+      .then(({ data }) => setGithubLogin(!!data.githubLogin))
+      .catch(() => setGithubLogin(false));
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,8 +96,25 @@ export default function Login() {
           <div className="sidebar-logo auth-mobile-brand" style={{ padding: 0 }}><Logo size={26} /></div>
 
           <h1 className="auth-title">Sign in</h1>
-          <p className="auth-sub">Use an API key issued by your GitOracle gateway.</p>
+          <p className="auth-sub">
+            {githubLogin ? 'Use your GitHub account. Access is by invitation.' : 'Use an API key issued by your GitOracle gateway.'}
+          </p>
 
+          {signInError && <div className="form-error" role="alert" style={{ marginTop: 18 }}><AlertCircle size={13} /> {signInError}</div>}
+
+          {githubLogin && (
+            <a href={`${API_BASE_URL}/auth/github/login`} className="btn btn-primary btn-lg btn-block" style={{ marginTop: 28 }}>
+              <LogIn size={16} /> Sign in with GitHub
+            </a>
+          )}
+
+          {githubLogin && !showKeyForm && (
+            <button type="button" className="btn btn-ghost btn-sm btn-block" style={{ marginTop: 12 }} onClick={() => setShowKeyForm(true)}>
+              Use an API key instead
+            </button>
+          )}
+
+          {githubLogin !== null && (!githubLogin || showKeyForm) && <>
           <form onSubmit={handleSubmit} style={{ marginTop: 28 }} noValidate>
             <label className="form-label" htmlFor="api-key">API key</label>
             <div className="input-wrap">
@@ -128,6 +164,7 @@ export default function Login() {
               </span>
             </div>
           </div>
+          </>}
         </motion.div>
       </main>
     </div>
