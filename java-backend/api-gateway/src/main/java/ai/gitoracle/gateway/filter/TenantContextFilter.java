@@ -2,6 +2,7 @@ package ai.gitoracle.gateway.filter;
 
 import ai.gitoracle.core.model.postgres.ApiKey;
 import ai.gitoracle.core.security.RequestPaths;
+import ai.gitoracle.core.security.RouteAccess;
 import ai.gitoracle.core.security.SessionTokens;
 import ai.gitoracle.gateway.security.ApiKeyAuthenticator;
 import ai.gitoracle.gateway.security.SessionAuthenticator;
@@ -43,7 +44,8 @@ import java.util.UUID;
  *   <li>Any client-supplied {@code X-Tenant-ID} or {@code X-Scopes} header is
  *       <b>stripped</b> before routing, so a caller cannot hand itself an
  *       identity by setting the header the downstream services trust.</li>
- *   <li>Scope-gated paths ({@code /api/v1/admin/**}) require {@code platform:admin}.</li>
+ *   <li>{@link RouteAccess} decides what each route requires: read, write or admin
+ *       scope, a signed-in person, or nothing through the gateway at all.</li>
  * </ul>
  *
  * <h2>Browsers: the session cookie</h2>
@@ -129,14 +131,6 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
         }
     }
 
-    /**
-     * The steps of signing in, which by definition have no credential yet. Exact
-     * matches only; the rest of /api/v1/auth requires a session or key as usual.
-     */
-    private static final Set<String> SIGN_IN_PATHS = Set.of(
-        "/api/v1/auth/config", "/api/v1/auth/github/login", "/api/v1/auth/github/callback"
-    );
-
     /** Paths that bypass authentication entirely. */
     private static final java.util.List<String> EXEMPT_PATHS = java.util.List.of(
         "/actuator", "/health", "/api/v1/health"
@@ -178,7 +172,8 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
 
         // A grant too, so the same care: the raw path must match exactly. The state
         // cookie the callback needs stays on the request (sanitised(null) keeps it).
-        if (SIGN_IN_PATHS.contains(path)) {
+        if (RequestPaths.isCanonical(path)
+                && RouteAccess.resolve(exchange.getRequest().getMethod().name(), path) == RouteAccess.Access.PUBLIC) {
             return chain.filter(exchange.mutate().request(sanitised(exchange, null).build()).build());
         }
 
@@ -230,10 +225,11 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
     }
 
     private Mono<Void> forward(ServerWebExchange exchange, GatewayFilterChain chain, String path, Caller caller) {
-        if (isAdminPath(path) && !caller.scopes().contains(ApiKey.Scopes.PLATFORM_ADMIN)) {
-            logger.warn("Request rejected: {} lacks {} for admin path={}",
-                caller.label(), ApiKey.Scopes.PLATFORM_ADMIN, path);
-            return deny(exchange, HttpStatus.FORBIDDEN, "This credential does not carry the platform:admin scope.");
+        RouteAccess.Access access = RouteAccess.resolve(exchange.getRequest().getMethod().name(), path);
+        if (!RouteAccess.allows(access, caller.scopes(), caller.sessionId() != null)) {
+            logger.warn("Request rejected: {} needs {} for {} path={}",
+                caller.label(), access, exchange.getRequest().getMethod(), path);
+            return deny(exchange, HttpStatus.FORBIDDEN, RouteAccess.refusal(access));
         }
 
         logger.debug("Authorized request tenant={} caller={} path={}", caller.tenantId(), caller.label(), path);
@@ -296,7 +292,7 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
      * mapped — skipped authentication entirely, because the exempt list was
      * tested as a raw string prefix rather than a path prefix.
      *
-     * <p>Exempting is a GRANT, so unlike {@link #isAdminPath} this deliberately
+     * <p>Exempting is a GRANT, so unlike {@link RouteAccess} this deliberately
      * does <em>not</em> canonicalise before comparing: normalising first would
      * exempt {@code /actuator/../api/v1/admin/tenants}, whose literal prefix
      * looks exempt but which resolves to an admin route. Requiring the raw path
@@ -306,21 +302,6 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
     private boolean isExempt(String path) {
         if (!RequestPaths.isCanonical(path)) return false;
         return EXEMPT_PATHS.stream().anyMatch(p -> path.equals(p) || path.startsWith(p + "/"));
-    }
-
-    /**
-     * Matched against the canonicalised path, because this is a DENY rule and
-     * the router does not dispatch on the raw string.
-     *
-     * <p>{@code POST /api/v1/admin;x=1/tenants} was confirmed live to reach
-     * AdminController and create a tenant using an ordinary tenant-scoped API
-     * key holding no {@code platform:admin} scope: this gateway forwarded it
-     * because the raw path did not match the prefix, and Tomcat then stripped
-     * the {@code ;x=1} path parameter before mapping it to the admin route. See
-     * {@link RequestPaths} for the full set.
-     */
-    private boolean isAdminPath(String path) {
-        return RequestPaths.isUnderPrefix(path, "/api/v1/admin");
     }
 
     private Mono<Void> deny(ServerWebExchange exchange, HttpStatus status, String message) {

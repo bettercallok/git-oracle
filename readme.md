@@ -588,7 +588,7 @@ once that's set up, the login page offers github only. until then it shows an AP
 
 ### API keys
 
-keys are for scripts and CI. after signing in, create them on the **API keys** page: each one is shown once, belongs to your tenant, can't do admin work, and expires (90 days by default, 1 year at most). revoking one takes effect within a minute. a key can't create or revoke other keys. operators can still use `/api/v1/admin/api-keys`.
+keys are for scripts and CI. after signing in, create them on the **API keys** page: each one is shown once, belongs to your tenant, is read-only or read and write, can't do admin work, and expires (90 days by default, 1 year at most). revoking one takes effect within a minute. a key can't create or revoke other keys. operators can still use `/api/v1/admin/api-keys`.
 
 ## CLI reference
 

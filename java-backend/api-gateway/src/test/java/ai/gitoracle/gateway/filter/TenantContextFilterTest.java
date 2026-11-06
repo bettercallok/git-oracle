@@ -231,4 +231,73 @@ class TenantContextFilterTest {
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("placeholder");
     }
+
+    private void keyWithScopes(String... scopes) {
+        when(keys.authenticate("gor_key")).thenReturn(Mono.just(Optional.of(
+            new ApiKeyAuthenticator.Principal(TENANT, Set.of(scopes), "abc", false))));
+    }
+
+    private MockServerWebExchange callWithKey(MockServerHttpRequest.BaseBuilder<?> request) {
+        forwarded.set(null);
+        return run(request.header("X-API-Key", "gor_key"));
+    }
+
+    @Test
+    void aReadOnlyKeyCanReadButNotChangeAnything() {
+        keyWithScopes("jobs:read");
+
+        callWithKey(MockServerHttpRequest.get("/api/v1/jobs"));
+        forwardedHeaders();
+
+        MockServerWebExchange write = callWithKey(MockServerHttpRequest.post("/api/v1/trigger"));
+        assertThat(write.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(forwarded.get()).isNull();
+    }
+
+    @Test
+    void aKeyWithNoScopesCanDoNothing() {
+        keyWithScopes();
+
+        assertThat(callWithKey(MockServerHttpRequest.get("/api/v1/jobs")).getResponse().getStatusCode())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(forwarded.get()).isNull();
+    }
+
+    @Test
+    void anApiKeyCannotManageKeysEvenAsAdmin() {
+        keyWithScopes("platform:admin", "jobs:read", "jobs:write");
+
+        assertThat(callWithKey(MockServerHttpRequest.get("/api/v1/keys")).getResponse().getStatusCode())
+            .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void aSessionCanManageKeys() {
+        liveSession("jobs:read", "jobs:write");
+
+        run(withCookie(MockServerHttpRequest.get("/api/v1/keys")));
+
+        forwardedHeaders();
+    }
+
+    @Test
+    void internalRoutesArentReachableThroughTheGatewayEvenForAnAdmin() {
+        liveSession("platform:admin", "jobs:read", "jobs:write");
+
+        for (String path : new String[] {"/api/v1/jobs/1/events", "/api/v1/jobs/1/prompt-version", "/api/v1/budget/1/record"}) {
+            forwarded.set(null);
+            MockServerWebExchange exchange = run(withCookie(MockServerHttpRequest.post(path).header(HttpHeaders.ORIGIN, ORIGIN)));
+            assertThat(exchange.getResponse().getStatusCode()).as(path).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(forwarded.get()).as(path).isNull();
+        }
+    }
+
+    @Test
+    void anEncodedAdminPathIsStillAdmin() {
+        keyWithScopes("jobs:read", "jobs:write");
+
+        assertThat(callWithKey(MockServerHttpRequest.method(org.springframework.http.HttpMethod.GET, java.net.URI.create("/api/v1/%61dmin/tenants")))
+            .getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(forwarded.get()).isNull();
+    }
 }

@@ -41,7 +41,8 @@ public class ApiKeyController {
 
     private static final int DEFAULT_EXPIRY_DAYS = 90;
     private static final int MAX_ACTIVE_KEYS = 25;
-    private static final Set<String> SCOPES = Set.of(ApiKey.Scopes.JOBS_READ, ApiKey.Scopes.JOBS_WRITE);
+    private static final Set<String> READ_WRITE = Set.of(ApiKey.Scopes.JOBS_READ, ApiKey.Scopes.JOBS_WRITE);
+    private static final Set<String> READ_ONLY = Set.of(ApiKey.Scopes.JOBS_READ);
 
     private final ApiKeyRepository apiKeys;
 
@@ -58,6 +59,7 @@ public class ApiKeyController {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("keyPrefix", key.getKeyPrefix());
             row.put("name", key.getName());
+            row.put("scopes", key.scopeSet());
             row.put("createdAt", key.getCreatedAt());
             row.put("lastUsedAt", key.getLastUsedAt());
             row.put("expiresAt", key.getExpiresAt());
@@ -92,7 +94,7 @@ public class ApiKeyController {
         key.setKeyPrefix(generated.prefix());
         key.setKeyHash(generated.hash());
         key.setName(request.name().trim());
-        key.setScopes(ApiKey.Scopes.join(SCOPES));
+        key.setScopes(ApiKey.Scopes.join("read".equals(request.access()) ? READ_ONLY : READ_WRITE));
         key.setCreatedAt(now);
         key.setExpiresAt(now.plusDays(request.expiresInDays() != null ? request.expiresInDays() : DEFAULT_EXPIRY_DAYS));
         apiKeys.save(key);

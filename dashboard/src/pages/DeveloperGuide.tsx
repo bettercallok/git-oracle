@@ -125,7 +125,7 @@ OPENAI_API_KEY=<your provider key>`}</Code>
           </table>
         </div>
         <p>
-          API keys are for code, not for signing in to the dashboard. They always expire, can't do admin work, and can't create other keys.
+          API keys are for code, not for signing in to the dashboard. They can be read-only or read and write, always expire, can't do admin work, and can't create other keys.
           Keep them out of the repository and out of chat. If one leaks, revoke it on the same page; it stops working within a minute.
         </p>
       </Section>

@@ -8,6 +8,7 @@ import { Alert, EmptyState, LoadingState, PageHeader } from '../components/ui';
 interface ApiKeyRow {
   keyPrefix: string;
   name: string;
+  scopes: string[];
   createdAt: string | null;
   lastUsedAt: string | null;
   expiresAt: string | null;
@@ -67,6 +68,7 @@ export default function ApiKeys() {
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [days, setDays] = useState(90);
+  const [access, setAccess] = useState<'read-write' | 'read'>('read-write');
   const [created, setCreated] = useState<CreatedKey | null>(null);
   const [now] = useState(() => Date.now());
 
@@ -77,7 +79,7 @@ export default function ApiKeys() {
   });
 
   const create = useMutation({
-    mutationFn: async () => (await apiClient.post('/keys', { name: name.trim(), expiresInDays: days })).data as CreatedKey,
+    mutationFn: async () => (await apiClient.post('/keys', { name: name.trim(), expiresInDays: days, access })).data as CreatedKey,
     onSuccess: (data) => {
       setCreated(data);
       setName('');
@@ -141,6 +143,13 @@ export default function ApiKeys() {
             {EXPIRY_OPTIONS.map(option => <option key={option.days} value={option.days}>{option.label}</option>)}
           </select>
         </div>
+        <div>
+          <label className="form-label" htmlFor="api-key-access">Access</label>
+          <select id="api-key-access" className="form-select" value={access} onChange={e => setAccess(e.target.value as 'read-write' | 'read')}>
+            <option value="read-write">Read and write</option>
+            <option value="read">Read only</option>
+          </select>
+        </div>
         <button type="submit" className="btn btn-primary" disabled={!name.trim() || create.isPending}>
           {create.isPending ? 'Creating…' : 'Create key'}
         </button>
@@ -159,7 +168,7 @@ export default function ApiKeys() {
           <div className="table-scroll">
             <table className="table">
               <thead>
-                <tr><th>Name</th><th>Key</th><th>Status</th><th>Created</th><th>Last used</th><th>Expires</th><th /></tr>
+                <tr><th>Name</th><th>Key</th><th>Access</th><th>Status</th><th>Created</th><th>Last used</th><th>Expires</th><th /></tr>
               </thead>
               <tbody>
                 {keys.data.map(key => {
@@ -168,6 +177,7 @@ export default function ApiKeys() {
                     <tr key={key.keyPrefix}>
                       <td className="cell-primary">{key.name}</td>
                       <td className="mono">gor_{key.keyPrefix}…</td>
+                      <td>{key.scopes.includes('jobs:write') ? 'Read and write' : 'Read only'}</td>
                       <td>{status}</td>
                       <td>{formatDate(key.createdAt)}</td>
                       <td>{formatDate(key.lastUsedAt)}</td>
