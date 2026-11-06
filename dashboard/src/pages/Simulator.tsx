@@ -1,26 +1,28 @@
 import { useState } from 'react';
 import { TerminalSquare, Play, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { Link } from 'react-router-dom';
 import { apiClient } from '../api/client';
+import { useAuth } from '../context/AuthContext';
+import { useRepos } from '../context/RepoContext';
+import { Alert, EmptyState } from '../components/ui';
 
-/** The webhook endpoints live at the gateway root (/webhook/**), not under the
- *  /api/v1 prefix apiClient is based at — so derive the gateway origin from the
- *  same configured base URL instead of hardcoding one. */
-const WEBHOOK_URL = `${(apiClient.defaults.baseURL || '').replace(/\/api\/v1\/?$/, '')}/webhook/github`;
-
-const defaultPayload = `{
-  "action": "completed",
-  "repository": {
-    "full_name": "bettercallok/git-oracle"
+const buildPayload = (repo: string) => JSON.stringify({
+  action: 'completed',
+  repository: { full_name: repo },
+  workflow_run: {
+    // A job is created once per run id, so each new payload needs its own.
+    id: Date.now(),
+    status: 'completed',
+    conclusion: 'failure',
   },
-  "workflow_run": {
-    "status": "completed",
-    "conclusion": "failure"
-  }
-}`;
+}, null, 2);
 
 export default function Simulator() {
-  const [payload, setPayload] = useState(defaultPayload);
+  const { user } = useAuth();
+  const { activeRepo } = useRepos();
+  const defaultRepo = activeRepo?.fullName ?? '<owner>/<repo>';
+  const [payload, setPayload] = useState(() => buildPayload(defaultRepo));
   const [isLoading, setIsLoading] = useState(false);
   const [response, setResponse] = useState<{ status: number, data: any } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,23 +31,20 @@ export default function Simulator() {
     setIsLoading(true);
     setResponse(null);
     setError(null);
-    
+
     try {
-      // Validate JSON first
       const parsed = JSON.parse(payload);
 
-      // The gateway lets /webhook/** through without a credential, and the
-      // error-ingestor then verifies the HMAC signature. A browser can't sign,
-      // since that would mean shipping the secret to it, so this currently
-      // always gets 401; the Response panel explains that.
-      const res = await apiClient.post(WEBHOOK_URL, parsed);
+      // The server authenticates this as an admin and hands it to the same code a
+      // signed webhook reaches. The browser can't sign it, because that would mean
+      // giving it the webhook secret.
+      const res = await apiClient.post('/admin/webhook-simulator', parsed);
       setResponse({ status: res.status, data: res.data });
+      setPayload(buildPayload(parsed?.repository?.full_name ?? defaultRepo));
     } catch (err: any) {
       if (err instanceof SyntaxError) {
         setError('Invalid JSON payload');
       } else if (err.response) {
-        // Surface the server's actual status/body instead of swallowing it —
-        // an auth or routing failure should be visible in the Response panel.
         setResponse({ status: err.response.status, data: err.response.data });
       } else {
         setError(err.message || 'Failed to connect to API Gateway');
@@ -55,6 +54,16 @@ export default function Simulator() {
     }
   };
 
+  if (user && !user.admin) {
+    return (
+      <EmptyState
+        icon={<TerminalSquare size={20} />}
+        title="Admins only"
+        description="Use Ask to fix to start a job on your repositories."
+      />
+    );
+  }
+
   return (
     <div className="page-container">
       <header className="page-header">
@@ -62,17 +71,23 @@ export default function Simulator() {
           <h1 style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <TerminalSquare color="var(--accent)" /> Webhook Simulator
           </h1>
-          <p className="page-description">Trigger a mock GitHub event to initiate the end-to-end multi-agent workflow.</p>
+          <p className="page-description">Simulate a failed GitHub Actions run to start the full pipeline without waiting for a real one.</p>
         </div>
       </header>
       
+      <div style={{ marginBottom: 24 }}>
+        <Alert tone="warning" title="This starts a real job">
+          It uses your LLM provider and can open a real pull request on the repository in the payload, which must be on your allow-list.
+        </Alert>
+      </div>
+
       <div className="grid" style={{ gridTemplateColumns: '2fr 1fr', gap: 24 }}>
         <div className="card">
           <div className="card-header">
             <h3>GitHub Payload</h3>
             <button 
               className="btn btn-secondary" 
-              onClick={() => setPayload(defaultPayload)}
+              onClick={() => setPayload(buildPayload(defaultRepo))}
               style={{ padding: '6px 12px', fontSize: '0.85rem' }}
             >
               <RefreshCw size={14} style={{ marginRight: 6 }} /> Reset
@@ -183,11 +198,9 @@ export default function Simulator() {
                 }}>
                   {typeof response.data === 'object' ? JSON.stringify(response.data, null, 2) : response.data}
                 </pre>
-                {response.status === 401 && (
-                  <p style={{ margin: '12px 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                    Rejected because the request has no valid signature. Webhooks must be signed with{' '}
-                    <code className="inline">GITHUB_APP_WEBHOOK_SECRET</code>, and a browser can't do that safely, so
-                    this page can't start a job yet. Use <strong>Ask to fix</strong> instead.
+                {response.status === 202 && (
+                  <p style={{ margin: '12px 0 0', fontSize: '0.85rem' }}>
+                    <Link to="/">Follow it on the Jobs page</Link>.
                   </p>
                 )}
               </motion.div>
