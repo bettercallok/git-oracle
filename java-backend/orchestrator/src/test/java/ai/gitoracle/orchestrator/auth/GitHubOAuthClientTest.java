@@ -93,4 +93,19 @@ class GitHubOAuthClientTest {
         assertThat(new GitHubOAuthClient(http, "your_client_id", "s", "w", "a").isConfigured()).isFalse();
         assertThat(new GitHubOAuthClient(http, "c", "your_secret", "w", "a").isConfigured()).isFalse();
     }
+
+    @Test
+    void lookingUpAnAccountReturnsItsPermanentId() {
+        server.expect(requestTo("https://api.gh.test/users/alice"))
+            .andRespond(withSuccess("{\"id\":42,\"login\":\"Alice\"}", MediaType.APPLICATION_JSON));
+
+        assertThat(client.lookupUser("alice")).contains(new GitHubOAuthClient.GitHubUser(42, "Alice"));
+    }
+
+    @Test
+    void anUnknownAccountIsEmptyRatherThanAnError() {
+        server.expect(requestTo("https://api.gh.test/users/ghost")).andRespond(withStatus(HttpStatus.NOT_FOUND));
+
+        assertThat(client.lookupUser("ghost")).isEmpty();
+    }
 }

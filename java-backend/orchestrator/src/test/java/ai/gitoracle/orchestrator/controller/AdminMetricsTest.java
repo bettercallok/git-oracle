@@ -29,7 +29,7 @@ class AdminMetricsTest {
         when(tokens.getSingleResult()).thenReturn(1234L);
         UUID tenant = UUID.randomUUID();
 
-        Map<String, Object> body = new AdminController(entityManager).getTenantMetrics(tenant.toString()).getBody();
+        Map<String, Object> body = new AdminController(entityManager, null, null).getTenantMetrics(tenant.toString()).getBody();
 
         assertThat(body).containsEntry("tokensUsed", 1234L);
         verify(tokens).setParameter("tenantId", tenant);

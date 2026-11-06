@@ -1,9 +1,14 @@
 package ai.gitoracle.orchestrator.auth;
 
+import ai.gitoracle.core.model.postgres.OrgMembership;
+import ai.gitoracle.core.model.postgres.Tenant;
 import ai.gitoracle.core.security.ApiKeys;
 import ai.gitoracle.core.security.SessionTokens;
+import ai.gitoracle.orchestrator.dto.Requests;
 import ai.gitoracle.orchestrator.repository.UserAccountRepository;
 import ai.gitoracle.orchestrator.security.TenantContext;
+import jakarta.persistence.EntityManager;
+import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,8 +22,10 @@ import org.springframework.web.client.RestClientException;
 
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -53,6 +60,7 @@ public class AuthController {
     private final LoginService logins;
     private final LoginPolicy policy;
     private final UserAccountRepository users;
+    private final EntityManager entityManager;
     private final String publicApiUrl;
     private final String dashboardUrl;
     private final boolean secureCookies;
@@ -61,12 +69,14 @@ public class AuthController {
                           LoginService logins,
                           LoginPolicy policy,
                           UserAccountRepository users,
+                          EntityManager entityManager,
                           @Value("${gitoracle.auth.public-api-url:http://localhost:8080}") String publicApiUrl,
                           @Value("${gitoracle.auth.dashboard-url:http://localhost:5173}") String dashboardUrl) {
         this.github = github;
         this.logins = logins;
         this.policy = policy;
         this.users = users;
+        this.entityManager = entityManager;
         this.publicApiUrl = stripTrailingSlash(publicApiUrl);
         this.dashboardUrl = stripTrailingSlash(dashboardUrl);
         this.secureCookies = this.publicApiUrl.startsWith("https://");
@@ -143,9 +153,37 @@ public class AuthController {
             .map(user -> {
                 body.put("kind", "user");
                 body.put("login", user.getGithubLogin());
+                List<Map<String, Object>> organizations = new ArrayList<>();
+                UUID active = TenantContext.requireTenantId();
+                for (OrgMembership membership : logins.organizationsOf(userId)) {
+                    Tenant tenant = entityManager.find(Tenant.class, membership.getTenantId());
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("id", membership.getTenantId().toString());
+                    row.put("name", tenant == null ? null : tenant.getOrgName());
+                    row.put("role", membership.getRole());
+                    row.put("active", membership.getTenantId().equals(active));
+                    organizations.add(row);
+                    if (membership.getTenantId().equals(active)) body.put("role", membership.getRole());
+                }
+                body.put("organizations", organizations);
                 return ResponseEntity.ok(body);
             })
             .orElseGet(() -> ResponseEntity.status(HttpStatus.UNAUTHORIZED).build());
+    }
+
+    /** Moves this session to another organisation the person belongs to. */
+    @PostMapping("/switch-org")
+    public ResponseEntity<Map<String, String>> switchOrganization(
+            @RequestHeader(name = "X-Session-ID", required = false) UUID sessionId,
+            @Valid @RequestBody Requests.SwitchOrganization request) {
+        if (sessionId == null) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "This requires signing in with GitHub."));
+        }
+        if (!logins.switchOrganization(sessionId, request.tenantId())) {
+            // Not-a-member and no-such-organisation look the same on purpose.
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "You're not a member of that organisation."));
+        }
+        return ResponseEntity.ok(Map.of("tenantId", request.tenantId().toString()));
     }
 
     @PostMapping("/logout")

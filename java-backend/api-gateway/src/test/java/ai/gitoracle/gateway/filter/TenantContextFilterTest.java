@@ -300,4 +300,38 @@ class TenantContextFilterTest {
             .getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(forwarded.get()).isNull();
     }
+
+    @Test
+    void switchingOrganisationEvictsTheCachedSession() {
+        liveSession("jobs:read");
+
+        run(withCookie(MockServerHttpRequest.post("/api/v1/auth/switch-org").header(HttpHeaders.ORIGIN, ORIGIN)));
+
+        verify(sessions).evict(TOKEN);
+    }
+
+    @Test
+    void aViewerCantChangeAnythingOrManageTheOrganisation() {
+        liveSession("jobs:read");
+
+        for (String path : new String[] {"/api/v1/trigger", "/api/v1/org/invitations", "/api/v1/keys"}) {
+            forwarded.set(null);
+            MockServerWebExchange exchange = run(withCookie(MockServerHttpRequest.post(path).header(HttpHeaders.ORIGIN, ORIGIN)));
+            assertThat(exchange.getResponse().getStatusCode()).as(path).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(forwarded.get()).as(path).isNull();
+        }
+    }
+
+    @Test
+    void anOrgAdminCanManageTheOrganisationButNotThePlatform() {
+        liveSession("jobs:read", "jobs:write", "org:admin");
+
+        run(withCookie(MockServerHttpRequest.post("/api/v1/org/invitations").header(HttpHeaders.ORIGIN, ORIGIN)));
+        forwardedHeaders();
+
+        forwarded.set(null);
+        MockServerWebExchange exchange = run(withCookie(MockServerHttpRequest.get("/api/v1/admin/repos")));
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(forwarded.get()).isNull();
+    }
 }

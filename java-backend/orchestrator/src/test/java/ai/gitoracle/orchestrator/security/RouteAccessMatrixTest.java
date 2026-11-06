@@ -1,5 +1,6 @@
 package ai.gitoracle.orchestrator.security;
 
+import ai.gitoracle.core.model.postgres.OrgRole;
 import ai.gitoracle.core.security.RouteAccess;
 import ai.gitoracle.core.security.RouteAccess.Access;
 import org.junit.jupiter.api.Test;
@@ -32,6 +33,7 @@ class RouteAccessMatrixTest {
         entry("GET /api/v1/auth/github/callback", Access.PUBLIC),
         entry("GET /api/v1/auth/me", Access.AUTHENTICATED),
         entry("POST /api/v1/auth/logout", Access.AUTHENTICATED),
+        entry("POST /api/v1/auth/switch-org", Access.AUTHENTICATED),
 
         entry("GET /api/v1/repos", Access.READ),
         entry("GET /api/v1/jobs", Access.READ),
@@ -52,19 +54,29 @@ class RouteAccessMatrixTest {
         entry("POST /api/v1/trigger", Access.WRITE),
         entry("POST /api/v1/jobs/{jobId}/feedback", Access.WRITE),
         entry("POST /api/v1/escalations/{id}/resolve", Access.WRITE),
-        entry("POST /api/v1/evals", Access.WRITE),
         // Reading a commit, but it spends LLM tokens.
         entry("POST /api/v1/commits/{sha}/analyze", Access.WRITE),
 
         entry("GET /api/v1/keys", Access.SESSION),
-        entry("POST /api/v1/keys", Access.SESSION),
-        entry("DELETE /api/v1/keys/{keyPrefix}", Access.SESSION),
+        entry("POST /api/v1/keys", Access.SESSION_WRITE),
+        entry("DELETE /api/v1/keys/{keyPrefix}", Access.SESSION_WRITE),
+
+        entry("GET /api/v1/org", Access.READ),
+        entry("GET /api/v1/org/members", Access.READ),
+        entry("PUT /api/v1/org/members/{userId}/role", Access.ORG_ADMIN),
+        entry("DELETE /api/v1/org/members/{userId}", Access.ORG_ADMIN),
+        entry("GET /api/v1/org/invitations", Access.ORG_ADMIN),
+        entry("POST /api/v1/org/invitations", Access.ORG_ADMIN),
+        entry("DELETE /api/v1/org/invitations/{id}", Access.ORG_ADMIN),
+        entry("GET /api/v1/org/audit", Access.ORG_ADMIN),
+        entry("POST /api/v1/evals", Access.ORG_ADMIN),
 
         entry("POST /api/v1/jobs/{id}/events", Access.INTERNAL),
         entry("POST /api/v1/jobs/{jobId}/prompt-version", Access.INTERNAL),
         entry("POST /api/v1/budget/{jobId}/record", Access.INTERNAL),
 
         entry("POST /api/v1/admin/tenants", Access.ADMIN),
+        entry("POST /api/v1/admin/tenants/{id}/invitations", Access.ADMIN),
         entry("GET /api/v1/admin/tenants/{id}/metrics", Access.ADMIN),
         entry("POST /api/v1/admin/tenants/{id}/sentry-secret", Access.ADMIN),
         entry("POST /api/v1/admin/api-keys", Access.ADMIN),
@@ -79,19 +91,34 @@ class RouteAccessMatrixTest {
     /** Who can call what. A key is {session=false}; a person signed in is {session=true}. */
     private record Caller(String name, Set<String> scopes, boolean session) {}
 
+    private static final Set<Access> ANYONE = Set.of(Access.PUBLIC, Access.AUTHENTICATED);
+
+    private static Set<Access> plus(Access... more) {
+        Set<Access> all = new java.util.HashSet<>(ANYONE);
+        all.addAll(Set.of(more));
+        return all;
+    }
+
     private static final Caller READ_KEY = new Caller("read-only key", Set.of("jobs:read"), false);
     private static final Caller WRITE_KEY = new Caller("read-write key", Set.of("jobs:read", "jobs:write"), false);
     private static final Caller ADMIN_KEY = new Caller("admin key", Set.of("platform:admin", "jobs:read", "jobs:write"), false);
-    private static final Caller MEMBER = new Caller("signed-in member", Set.of("jobs:read", "jobs:write"), true);
-    private static final Caller ADMIN = new Caller("signed-in admin", Set.of("platform:admin", "jobs:read", "jobs:write"), true);
+    private static final Caller VIEWER = new Caller("viewer", new java.util.HashSet<>(OrgRole.VIEWER.scopes()), true);
+    private static final Caller MEMBER = new Caller("member", new java.util.HashSet<>(OrgRole.MEMBER.scopes()), true);
+    private static final Caller ORG_ADMIN = new Caller("org admin", new java.util.HashSet<>(OrgRole.ADMIN.scopes()), true);
+    private static final Caller ORG_OWNER = new Caller("org owner", new java.util.HashSet<>(OrgRole.OWNER.scopes()), true);
+    private static final Caller PLATFORM_ADMIN = new Caller("platform admin", OrgRole.VIEWER.sessionScopes(true), true);
 
     private static final Map<Caller, Set<Access>> ALLOWED = new LinkedHashMap<>();
     static {
-        ALLOWED.put(READ_KEY, Set.of(Access.PUBLIC, Access.AUTHENTICATED, Access.READ));
-        ALLOWED.put(WRITE_KEY, Set.of(Access.PUBLIC, Access.AUTHENTICATED, Access.READ, Access.WRITE));
-        ALLOWED.put(ADMIN_KEY, Set.of(Access.PUBLIC, Access.AUTHENTICATED, Access.READ, Access.WRITE, Access.ADMIN));
-        ALLOWED.put(MEMBER, Set.of(Access.PUBLIC, Access.AUTHENTICATED, Access.READ, Access.WRITE, Access.SESSION));
-        ALLOWED.put(ADMIN, Set.of(Access.PUBLIC, Access.AUTHENTICATED, Access.READ, Access.WRITE, Access.ADMIN, Access.SESSION));
+        ALLOWED.put(READ_KEY, plus(Access.READ));
+        ALLOWED.put(WRITE_KEY, plus(Access.READ, Access.WRITE));
+        ALLOWED.put(ADMIN_KEY, plus(Access.READ, Access.WRITE, Access.ORG_ADMIN, Access.ADMIN));
+        ALLOWED.put(VIEWER, plus(Access.READ, Access.SESSION));
+        ALLOWED.put(MEMBER, plus(Access.READ, Access.WRITE, Access.SESSION, Access.SESSION_WRITE));
+        Set<Access> orgManager = plus(Access.READ, Access.WRITE, Access.SESSION, Access.SESSION_WRITE, Access.ORG_ADMIN);
+        ALLOWED.put(ORG_ADMIN, orgManager);
+        ALLOWED.put(ORG_OWNER, orgManager);
+        ALLOWED.put(PLATFORM_ADMIN, plus(Access.READ, Access.WRITE, Access.SESSION, Access.SESSION_WRITE, Access.ORG_ADMIN, Access.ADMIN));
     }
 
     private static Set<String> routesInThisService() throws ClassNotFoundException {
@@ -143,9 +170,18 @@ class RouteAccessMatrixTest {
     }
 
     @Test
+    void aViewerCanChangeNothing() {
+        EXPECTED.forEach((route, access) -> {
+            if (!route.startsWith("GET ") && access != Access.AUTHENTICATED) {
+                assertThat(RouteAccess.allows(access, VIEWER.scopes(), true)).as(route).isFalse();
+            }
+        });
+    }
+
+    @Test
     void aReadOnlyKeyCanStartNothing() {
         EXPECTED.forEach((route, access) -> {
-            if (!route.startsWith("GET ") && !route.equals("POST /api/v1/auth/logout")) {
+            if (!route.startsWith("GET ") && access != Access.AUTHENTICATED) {
                 assertThat(RouteAccess.allows(access, READ_KEY.scopes(), false)).as(route).isFalse();
             }
         });

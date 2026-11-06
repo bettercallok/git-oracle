@@ -5,6 +5,7 @@ import ai.gitoracle.core.security.ApiKeys;
 import ai.gitoracle.orchestrator.dto.Requests;
 import ai.gitoracle.orchestrator.repository.ApiKeyRepository;
 import ai.gitoracle.orchestrator.security.TenantContext;
+import ai.gitoracle.orchestrator.service.AuditLog;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,9 +46,18 @@ public class ApiKeyController {
     private static final Set<String> READ_ONLY = Set.of(ApiKey.Scopes.JOBS_READ);
 
     private final ApiKeyRepository apiKeys;
+    private final AuditLog audit;
 
-    public ApiKeyController(ApiKeyRepository apiKeys) {
+    public ApiKeyController(ApiKeyRepository apiKeys, AuditLog audit) {
         this.apiKeys = apiKeys;
+        this.audit = audit;
+    }
+
+    /** Organisation admins see and revoke all of its keys; everyone else, only their own. */
+    private static boolean mayManage(ApiKey key, UUID userId) {
+        return TenantContext.isPlatformAdmin()
+            || TenantContext.scopes().contains(ApiKey.Scopes.ORG_ADMIN)
+            || userId.equals(key.getCreatedByUserId());
     }
 
     @GetMapping
@@ -56,6 +66,7 @@ public class ApiKeyController {
 
         List<Map<String, Object>> out = new ArrayList<>();
         for (ApiKey key : apiKeys.findByTenantIdOrderByCreatedAtDesc(TenantContext.requireTenantId())) {
+            if (!mayManage(key, userId)) continue;
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("keyPrefix", key.getKeyPrefix());
             row.put("name", key.getName());
@@ -99,6 +110,7 @@ public class ApiKeyController {
         key.setExpiresAt(now.plusDays(request.expiresInDays() != null ? request.expiresInDays() : DEFAULT_EXPIRY_DAYS));
         apiKeys.save(key);
 
+        audit.record(tenantId, userId, "api_key.created", generated.prefix(), key.getName());
         logger.info("User {} created API key {} for tenant {}", userId, generated.prefix(), tenantId);
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -118,12 +130,13 @@ public class ApiKeyController {
 
         ApiKey key = apiKeys.findByKeyPrefix(keyPrefix).orElse(null);
         // Not-found and not-yours look the same, so this can't reveal other tenants' prefixes.
-        if (key == null || !TenantContext.requireTenantId().equals(key.getTenantId())) {
+        if (key == null || !TenantContext.requireTenantId().equals(key.getTenantId()) || !mayManage(key, userId)) {
             return ResponseEntity.notFound().build();
         }
         if (key.getRevokedAt() == null) {
             key.setRevokedAt(OffsetDateTime.now());
             apiKeys.save(key);
+            audit.record(key.getTenantId(), userId, "api_key.revoked", keyPrefix, key.getName());
             logger.info("User {} revoked API key {} for tenant {}", userId, keyPrefix, key.getTenantId());
         }
         return ResponseEntity.noContent().build();

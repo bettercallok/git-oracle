@@ -14,5 +14,7 @@ public interface UserSessionRepository extends JpaRepository<UserSession, UUID> 
 
     List<UserSession> findByRevokedAtIsNullAndExpiresAtAfter(OffsetDateTime now);
 
+    List<UserSession> findByUserIdAndTenantIdAndRevokedAtIsNull(UUID userId, UUID tenantId);
+
     void deleteByExpiresAtBefore(OffsetDateTime cutoff);
 }

@@ -549,7 +549,8 @@ routed through the api-gateway (`:8080`) and scoped to the caller's tenant unles
 - `GET /api/v1/prompts/stats` — per-prompt-version success rate and per-agent average tokens.
 - `GET /api/v1/evals` / `POST /api/v1/evals` — eval harness run history.
 - `GET /api/v1/budget/{jobId}` — a job's token budget.
-- `/api/v1/admin/**` (requires `platform:admin`) — tenants and their metrics, `GET /api/v1/admin/system/status`, the repository allow-lists, the webhook simulator, and `POST` / `GET` / `DELETE /api/v1/admin/api-keys`.
+- `/api/v1/org/**` — the active organisation: `GET` itself and `/members`, and for org admins `/members/{id}/role`, `/members/{id}`, `/invitations` and `/audit`. `POST /api/v1/auth/switch-org` changes the active one.
+- `/api/v1/admin/**` (requires `platform:admin`) — tenants and their metrics and invitations, `GET /api/v1/admin/system/status`, the repository allow-lists, the webhook simulator, and `POST` / `GET` / `DELETE /api/v1/admin/api-keys`.
 - **service-internal** (not gateway-routed, `X-Internal-Token` required): `POST :9006/validate/patch` (guardrails), `POST :8084/test` (test runner), `POST :8085/pull-request` and `GET :8085/pull-request/status` (github-bot), `POST /api/v1/budget/{jobId}/record`, `POST /api/v1/jobs/{id}/events`, `POST /api/v1/jobs/{id}/prompt-version` (from agents), `GET :9005/prompts/{agent}/{key}` and `.../active`, `PUT :9005/prompts/{agent}/{key}/activate/{version}`.
 
 ## frontend dashboard
@@ -577,14 +578,31 @@ if you fork gitoracle, your copy is separate: nobody issues you a key, and `./st
 people sign in with github; API keys are for scripts, the CLI and CI. to turn it on, in your GitHub App's settings set the callback URL to `http://localhost:8080/api/v1/auth/github/callback` and generate a client secret, then set in `.env`:
 
 - `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`
-- `GITORACLE_ADMIN_GITHUB_IDS` — your numeric github id (the `id` at `https://api.github.com/users/<login>`). admins work in the default tenant.
-- `GITORACLE_INVITED_GITHUB_USERS` — logins of anyone else, comma-separated. each gets an empty tenant of their own; add repositories to it with `POST /api/v1/admin/repos`.
+- `GITORACLE_ADMIN_GITHUB_IDS` — your numeric github id (the `id` at `https://api.github.com/users/<login>`). platform admins run the system and own the default organisation.
+- `GITORACLE_INVITED_GITHUB_USERS` — optional: logins who each get an empty organisation of their own. add repositories to it with `POST /api/v1/admin/repos`.
 
 when hosting, also set `GITORACLE_PUBLIC_API_URL`, `GITORACLE_DASHBOARD_URL` and `GITORACLE_ALLOWED_ORIGINS` to your real https addresses.
 
 a sign-in lasts 7 days and survives reloads. the session is in an `httpOnly` cookie that page scripts can't read.
 
 once that's set up, the login page offers github only. until then it shows an API key form, which holds the key in memory for the tab only, so reloading signs you out. to get back in if github sign-in breaks, blank `GITHUB_APP_CLIENT_ID` and restart.
+
+### organisations and roles
+
+an organisation has members, each with one role. someone can belong to several and switch between them. a platform admin is separate: they run the system, and only they create organisations and manage repository allow-lists for now.
+
+| can do | viewer | member | admin | owner |
+|---|---|---|---|---|
+| see jobs and traces | ✓ | ✓ | ✓ | ✓ |
+| start jobs, resolve escalations, create API keys | | ✓ | ✓ | ✓ |
+| invite and remove people, see the audit log, publish eval results | | | ✓ | ✓ |
+| grant or change the owner role | | | | ✓ |
+
+- **inviting:** `POST /api/v1/org/invitations` with `{"githubLogin":"...","role":"MEMBER"}`. it's accepted the next time they sign in, and expires after 7 days. the dashboard page for this is coming; the API works now.
+- **a new organisation:** `POST /api/v1/admin/tenants` with `{"name":"..."}`, then give it an owner with `POST /api/v1/admin/tenants/{id}/invitations`.
+- **limits:** nobody can grant or change a role above their own, and an organisation always keeps one owner.
+- **losing access:** changing someone's role or removing them ends their sign-in within seconds. removing them, or making them a viewer, also revokes the API keys they made, within a minute.
+- **record:** these changes are in the audit log, `GET /api/v1/org/audit`.
 
 ### API keys
 

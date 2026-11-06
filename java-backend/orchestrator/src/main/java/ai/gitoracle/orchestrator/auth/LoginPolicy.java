@@ -1,6 +1,5 @@
 package ai.gitoracle.orchestrator.auth;
 
-import ai.gitoracle.core.model.postgres.ApiKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -13,7 +12,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Who may sign in, and with what scopes.
+ * The operator's lists in the environment: who runs the platform, and who gets an
+ * organisation of their own. Anyone else needs an invitation (see LoginService).
  *
  * <p>Sign-in is invite-only because every job spends the operator's LLM budget
  * and runs repository code on their machine.
@@ -26,8 +26,6 @@ import java.util.stream.Collectors;
 public class LoginPolicy {
 
     private static final Logger logger = LoggerFactory.getLogger(LoginPolicy.class);
-
-    public record Decision(boolean allowed, boolean admin, Set<String> scopes) {}
 
     private final Set<String> invitedLogins;
     private final Set<Long> adminIds;
@@ -43,15 +41,13 @@ public class LoginPolicy {
             .collect(Collectors.toSet());
     }
 
-    public Decision decide(long githubId, String login) {
-        if (adminIds.contains(githubId)) {
-            return new Decision(true, true,
-                Set.of(ApiKey.Scopes.PLATFORM_ADMIN, ApiKey.Scopes.JOBS_READ, ApiKey.Scopes.JOBS_WRITE));
-        }
-        if (login != null && invitedLogins.contains(login.toLowerCase(Locale.ROOT))) {
-            return new Decision(true, false, Set.of(ApiKey.Scopes.JOBS_READ, ApiKey.Scopes.JOBS_WRITE));
-        }
-        return new Decision(false, false, Set.of());
+    public boolean isPlatformAdmin(long githubId) {
+        return adminIds.contains(githubId);
+    }
+
+    /** On the operator's list, so they get an organisation of their own. */
+    public boolean isInvited(String login) {
+        return login != null && invitedLogins.contains(login.toLowerCase(Locale.ROOT));
     }
 
     /** With both lists empty nobody can sign in, so GitHub sign-in can't be anyone's only way in. */

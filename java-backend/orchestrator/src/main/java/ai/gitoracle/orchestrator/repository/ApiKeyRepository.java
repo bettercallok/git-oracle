@@ -24,4 +24,6 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, UUID> {
     List<ApiKey> findByTenantIdOrderByCreatedAtDesc(UUID tenantId);
 
     long countByRevokedAtIsNull();
+
+    List<ApiKey> findByTenantIdAndCreatedByUserIdAndRevokedAtIsNull(UUID tenantId, UUID createdByUserId);
 }

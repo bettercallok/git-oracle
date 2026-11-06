@@ -96,7 +96,8 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
     static final String USER_HEADER = "X-User-ID";
     static final String SESSION_HEADER = "X-Session-ID";
 
-    private static final String LOGOUT_PATH = "/api/v1/auth/logout";
+    /** These change the session row, so the gateway's cached copy must go. */
+    private static final Set<String> SESSION_CHANGING_PATHS = Set.of("/api/v1/auth/logout", "/api/v1/auth/switch-org");
 
     /** Who a request was authenticated as, by either credential. */
     private record Caller(UUID tenantId, Set<String> scopes, String label, UUID userId, UUID sessionId) {}
@@ -218,7 +219,7 @@ public class TenantContextFilter implements GlobalFilter, Ordered {
                     "session " + session.sessionId(), session.userId(), session.sessionId()));
                 // After the orchestrator has revoked the row: evicting any earlier
                 // could let a concurrent request cache the session again.
-                return LOGOUT_PATH.equals(path)
+                return SESSION_CHANGING_PATHS.contains(path)
                     ? forwarded.doFinally(signal -> sessionAuthenticator.evict(token))
                     : forwarded;
             });

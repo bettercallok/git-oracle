@@ -9,39 +9,23 @@ class LoginPolicyTest {
     private final LoginPolicy policy = new LoginPolicy(" Alice , bob ", "42, not-a-number");
 
     @Test
-    void anInvitedLoginMayJoinWithoutAdminAndCaseDoesNotMatter() {
-        LoginPolicy.Decision decision = policy.decide(7, "ALICE");
-
-        assertThat(decision.allowed()).isTrue();
-        assertThat(decision.admin()).isFalse();
-        assertThat(decision.scopes()).containsExactlyInAnyOrder("jobs:read", "jobs:write");
+    void anInvitedLoginIsMatchedWhateverItsCase() {
+        assertThat(policy.isInvited("ALICE")).isTrue();
+        assertThat(policy.isInvited("mallory")).isFalse();
+        assertThat(policy.isInvited(null)).isFalse();
     }
 
     @Test
-    void anAdminIsMatchedByIdWhateverTheLoginIs() {
-        LoginPolicy.Decision decision = policy.decide(42, "renamed");
-
-        assertThat(decision.allowed()).isTrue();
-        assertThat(decision.admin()).isTrue();
-        assertThat(decision.scopes()).contains("platform:admin");
+    void anAdminIsMatchedByIdNeverByLogin() {
+        assertThat(policy.isPlatformAdmin(42)).isTrue();
+        assertThat(policy.isPlatformAdmin(7)).isFalse();
+        assertThat(new LoginPolicy("", "alice").isPlatformAdmin(7)).isFalse();
     }
 
     @Test
-    void anAdminLoginAloneGrantsNothing() {
-        LoginPolicy adminByLogin = new LoginPolicy("", "alice");
-
-        assertThat(adminByLogin.decide(7, "alice").allowed()).isFalse();
-    }
-
-    @Test
-    void everyoneElseIsRefused() {
-        assertThat(policy.decide(7, "mallory").allowed()).isFalse();
-        assertThat(policy.decide(7, null).allowed()).isFalse();
-    }
-
-    @Test
-    void emptyListsAllowNobody() {
-        assertThat(new LoginPolicy("", "").decide(42, "alice").allowed()).isFalse();
-        assertThat(new LoginPolicy(null, null).decide(42, "alice").allowed()).isFalse();
+    void emptyListsAdmitNobody() {
+        assertThat(new LoginPolicy("", "").admitsAnyone()).isFalse();
+        assertThat(new LoginPolicy(null, null).admitsAnyone()).isFalse();
+        assertThat(policy.admitsAnyone()).isTrue();
     }
 }

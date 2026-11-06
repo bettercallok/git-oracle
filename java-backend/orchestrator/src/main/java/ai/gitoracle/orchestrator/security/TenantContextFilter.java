@@ -103,7 +103,7 @@ public class TenantContextFilter extends OncePerRequestFilter {
         try {
             UUID tenantId = resolveTenant(request);
             Set<String> scopes = ApiKey.Scopes.parse(request.getHeader("X-Scopes"));
-            TenantContext.set(tenantId, scopes, isAsserted(request));
+            TenantContext.set(tenantId, scopes, isAsserted(request), resolveUser(request));
 
             if (RequestPaths.isUnderPrefix(path, ADMIN_PATH_PREFIX)
                     && !scopes.contains(ApiKey.Scopes.PLATFORM_ADMIN)) {
@@ -138,6 +138,17 @@ public class TenantContextFilter extends OncePerRequestFilter {
     private boolean isExempt(String path) {
         if (!RequestPaths.isCanonical(path)) return false;
         return EXEMPT_PATHS.stream().anyMatch(exempt -> path.equals(exempt) || path.startsWith(exempt + "/"));
+    }
+
+    /** The gateway sets X-User-ID only for a session, and strips any client-supplied copy. */
+    private UUID resolveUser(HttpServletRequest request) {
+        String header = request.getHeader("X-User-ID");
+        if (header == null || header.isBlank()) return null;
+        try {
+            return UUID.fromString(header.trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     private UUID resolveTenant(HttpServletRequest request) {

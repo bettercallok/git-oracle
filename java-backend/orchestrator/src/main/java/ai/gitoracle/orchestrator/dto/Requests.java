@@ -57,6 +57,28 @@ public final class Requests {
 
     private Requests() {}
 
+    /** POST /api/v1/org/invitations and POST /api/v1/admin/tenants/{id}/invitations. */
+    public record InviteMember(
+        // GitHub's own rule for a login, which also keeps it safe in a lookup URL.
+        @NotBlank(message = "githubLogin is required")
+        @jakarta.validation.constraints.Pattern(regexp = "[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", message = "githubLogin is not a GitHub username")
+        String githubLogin,
+
+        @NotBlank(message = "role is required")
+        @jakarta.validation.constraints.Pattern(regexp = "VIEWER|MEMBER|ADMIN|OWNER", message = "role must be VIEWER, MEMBER, ADMIN or OWNER")
+        String role
+    ) {}
+
+    /** PUT /api/v1/org/members/{userId}/role. */
+    public record ChangeRole(
+        @NotBlank(message = "role is required")
+        @jakarta.validation.constraints.Pattern(regexp = "VIEWER|MEMBER|ADMIN|OWNER", message = "role must be VIEWER, MEMBER, ADMIN or OWNER")
+        String role
+    ) {}
+
+    /** POST /api/v1/auth/switch-org. */
+    public record SwitchOrganization(@jakarta.validation.constraints.NotNull(message = "tenantId is required") java.util.UUID tenantId) {}
+
     /** POST /api/v1/keys — a signed-in user creating a key for their scripts. */
     public record CreateApiKey(
         @NotBlank(message = "name is required")

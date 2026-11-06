@@ -48,9 +48,9 @@ export default function DeveloperGuide() {
       <Section id="hosted" title="Use a hosted GitOracle">
         <p>Access is by invitation, and you don't need a key.</p>
         <ol className="guide-steps">
-          <li>Ask the person who runs it to invite your GitHub username.</li>
+          <li>Ask an admin of your organisation to invite your GitHub username. An invitation lasts 7 days.</li>
           <li>Open the dashboard and click <strong>Sign in with GitHub</strong>.</li>
-          <li>Ask them to add your repositories, because you start with none. Jobs on any other repository are refused.</li>
+          <li>Jobs only run on repositories on your organisation's list; the person who runs GitOracle adds them for now.</li>
           <li>Go to <strong>Ask to fix</strong> and describe a bug.</li>
         </ol>
       </Section>
@@ -118,7 +118,7 @@ OPENAI_API_KEY=<your provider key>`}</Code>
           <table className="guide-table">
             <thead><tr><th>Method</th><th>Best for</th><th>How to get it</th></tr></thead>
             <tbody>
-              <tr><td><strong>Sign in with GitHub</strong></td><td>People using the dashboard</td><td>An admin invites your GitHub account.</td></tr>
+              <tr><td><strong>Sign in with GitHub</strong></td><td>People using the dashboard</td><td>An organisation admin invites your GitHub account, with a role: viewer, member, admin or owner.</td></tr>
               <tr><td><strong>API key</strong></td><td>Scripts and CI</td><td>Create one on the <strong>API keys</strong> page after signing in. It's shown only once.</td></tr>
               <tr><td><strong>Bootstrap key</strong></td><td>Your own copy, before GitHub sign-in is set up</td><td><Inline>GITORACLE_API_KEY</Inline> in your <Inline>.env</Inline>. Turn it off before hosting.</td></tr>
             </tbody>

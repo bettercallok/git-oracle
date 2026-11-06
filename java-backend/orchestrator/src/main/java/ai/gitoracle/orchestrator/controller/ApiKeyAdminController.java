@@ -5,6 +5,7 @@ import ai.gitoracle.core.model.postgres.Tenant;
 import ai.gitoracle.core.security.ApiKeys;
 import ai.gitoracle.orchestrator.repository.ApiKeyRepository;
 import ai.gitoracle.orchestrator.security.TenantContext;
+import ai.gitoracle.orchestrator.service.AuditLog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -37,10 +38,12 @@ public class ApiKeyAdminController {
 
     private final ApiKeyRepository apiKeyRepository;
     private final EntityManager entityManager;
+    private final AuditLog audit;
 
-    public ApiKeyAdminController(ApiKeyRepository apiKeyRepository, EntityManager entityManager) {
+    public ApiKeyAdminController(ApiKeyRepository apiKeyRepository, EntityManager entityManager, AuditLog audit) {
         this.apiKeyRepository = apiKeyRepository;
         this.entityManager = entityManager;
+        this.audit = audit;
     }
 
     /**
@@ -97,6 +100,7 @@ public class ApiKeyAdminController {
         key.setExpiresAt(parseExpiry(request.get("expiresInDays")));
         apiKeyRepository.save(key);
 
+        audit.record(targetTenant, "api_key.created", generated.prefix(), "scopes=" + key.getScopes());
         logger.info("Minted API key {} for tenant {} with scopes {} (requested by tenant {})",
             generated.prefix(), targetTenant, key.getScopes(), callerTenant);
 
@@ -152,6 +156,7 @@ public class ApiKeyAdminController {
 
         key.setRevokedAt(OffsetDateTime.now());
         apiKeyRepository.save(key);
+        audit.record(key.getTenantId(), "api_key.revoked", keyPrefix, null);
         logger.info("Revoked API key {} for tenant {}", keyPrefix, key.getTenantId());
 
         return ResponseEntity.ok(Map.of(

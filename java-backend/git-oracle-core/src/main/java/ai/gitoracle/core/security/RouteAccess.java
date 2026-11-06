@@ -28,9 +28,14 @@ public final class RouteAccess {
         AUTHENTICATED,
         READ,
         WRITE,
+        /** An organisation's admin or owner, or a platform admin. */
+        ORG_ADMIN,
+        /** Platform administration, across every organisation. */
         ADMIN,
         /** A person signed in with GitHub; an API key is refused. */
         SESSION,
+        /** A signed-in person who can also write, so not a viewer. */
+        SESSION_WRITE,
         /** Service-to-service only: never allowed through the gateway. */
         INTERNAL
     }
@@ -55,7 +60,14 @@ public final class RouteAccess {
         if (PUBLIC_PATHS.contains(path)) return read ? Access.PUBLIC : Access.WRITE;
         if (path.equals("/api/v1/auth") || path.startsWith("/api/v1/auth/")) return Access.AUTHENTICATED;
         if (path.equals("/api/v1/admin") || path.startsWith("/api/v1/admin/")) return Access.ADMIN;
-        if (path.equals("/api/v1/keys") || path.startsWith("/api/v1/keys/")) return Access.SESSION;
+        if (path.equals("/api/v1/keys") || path.startsWith("/api/v1/keys/")) {
+            return read ? Access.SESSION : Access.SESSION_WRITE;
+        }
+        if (path.equals("/api/v1/org") || path.startsWith("/api/v1/org/")) {
+            return read && (path.equals("/api/v1/org") || path.equals("/api/v1/org/members")) ? Access.READ : Access.ORG_ADMIN;
+        }
+        // An eval result says how good the system is, so not everyone may publish one.
+        if (path.equals("/api/v1/evals") && !read) return Access.ORG_ADMIN;
         if (!read) {
             String candidate = path;
             if (INTERNAL_WRITES.stream().anyMatch(pattern -> pattern.matcher(candidate).matches())) {
@@ -78,8 +90,10 @@ public final class RouteAccess {
             case PUBLIC, AUTHENTICATED -> true;
             case READ -> admin || scopes.contains(ApiKey.Scopes.JOBS_READ) || scopes.contains(ApiKey.Scopes.JOBS_WRITE);
             case WRITE -> admin || scopes.contains(ApiKey.Scopes.JOBS_WRITE);
+            case ORG_ADMIN -> admin || scopes.contains(ApiKey.Scopes.ORG_ADMIN);
             case ADMIN -> admin;
             case SESSION -> session;
+            case SESSION_WRITE -> session && (admin || scopes.contains(ApiKey.Scopes.JOBS_WRITE));
             case INTERNAL -> false;
         };
     }
@@ -89,8 +103,10 @@ public final class RouteAccess {
         return switch (access) {
             case READ -> "This credential does not carry the jobs:read scope.";
             case WRITE -> "This credential does not carry the jobs:write scope.";
+            case ORG_ADMIN -> "This requires an organisation admin.";
             case ADMIN -> "This credential does not carry the platform:admin scope.";
             case SESSION -> "This requires signing in with GitHub; an API key can't do it.";
+            case SESSION_WRITE -> "This requires signing in with GitHub, with a role that can make changes.";
             case INTERNAL -> "This route is for internal services only.";
             case PUBLIC, AUTHENTICATED -> "Not allowed.";
         };
