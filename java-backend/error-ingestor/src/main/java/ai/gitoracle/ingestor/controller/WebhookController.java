@@ -189,8 +189,11 @@ public class WebhookController {
             return handleWorkflowRun(tenantId, payload);
         }
 
-        // Fallback: custom/mocked payload
-        dedupService.ingest(tenantId, payload);
+        // Everything else (push, ping, installation, ...) carries no failure to fix.
+        // This used to fall through to dedupService.ingest, which turned every such
+        // delivery into a junk "unknown/repo" job. Only a failed workflow_run
+        // starts a job from GitHub.
+        logger.info("Ignoring GitHub event '{}'", githubEvent);
         return ResponseEntity.accepted().build();
     }
 
