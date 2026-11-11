@@ -36,6 +36,20 @@ ensure_secret() {
 ensure_secret GITORACLE_API_KEY
 ensure_secret GITORACLE_INTERNAL_TOKEN
 
+# The webhook secrets are NOT generated: each must match what is entered in the
+# GitHub App's / Sentry's own settings, so a generated value would never match.
+# Until one is set, the error-ingestor rejects those webhooks.
+warn_webhook_secret() {
+  local name=$1 current
+  current=$(grep -E "^$name=" .env | tail -1 | cut -d= -f2-)
+  case "$current" in
+    ""|change_me*|your_*)
+      echo "ℹ️  $name is not set: those webhooks will be rejected. Set it to the secret configured on the sender (openssl rand -hex 32)." ;;
+  esac
+}
+warn_webhook_secret GITHUB_APP_WEBHOOK_SECRET
+warn_webhook_secret SENTRY_WEBHOOK_SECRET
+
 # ─── Clear zombie processes on all service ports ───────────────
 # IMPORTANT: Only kill Java/Python/Node processes — never Docker processes.
 #

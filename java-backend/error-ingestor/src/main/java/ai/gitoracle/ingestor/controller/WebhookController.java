@@ -79,6 +79,23 @@ public class WebhookController {
         return Tenant.DEFAULT_ID.equals(tenantId) ? sentryWebhookSecret : "";
     }
 
+    /**
+     * Says at startup which webhooks will be refused. Not fatal: a local setup with
+     * no GitHub App or Sentry is legitimate, and rejecting every delivery is the
+     * safe behaviour. A per-tenant Sentry secret can still make that tenant work.
+     */
+    @jakarta.annotation.PostConstruct
+    void warnAboutUnusableSecrets() {
+        if (!HmacVerifier.isUsableSecret(githubWebhookSecret)) {
+            logger.warn("GitHub webhooks will be rejected until GITHUB_APP_WEBHOOK_SECRET is set "
+                + "(it is blank or a placeholder). It must match the secret in the GitHub App's webhook settings.");
+        }
+        if (!HmacVerifier.isUsableSecret(sentryWebhookSecret)) {
+            logger.warn("Sentry webhooks for the default tenant will be rejected until SENTRY_WEBHOOK_SECRET is set "
+                + "(it is blank or a placeholder), unless that tenant has its own secret.");
+        }
+    }
+
     public WebhookController(SemanticDedupService dedupService, KafkaTemplate<String, Object> kafkaTemplate,
                               DeliveryReplayGuard replayGuard) {
         this.dedupService = dedupService;
