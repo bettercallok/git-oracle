@@ -7,7 +7,11 @@ public enum TestFramework {
     MAVEN("mvn test --batch-mode --no-transfer-progress"),
     GRADLE("./gradlew test --no-daemon --quiet"),
     PYTEST("pip install -q pytest 2>/dev/null && (pip install -q -r requirements.txt 2>/dev/null || true) && python -m pytest -v --tb=short"),
-    NPM_JEST("(npm ci --silent 2>/dev/null || true) && (npx jest --no-coverage || npm install -g jest && jest --no-coverage)"),
+    // One jest invocation. The old "(npx jest || npm install -g jest && jest)" ran a
+    // bare `jest` after a PASSING npx run (|| and && have equal precedence), and
+    // bare jest is not on PATH, so green suites exited 127. A global install could
+    // never have worked anyway: the sandbox root filesystem is read-only.
+    NPM_JEST("(npm ci --silent 2>/dev/null || true) && npx --yes jest --no-coverage"),
     CARGO("cargo test"),
     GO_TEST("go test ./... -v"),
     UNKNOWN(null);
