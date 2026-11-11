@@ -339,7 +339,9 @@ public class GitHubController {
         }
 
         pr.setBody(markdown);
-        pr.comment("🤖 GitOracle regenerated this fix as requested, and the full test suite passed with it. "
+        pr.comment((request.isVerified()
+                ? "🤖 GitOracle regenerated this fix as requested, and the full test suite passed with it. "
+                : "🤖 GitOracle regenerated this fix as requested. ⚠️ No test suite ran, so this regenerated fix is not verified. ")
             + "The PR now contains only the new fix (commit " + newCommit.substring(0, 7) + ").");
         logger.info("Updated PR {} for job {} with commit {}", url, request.getJobId(), newCommit);
         return url;
@@ -435,6 +437,10 @@ public class GitHubController {
             || "unknown".equals(req.getRootCommit()) ? null : req.getRootCommit();
         Integer passed = req.getTestsPassed(), total = req.getTestsTotal();
         boolean counted = passed != null && total != null;
+        // A safe-pass (no test suite ran) used to read "✅ Passed" and "Fix Quality: 100%".
+        boolean verified = req.isVerified();
+        Double quality = verified ? req.getQualityScore() : null;
+        Double coverage = req.getCoverageDelta();
 
         String metadata = String.format(java.util.Locale.ROOT,
             "<!-- gitoracle:job_id:%s -->\n" +
@@ -448,8 +454,9 @@ public class GitHubController {
             "  \"fix_attempts\": %d,\n" +
             "  \"tests_passed\": %s,\n" +
             "  \"tests_total\": %s,\n" +
-            "  \"coverage_delta\": %.2f,\n" +   // not %+: "+0.00" is not valid JSON
-            "  \"quality_score\": %.2f,\n" +
+            "  \"tests_verified\": %s,\n" +
+            "%s" +
+            "  \"quality_score\": %s,\n" +
             "  \"token_budget_used\": %d,\n" +
             "  \"escalated\": false\n" +
             "}\n" +
@@ -459,19 +466,25 @@ public class GitHubController {
             investigated ? String.format(java.util.Locale.ROOT, "%.2f", causal) : "null",
             req.getFixStrategy(), req.getFixAttempts(),
             counted ? passed.toString() : "null", counted ? total.toString() : "null",
-            req.getCoverageDelta(), req.getQualityScore(), req.getTokenBudgetUsed());
+            verified,
+            // not %+: "+0.00" is not valid JSON. Left out entirely when not measured.
+            coverage == null ? "" : String.format(java.util.Locale.ROOT, "  \"coverage_delta\": %.2f,\n", coverage),
+            quality == null ? "null" : String.format(java.util.Locale.ROOT, "%.2f", quality),
+            req.getTokenBudgetUsed());
 
         String header = String.format(java.util.Locale.ROOT,
-            "**Root Commit:** %s · **Causal Confidence:** %s · **Fix Quality:** %.0f%% · **Attempts:** %d/%d\n\n",
+            "**Root Commit:** %s · **Causal Confidence:** %s · **Fix Quality:** %s · **Attempts:** %d/%d\n\n",
             rootCommit == null ? "n/a" : "`" + rootCommit + "`",
             investigated ? String.format(java.util.Locale.ROOT, "%.0f%%", causal * 100) : "n/a",
-            req.getQualityScore() * 100, req.getFixAttempts(), MAX_FIX_ATTEMPTS);
+            quality == null ? "n/a" : String.format(java.util.Locale.ROOT, "%.0f%%", quality * 100),
+            req.getFixAttempts(), MAX_FIX_ATTEMPTS);
 
         String rootCause = present(req.getCausalChainNarrative()) ? req.getCausalChainNarrative()
             : investigated ? "_The investigator gave no explanation._"
             : "_Not investigated — this fix was requested directly._";
         String changed = present(req.getPatchSummary()) ? req.getPatchSummary() : "_See the diff._";
-        String tests = counted ? String.format(java.util.Locale.ROOT, "✅ %d/%d passed", passed, total) : "✅ Passed";
+        String tests = !verified ? "⚠️ No test suite ran — this change was not verified by tests."
+            : counted ? String.format(java.util.Locale.ROOT, "✅ %d/%d passed", passed, total) : "✅ Passed";
 
         return metadata
             + "## \uD83E\uDD16 GitOracle Autonomous Fix\n\n"
@@ -479,7 +492,8 @@ public class GitHubController {
             + "### Root Cause\n" + rootCause + "\n\n"
             + "### What Changed\n" + changed + "\n\n"
             + "### Test Results\n" + tests
-            + String.format(java.util.Locale.ROOT, " · Coverage %+.2f%%\n\n", req.getCoverageDelta() * 100)
+            + (coverage == null ? "" : String.format(java.util.Locale.ROOT, " · Coverage %+.2f%%", coverage * 100))
+            + "\n\n"
             + "---\n*This PR was generated autonomously by GitOracle. Not satisfied? Use the "
             + "[GitOracle Dashboard](http://localhost:5173) to regenerate with your instructions.*";
     }

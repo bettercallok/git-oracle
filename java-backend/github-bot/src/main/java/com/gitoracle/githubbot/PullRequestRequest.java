@@ -12,8 +12,11 @@ public class PullRequestRequest {
     private int fixAttempts;
     private Integer testsPassed;     // null: the runner found no test counts to read
     private Integer testsTotal;
-    private double coverageDelta;
-    private double qualityScore;
+    private Double coverageDelta;    // null: not measured (nothing measures it today)
+    private Double qualityScore;     // null: no score to show
+    // False when no test suite ran (the test runner's safe-pass): the fix passed
+    // nothing because nothing checked it. Null, from an older sender, means verified.
+    private Boolean testsVerified;
     private int tokenBudgetUsed;
     private String causalChainNarrative;
     private String patchSummary;
@@ -129,20 +132,34 @@ public class PullRequestRequest {
         this.testsTotal = testsTotal;
     }
 
-    public double getCoverageDelta() {
+    public Double getCoverageDelta() {
         return coverageDelta;
     }
 
-    public void setCoverageDelta(double coverageDelta) {
+    public void setCoverageDelta(Double coverageDelta) {
         this.coverageDelta = coverageDelta;
     }
 
-    public double getQualityScore() {
+    public Double getQualityScore() {
         return qualityScore;
     }
 
-    public void setQualityScore(double qualityScore) {
+    public void setQualityScore(Double qualityScore) {
         this.qualityScore = qualityScore;
+    }
+
+    public Boolean getTestsVerified() {
+        return testsVerified;
+    }
+
+    public void setTestsVerified(Boolean testsVerified) {
+        this.testsVerified = testsVerified;
+    }
+
+    /** Whether a test suite actually ran against this fix. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public boolean isVerified() {
+        return !Boolean.FALSE.equals(testsVerified);
     }
 
     public int getTokenBudgetUsed() {

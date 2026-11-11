@@ -552,7 +552,12 @@ public class OrchestratorService {
                 testsPassedPayload.put("branch",         branch);
                 testsPassedPayload.put("isRegeneration", event.getOrDefault("isRegeneration", "false"));
                 testsPassedPayload.put("qualityScore",   String.valueOf(response.get("qualityScore")));
-                testsPassedPayload.put("coverageDelta",  String.valueOf(response.get("coverageDelta")));
+                // The runner's safe-pass (no test suite ran) is allPassed=true with
+                // verified=false. That was dropped here, so the PR said "✅ Passed"
+                // and "Fix Quality: 100%" for a fix nothing had checked. Absent
+                // (an older runner) means verified.
+                testsPassedPayload.put("testsVerified",
+                    String.valueOf(!Boolean.FALSE.equals(response.get("verified"))));
                 testsPassedPayload.put("fixAttempts",    String.valueOf(attempts[0]));
                 // Absent when the runner found no summary line it recognises.
                 if (response.get("testsTotal") instanceof Number total) {
@@ -579,6 +584,17 @@ public class OrchestratorService {
                 : "Test runner unreachable or errored: " + e.getMessage();
             fail(jobIdStr, reason, "orchestrator");
         }
+    }
+
+    /**
+     * In a PR_OPENED reason when no test suite ran against the fix. The dashboard
+     * looks for it (JobDetail), so keep the two in step.
+     */
+    public static final String UNVERIFIED_MARKER = "(no test suite ran — not verified)";
+
+    /** False only when the TESTS_PASSED event says so; older events count as verified. */
+    static boolean testsVerified(Map<String, String> event) {
+        return !"false".equalsIgnoreCase(event.getOrDefault("testsVerified", "true"));
     }
 
     private void fail(String jobIdStr, String reason, String actor) {
@@ -663,8 +679,11 @@ public class OrchestratorService {
             Integer testsFailed = parseIntOrNull(event.get("testsFailed"));
             prRequest.put("testsTotal", testsTotal);
             prRequest.put("testsPassed", testsTotal == null ? null : testsTotal - (testsFailed == null ? 0 : testsFailed));
-            prRequest.put("coverageDelta", parseDoubleOrDefault(event.get("coverageDelta"), 0.0));
-            prRequest.put("qualityScore", parseDoubleOrDefault(event.get("qualityScore"), 1.0));
+            // Coverage is never measured, so none is sent (the PR printed "Coverage +0.00%").
+            prRequest.put("coverageDelta", null);
+            boolean testsVerified = testsVerified(event);
+            prRequest.put("testsVerified", testsVerified);
+            prRequest.put("qualityScore", testsVerified ? parseDoubleOrDefault(event.get("qualityScore"), 1.0) : null);
             prRequest.put("tokenBudgetUsed", jobRow != null && jobRow.getTokenBudgetUsed() != null
                 ? jobRow.getTokenBudgetUsed() : 0);
             // The PR's "Root Cause" section printed the literal word "null": this
@@ -695,7 +714,8 @@ public class OrchestratorService {
                     boolean updated = existingPrUrl != null && existingPrUrl.equals(prUrl);
                     job.setPrUrl(prUrl);
                     jobState.transition(job, "PR_OPENED",
-                        (updated ? "Pull request updated with the regenerated fix: " : "Pull request opened: ") + prUrl,
+                        (updated ? "Pull request updated with the regenerated fix" : "Pull request opened")
+                            + (testsVerified ? "" : " " + UNVERIFIED_MARKER) + ": " + prUrl,
                         "github-bot");
                     logger.info("Orchestrator pipeline complete for job: {} — PR: {}", jobIdStr, prUrl);
                 } else {

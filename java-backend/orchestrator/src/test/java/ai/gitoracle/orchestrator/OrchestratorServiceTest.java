@@ -771,6 +771,67 @@ class OrchestratorServiceTest {
         assertThat(event).containsEntry("testsTotal", "6").containsEntry("testsFailed", "0");
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void aSafePassWithNoTestSuiteIsMarkedUnverifiedOnTheTestsPassedEvent() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "FIXING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+        mockGitHubBot.expect(requestTo("http://localhost:9006/validate/patch"))
+            .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        mockGitHubBot.expect(requestTo("http://localhost:8084/test"))
+            .andRespond(withSuccess("{\"allPassed\":true,\"verified\":false,\"qualityScore\":1.0}",
+                MediaType.APPLICATION_JSON));
+
+        service.handleFixGenerated(Map.of("jobId", jobId.toString(), "patch", "diff"));
+
+        org.mockito.ArgumentCaptor<Object> payload = org.mockito.ArgumentCaptor.forClass(Object.class);
+        verify(kafkaTemplate).send(org.mockito.ArgumentMatchers.eq(ai.gitoracle.core.kafka.KafkaTopics.TESTS_PASSED),
+                                   payload.capture());
+        assertThat((Map<String, String>) payload.getValue()).containsEntry("testsVerified", "false");
+    }
+
+    @Test
+    void anUnverifiedFixSaysSoToGithubBotAndOnTheTimeline() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "TESTING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        mockGitHubBot.expect(requestTo("http://localhost:8085/pull-request"))
+            .andExpect(json("$.testsVerified", false))
+            .andExpect(json("$.qualityScore", null))
+            .andExpect(json("$.coverageDelta", null))
+            .andRespond(withSuccess("{\"success\":true,\"prUrl\":\"https://github.com/o/r/pull/1\"}",
+                                    MediaType.APPLICATION_JSON));
+
+        service.handleTestsPassed(Map.of("jobId", jobId.toString(), "patch", "diff",
+                                         "testsVerified", "false", "qualityScore", "1.0"));
+
+        mockGitHubBot.verify();
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+        assertThat(job.getStateReason())
+            .isEqualTo("Pull request opened (no test suite ran — not verified): https://github.com/o/r/pull/1");
+    }
+
+    @Test
+    void aVerifiedFixKeepsItsScoreAndAnOrdinaryReason() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "TESTING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+
+        mockGitHubBot.expect(requestTo("http://localhost:8085/pull-request"))
+            .andExpect(json("$.testsVerified", true))
+            .andExpect(json("$.qualityScore", 0.5))
+            .andRespond(withSuccess("{\"success\":true,\"prUrl\":\"https://github.com/o/r/pull/1\"}",
+                                    MediaType.APPLICATION_JSON));
+
+        // No testsVerified: an event from before the field existed.
+        service.handleTestsPassed(Map.of("jobId", jobId.toString(), "patch", "diff", "qualityScore", "0.5"));
+
+        mockGitHubBot.verify();
+        assertThat(job.getStateReason()).isEqualTo("Pull request opened: https://github.com/o/r/pull/1");
+    }
+
     // ── PR comments may only steer the job's own PR ────────────────────────
 
     /**

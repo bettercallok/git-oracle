@@ -42,6 +42,10 @@ interface JobEvent {
   createdAt: string;
 }
 
+// The orchestrator puts this in a PR_OPENED reason when no test suite ran
+// (OrchestratorService.UNVERIFIED_MARKER). Keep the two in step.
+const UNVERIFIED_MARKER = 'no test suite ran — not verified';
+
 const fetchJob = async (id: string): Promise<Job> => {
   const { data } = await apiClient.get(`/jobs/${id}`);
   return data;
@@ -165,6 +169,9 @@ export default function JobDetail() {
   // The timeline's state changes, to show how long each state ran.
   const stateChanges = events.filter(e => e.type === 'STATE_CHANGE');
   const steps = pipelineSteps(status, events);
+  // The latest PR_OPENED decides: a regenerated fix may have been tested where the first was not.
+  const lastPrOpened = [...stateChanges].reverse().find(e => e.toState === 'PR_OPENED');
+  const prUnverified = !!lastPrOpened?.message?.includes(UNVERIFIED_MARKER);
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
@@ -257,8 +264,15 @@ export default function JobDetail() {
           )}
 
           {job.prUrl && (
-            <Alert tone="success" icon={<GitPullRequest size={16} />} title={status === 'PR_MERGED' ? 'Pull request merged' : 'Pull request opened'}>
+            <Alert
+              tone={prUnverified ? 'warning' : 'success'}
+              icon={<GitPullRequest size={16} />}
+              title={(status === 'PR_MERGED' ? 'Pull request merged' : 'Pull request opened') + (prUnverified ? ' — not verified by tests' : '')}
+            >
               <a href={job.prUrl} target="_blank" rel="noreferrer" className="link mono" style={{ wordBreak: 'break-all' }}>{job.prUrl}</a>
+              {prUnverified && (
+                <div style={{ marginTop: 4 }}>No test suite ran against this fix, so passing means nothing checked it. Review it by hand.</div>
+              )}
             </Alert>
           )}
         </motion.div>
