@@ -81,6 +81,31 @@ class RunTimeoutTest {
     }
 
     @Test
+    void theWrapperStopsAHungCommandAsPid1InTheBusyboxImages() throws Exception {
+        // The sandbox runs the wrapper as the container's PID 1 with no init.
+        // Busybox `timeout` (node/gradle/golang images) could not stop the
+        // command from there while the wrapper used `exec`.
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+            TestRunnerController.run(dir, 10, "docker", "info").success(), "docker not available");
+        String image = "node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293";
+
+        long start = System.nanoTime();
+        TestRunnerController.RunResult hung = TestRunnerController.run(dir, 120, "docker", "run", "--rm",
+            "--user", "1000", "--entrypoint", "sh", image, "-c",
+            TestRunnerController.withinTimeout("trap '' TERM; sleep 60", 2));
+        long seconds = (System.nanoTime() - start) / 1_000_000_000L;
+
+        assertThat(hung.timedOut()).isFalse();
+        assertThat(hung.exitCode()).isEqualTo(124);
+        assertThat(seconds).isLessThan(40);
+
+        TestRunnerController.RunResult failing = TestRunnerController.run(dir, 120, "docker", "run", "--rm",
+            "--user", "1000", "--entrypoint", "sh", image, "-c",
+            TestRunnerController.withinTimeout("exit 3", 30));
+        assertThat(failing.exitCode()).isEqualTo(3);
+    }
+
+    @Test
     void containerNamesAreUniqueAndOnlyEverCarryAValidJobId() {
         String a = TestRunnerController.containerName("job-123");
         String b = TestRunnerController.containerName("job-123");

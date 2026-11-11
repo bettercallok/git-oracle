@@ -704,11 +704,20 @@ public class TestRunnerController {
      * {@code timeout} is missing, or an old busybox without {@code -k}, runs the
      * command unwrapped and relies on this service's own timeout and
      * {@code docker kill}.
+     *
+     * <p>Not {@code exec timeout}: the container has no init, so that would make
+     * {@code timeout} PID 1, and busybox's {@code timeout} (the Alpine images)
+     * runs the command in its own process and signals it from a child. PID 1
+     * ignores signals it has no handler for, so the command was never stopped.
+     * Busybox also exits 143/137 rather than coreutils' 124, so any failure that
+     * took the whole allowance is reported as 124.
      */
     static String withinTimeout(String testCommand, int seconds) {
         String quoted = "'" + testCommand.replace("'", "'\\''") + "'";
-        return "if timeout -k 1 5 true >/dev/null 2>&1; then exec timeout -k 10 " + seconds
-             + " sh -c " + quoted + "; fi; " + testCommand;
+        return "if timeout -k 1 5 true >/dev/null 2>&1; then gitoracle_start=$(date +%s); "
+             + "timeout -k 10 " + seconds + " sh -c " + quoted + "; gitoracle_rc=$?; "
+             + "if [ \"$gitoracle_rc\" -ne 0 ] && [ $(( $(date +%s) - gitoracle_start )) -ge " + seconds + " ]; "
+             + "then exit " + TIMEOUT_EXIT + "; fi; exit \"$gitoracle_rc\"; fi; " + testCommand;
     }
 
     static String guardEmptyWorkspace(String testCommand) {

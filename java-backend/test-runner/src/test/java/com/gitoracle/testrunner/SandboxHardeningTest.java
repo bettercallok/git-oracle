@@ -67,7 +67,7 @@ class SandboxHardeningTest {
     void theTestCommandRunsUnderAnInContainerTimeout() throws Exception {
         List<String> cmd = build(new TestRunnerController.FrameworkConfig(TestFramework.PYTEST, "."));
         String script = cmd.get(cmd.size() - 1);
-        assertThat(script).contains("exec timeout -k 10 180 sh -c 'some test command'");
+        assertThat(script).contains("; timeout -k 10 180 sh -c 'some test command'").doesNotContain("exec timeout");
         // The empty-workspace guard still runs first.
         assertThat(script.indexOf("ls -A /repo")).isLessThan(script.indexOf("timeout"));
     }
