@@ -54,6 +54,25 @@ class SandboxHardeningTest {
     // ─── The flags that actually matter ────────────────────────────────────
 
     @Test
+    void theContainerIsNamedSoATimedOutRunCanBeKilled() throws Exception {
+        String name = TestRunnerController.containerName("job-1");
+        List<String> cmd = controller.buildDockerRunCommand(workDir,
+            new TestRunnerController.FrameworkConfig(TestFramework.PYTEST, "."), "/repo/.",
+            "some-image@sha256:abc", "some test command", null, name);
+        assertThat(cmd).containsSubsequence("--name", name);
+        assertThat(name).startsWith("gitoracle-test-job-1-");
+    }
+
+    @Test
+    void theTestCommandRunsUnderAnInContainerTimeout() throws Exception {
+        List<String> cmd = build(new TestRunnerController.FrameworkConfig(TestFramework.PYTEST, "."));
+        String script = cmd.get(cmd.size() - 1);
+        assertThat(script).contains("exec timeout -k 10 180 sh -c 'some test command'");
+        // The empty-workspace guard still runs first.
+        assertThat(script.indexOf("ls -A /repo")).isLessThan(script.indexOf("timeout"));
+    }
+
+    @Test
     void neverRunsAsRoot_defaultsToFallbackNonRootUser() throws Exception {
         List<String> cmd = build(new TestRunnerController.FrameworkConfig(TestFramework.PYTEST, "."));
         assertThat(cmd).containsSubsequence("--user", "65534:65534");

@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 DLQ_TOPIC = topics.JOB_DLQ
 ESCALATION_TOPIC = topics.JOB_ESCALATED
+# Above the slowest handler (see _make_consumer).
+MAX_POLL_INTERVAL_MS = 35 * 60 * 1000
 
 Handler = Callable[[dict], Awaitable[Any]]
 
@@ -71,6 +73,10 @@ class KafkaEventConsumer:
             # agent was still booting. Only matters for a brand-new group; after
             # that the committed offset wins.
             auto_offset_reset="earliest",
+            # A fixer handler runs up to three self-tests of up to 10 minutes
+            # each; at aiokafka's 5-minute default a slow but legitimate job left
+            # the group, was rebalanced away and redelivered.
+            max_poll_interval_ms=MAX_POLL_INTERVAL_MS,
             **kafka_security_kwargs(),
             # Raw bytes: decoding happens per message in _handle, so one
             # malformed message can be dead-lettered instead of killing the loop.

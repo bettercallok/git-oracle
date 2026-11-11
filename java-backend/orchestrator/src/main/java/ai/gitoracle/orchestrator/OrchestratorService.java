@@ -38,7 +38,8 @@ public class OrchestratorService {
     private final ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository;
     private final JobStateService jobState;
     private final EscalationService escalations;
-    private final RestTemplate restTemplate = new RestTemplate();
+    // Timeouts per target service (InternalHttp). Was a plain RestTemplate that waited forever.
+    private final RestTemplate restTemplate = ai.gitoracle.orchestrator.service.InternalHttp.pipeline();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     // Every internal service now requires this on every request (see
@@ -572,7 +573,11 @@ public class OrchestratorService {
             // This used to only log, leaving the job in TESTING forever with nothing
             // to say why.
             metrics.testRun("error");
-            fail(jobIdStr, "Test runner unreachable or errored: " + e.getMessage(), "orchestrator");
+            String reason = ai.gitoracle.orchestrator.service.InternalHttp.isTimeout(e)
+                ? "Test runner timed out after "
+                    + ai.gitoracle.orchestrator.service.InternalHttp.TEST_RUNNER_TIMEOUT.toMinutes() + " minutes"
+                : "Test runner unreachable or errored: " + e.getMessage();
+            fail(jobIdStr, reason, "orchestrator");
         }
     }
 

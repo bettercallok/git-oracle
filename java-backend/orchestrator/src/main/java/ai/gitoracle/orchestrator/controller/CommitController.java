@@ -79,7 +79,7 @@ public class CommitController {
     private static final String COMMIT_ANALYST_URL = "http://localhost:9004/analyze";
 
     private final GitHubClientService githubClientService;
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate = ai.gitoracle.orchestrator.service.InternalHttp.shortCalls();
 
     @Value("${gitoracle.internal-token:}")
     private String internalToken;

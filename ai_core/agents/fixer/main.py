@@ -26,6 +26,9 @@ from shared.repo_refs import InvalidRepoRefError, is_within_workspace_root, vali
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Seconds to wait for the test runner's /test (the orchestrator's InternalHttp.TEST_RUNNER_TIMEOUT).
+SELF_TEST_TIMEOUT_SECONDS = 600.0
+
 app = FastAPI(title="GitOracle Fixer Agent", version="1.0", dependencies=[Depends(require_internal_token)])
 app.add_middleware(BodySizeLimitMiddleware)
 # No CORS middleware: agents are called server-to-server only (orchestrator,
@@ -203,7 +206,10 @@ async def run_real_test(job_id: str, repo_path: str, repo_url: str, patch_diff: 
                     "framework": "UNKNOWN"  # let Test Runner auto-detect (pom.xml/package.json/etc.)
                 },
                 headers={"X-Internal-Token": os.environ.get("GITORACLE_INTERNAL_TOKEN", "")},
-                timeout=130.0
+                # Matches the orchestrator's read timeout on /test (InternalHttp.
+                # TEST_RUNNER_TIMEOUT): the runner may take two 180s clone attempts
+                # plus 180s of tests, so 130s gave up on suites that would have passed.
+                timeout=SELF_TEST_TIMEOUT_SECONDS
             )
             response.raise_for_status()
             data = response.json()

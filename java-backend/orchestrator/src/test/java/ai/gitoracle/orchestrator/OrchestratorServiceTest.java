@@ -512,6 +512,23 @@ class OrchestratorServiceTest {
     }
 
     @Test
+    void aTestRunnerTimeoutFailsTheJobAndSaysItTimedOut() {
+        UUID jobId = UUID.randomUUID();
+        AgentJob job = jobWith(jobId, "FIXING", null);
+        when(jobRepository.findById(jobId)).thenReturn(Optional.of(job));
+        mockGitHubBot.expect(requestTo("http://localhost:9006/validate/patch"))
+            .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+        mockGitHubBot.expect(requestTo("http://localhost:8084/test")).andRespond(request -> {
+            throw new java.net.SocketTimeoutException("Read timed out");
+        });
+
+        service.handleFixGenerated(Map.of("jobId", jobId.toString(), "patch", "diff"));
+
+        assertThat(job.getState()).isEqualTo("FAILED");
+        assertThat(job.getStateReason()).isEqualTo("Test runner timed out after 10 minutes");
+    }
+
+    @Test
     void aLateEscalationNeverOverwritesAJobWhosePrAlreadyOpened() {
         UUID jobId = UUID.randomUUID();
         AgentJob job = jobWith(jobId, "PR_OPENED", "https://github.com/bettercallok/chillcall/pull/6");

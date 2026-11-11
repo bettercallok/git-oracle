@@ -37,6 +37,21 @@ public class TestRunnerController {
     private static final int TIMEOUT_SECONDS = 180;
 
     /**
+     * How long this service waits for {@code docker run} itself. Longer than
+     * TIMEOUT_SECONDS so the in-container {@code timeout} (see
+     * {@link #withinTimeout}) normally fires first and the container exits on its
+     * own; this bound, and {@code docker kill}, are for when it doesn't.
+     */
+    private static final int DOCKER_RUN_TIMEOUT_SECONDS = TIMEOUT_SECONDS + 30;
+
+    /** Exit status of coreutils/busybox {@code timeout} when the command ran out of time. */
+    private static final int TIMEOUT_EXIT = 124;
+
+    /** Output kept per command; the rest is read and discarded so the process never blocks. */
+    static final int OUTPUT_CAP = 100_000;
+    static final String TRUNCATION_MARKER = "\n... [output truncated at 100k chars]\n";
+
+    /**
      * Sentinel exit code meaning "the sandbox saw an empty /repo". Chosen well
      * clear of the exit codes real test frameworks use (pytest tops out at 5,
      * Maven/Gradle/npm use 1) so it cannot be confused with a test outcome.
@@ -532,6 +547,16 @@ public class TestRunnerController {
 
     List<String> buildDockerRunCommand(Path workDir, FrameworkConfig config, String containerWorkDir,
                                         String dockerImage, String testCommand, String cacheKey) throws IOException {
+        return buildDockerRunCommand(workDir, config, containerWorkDir, dockerImage, testCommand, cacheKey, null);
+    }
+
+    /**
+     * @param containerName the {@code --name} to give the container, so a run that
+     *                      outlives its timeout can be found and killed; null for none
+     */
+    List<String> buildDockerRunCommand(Path workDir, FrameworkConfig config, String containerWorkDir,
+                                        String dockerImage, String testCommand, String cacheKey,
+                                        String containerName) throws IOException {
         // Scratch space for /tmp and the framework-specific caches below is a
         // host-directory bind mount, not --tmpfs. tmpfs is RAM-backed and its
         // pages count against --memory, so it seemed like the obvious choice
@@ -550,8 +575,11 @@ public class TestRunnerController {
         Path tmpDir = scratchRoot.resolve("tmp");
         Files.createDirectories(tmpDir);
 
-        List<String> dockerCmd = new java.util.ArrayList<>(List.of(
-            "docker", "run", "--rm",
+        List<String> dockerCmd = new java.util.ArrayList<>(List.of("docker", "run", "--rm"));
+        if (containerName != null) {
+            dockerCmd.addAll(List.of("--name", containerName));
+        }
+        dockerCmd.addAll(List.of(
             "--network", sandboxNetworkReady ? SANDBOX_NETWORK : "bridge",
             "--user", sandboxUser,
             "--read-only",
@@ -570,7 +598,7 @@ public class TestRunnerController {
             "-v", workDir.toAbsolutePath() + ":/repo:rw",
             "-w", containerWorkDir.replaceAll("/\\.$", ""), // clean trailing /.
             dockerImage,
-            "sh", "-c", guardEmptyWorkspace(testCommand)
+            "sh", "-c", guardEmptyWorkspace(withinTimeout(testCommand, TIMEOUT_SECONDS))
         ));
         return dockerCmd;
     }
@@ -653,6 +681,36 @@ public class TestRunnerController {
         }
     }
 
+    /**
+     * A unique, valid Docker container name for one job's test run. The job id is
+     * already constrained by {@link #JOB_ID}; anything else is replaced, never
+     * passed through.
+     */
+    static String containerName(String jobId) {
+        String id = jobId != null && JOB_ID.matcher(jobId).matches() ? jobId : "job";
+        return "gitoracle-test-" + id + "-" + HexFormat.of().formatHex(randomBytes(4));
+    }
+
+    private static byte[] randomBytes(int n) {
+        byte[] b = new byte[n];
+        new java.security.SecureRandom().nextBytes(b);
+        return b;
+    }
+
+    /**
+     * Runs the test command under {@code timeout} inside the container, so the
+     * container stops by itself even if this service dies mid-run. Probed first
+     * ({@code timeout -k 1 5 true}) rather than assumed: an image whose
+     * {@code timeout} is missing, or an old busybox without {@code -k}, runs the
+     * command unwrapped and relies on this service's own timeout and
+     * {@code docker kill}.
+     */
+    static String withinTimeout(String testCommand, int seconds) {
+        String quoted = "'" + testCommand.replace("'", "'\\''") + "'";
+        return "if timeout -k 1 5 true >/dev/null 2>&1; then exec timeout -k 10 " + seconds
+             + " sh -c " + quoted + "; fi; " + testCommand;
+    }
+
     static String guardEmptyWorkspace(String testCommand) {
         return "if [ -z \"$(ls -A /repo 2>/dev/null)\" ]; then "
              + "echo 'GITORACLE: /repo is empty — the workspace bind mount did not resolve on the daemon side. "
@@ -677,12 +735,13 @@ public class TestRunnerController {
                 "{} was not available.", jobId, SANDBOX_NETWORK);
         }
 
+        String container = containerName(jobId);
         try {
             // Creates the scratch/cache subdirectories under workDir as a side
             // effect, so chown below (which must run AFTER this, not before)
             // covers them too.
             List<String> dockerCmd = buildDockerRunCommand(workDir, config, containerWorkDir, dockerImage,
-                testCommand, cacheKey);
+                testCommand, cacheKey, container);
 
             // The container will run as sandboxUser (never root — see
             // resolveSandboxUser()), which may not be the uid that owns this
@@ -703,9 +762,13 @@ public class TestRunnerController {
                 logger.warn("Could not chown workspace {} to sandbox user {} for job {}: {}",
                     workDir, sandboxUser, jobId, e.getMessage());
             }
-            RunResult result = run(workDir, TIMEOUT_SECONDS, dockerCmd.toArray(String[]::new));
+            RunResult result = run(workDir, DOCKER_RUN_TIMEOUT_SECONDS, dockerCmd.toArray(String[]::new));
 
-            if (result.timedOut()) {
+            // Either this service gave up on `docker run`, or the in-container
+            // `timeout` stopped the tests. Killing the client does not stop the
+            // container, so kill it by name; --rm then removes it.
+            if (result.timedOut() || result.exitCode() == TIMEOUT_EXIT) {
+                if (result.timedOut()) killContainer(container, jobId);
                 logger.warn("Tests timed out after {}s for job {}", TIMEOUT_SECONDS, jobId);
                 return new TestResult(false, 0.0, 0.0,
                     "Tests timed out after " + TIMEOUT_SECONDS + " seconds.\n" + result.output());
@@ -779,12 +842,26 @@ public class TestRunnerController {
             // silently degrade — the only exception is a repo explicitly
             // authorized via both gates in isNativeFallbackAuthorized().
             logger.error("Docker execution failed for job {}: {}", jobId, e.getMessage(), e);
+            // An exception (or an interrupt) mid-run must not leave the container behind.
+            killContainer(container, jobId);
             if (isNativeFallbackAuthorized(repoUrl)) {
                 return runNativeUnsafe(workDir, config, jobId);
             }
             return new TestResult(false, 0.0, 0.0,
                 "Sandbox unavailable — test execution refused rather than run unsandboxed on the host. " +
                 "Docker error: " + e.getMessage());
+        }
+    }
+
+    /** Best effort: the container may never have started, or may already be gone. */
+    private void killContainer(String container, String jobId) {
+        try {
+            RunResult kill = run(Path.of(System.getProperty("java.io.tmpdir")), 10, "docker", "kill", container);
+            if (kill.success()) {
+                logger.warn("Killed sandbox container {} for job {}", container, jobId);
+            }
+        } catch (Exception e) {
+            logger.warn("Could not kill sandbox container {} for job {}: {}", container, jobId, e.getMessage());
         }
     }
 
@@ -1004,11 +1081,21 @@ public class TestRunnerController {
         return null;
     }
 
-    private record RunResult(int exitCode, String output, boolean timedOut) {
+    record RunResult(int exitCode, String output, boolean timedOut) {
         boolean success() { return !timedOut && exitCode == 0; }
     }
 
-    private RunResult run(Path dir, int timeoutSeconds, String... cmd) throws IOException, InterruptedException {
+    /**
+     * Runs a command with a timeout that covers the whole run.
+     *
+     * <p>This used to read stdout to EOF before calling {@code waitFor(timeout)},
+     * so the timeout only started once the process had already finished: a hung
+     * test suite hung this request, and with it the orchestrator's Kafka listener.
+     * Output is now drained on a separate thread while this one waits. Past
+     * {@link #OUTPUT_CAP} it is still read, just discarded; stopping reading
+     * there instead left a noisy process blocked on a full pipe.
+     */
+    static RunResult run(Path dir, int timeoutSeconds, String... cmd) throws IOException, InterruptedException {
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(dir.toFile());
         pb.redirectErrorStream(true);
@@ -1023,23 +1110,55 @@ public class TestRunnerController {
         Process process = pb.start();
 
         StringBuilder output = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
-                if (output.length() > 100_000) {
-                    output.append("\n... [output truncated at 100k chars]\n");
-                    break;
+        Thread reader = Thread.ofVirtual().start(() -> drain(process.getInputStream(), output));
+
+        boolean finished;
+        try {
+            finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            process.descendants().forEach(ProcessHandle::destroyForcibly);
+            process.destroyForcibly();
+            throw e;
+        }
+        if (!finished) {
+            // Children first: a `sh -c` child would otherwise keep the pipe open.
+            process.descendants().forEach(ProcessHandle::destroyForcibly);
+            process.destroyForcibly();
+            reader.join(java.time.Duration.ofSeconds(2));
+            return new RunResult(-1, snapshot(output), true);
+        }
+        // Normally immediate; bounded because a backgrounded grandchild can hold the pipe open.
+        reader.join(java.time.Duration.ofSeconds(5));
+        return new RunResult(process.exitValue(), snapshot(output), false);
+    }
+
+    private static String snapshot(StringBuilder output) {
+        synchronized (output) {
+            return output.toString();
+        }
+    }
+
+    /** Reads {@code in} to EOF, keeping the first {@link #OUTPUT_CAP} chars and marking the cut once. */
+    static void drain(InputStream in, StringBuilder out) {
+        try (Reader r = new InputStreamReader(in)) {
+            char[] buf = new char[8192];
+            boolean truncated = false;
+            int n;
+            while ((n = r.read(buf)) != -1) {
+                if (truncated) continue;
+                synchronized (out) {
+                    int room = OUTPUT_CAP - out.length();
+                    if (n <= room) {
+                        out.append(buf, 0, n);
+                    } else {
+                        out.append(buf, 0, Math.max(room, 0)).append(TRUNCATION_MARKER);
+                        truncated = true;
+                    }
                 }
             }
+        } catch (IOException e) {
+            // The process was killed and its pipe closed under us: keep what was read.
         }
-
-        boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
-        if (!finished) {
-            process.destroyForcibly();
-            return new RunResult(-1, output.toString(), true);
-        }
-        return new RunResult(process.exitValue(), output.toString(), false);
     }
 
     /**
