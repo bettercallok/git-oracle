@@ -452,7 +452,11 @@ public class OrchestratorService {
             if (patch != null && !patch.isBlank()) {
                 job.setFixPatch(patch);
             }
-            job.setAuthorizedFiles(authorizedFilesCsv);
+            // Kept when this fix names none, so a rejected regeneration doesn't erase
+            // what the next one needs (authorizedFilesOf).
+            if (!authorizedFilesCsv.isBlank()) {
+                job.setAuthorizedFiles(authorizedFilesCsv);
+            }
             // One per fix cycle the fixer completes (a regeneration is another cycle).
             // The field existed but nothing ever incremented it, and the PR body
             // reported a hardcoded fixAttempts=1.
@@ -607,6 +611,18 @@ public class OrchestratorService {
             .replaceFirst("^https://github\\.com/", "")
             .replaceFirst("/+$", "")
             .replaceFirst("\\.git$", "");
+    }
+
+    /**
+     * The files a job's last fix was authorized to change, for a regeneration's
+     * plan. A regeneration used to send no files at all: the fixer then knew only
+     * files the human's comment happened to name, published an empty
+     * authorization list, and guardrails rejected the new patch.
+     */
+    public static java.util.List<String> authorizedFilesOf(AgentJob job) {
+        String csv = job.getAuthorizedFiles();
+        if (csv == null || csv.isBlank()) return java.util.List.of();
+        return java.util.Arrays.stream(csv.split(",")).map(String::trim).filter(f -> !f.isEmpty()).toList();
     }
 
     public static final String UNVERIFIED_MARKER ="(no test suite ran — not verified)";
@@ -871,7 +887,8 @@ public class OrchestratorService {
 
                 Map<String, Object> plan = new HashMap<>();
                 plan.put("strategy",            "github_review_directed");
-                plan.put("affected_files",      java.util.List.of());
+                // The files the reviewed fix was allowed to touch (see authorizedFilesOf).
+                plan.put("affected_files",      authorizedFilesOf(job));
                 plan.put("affected_functions",  java.util.List.of());
                 plan.put("max_lines_to_change", 200);
                 plan.put("reasoning",           "GitHub reviewer requested: " + comment);
