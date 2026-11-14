@@ -45,7 +45,7 @@ class JobWatchdogTest {
 
     @BeforeEach
     void setUp() {
-        jobRepository = mock(AgentJobRepository.class);
+        jobRepository = ai.gitoracle.orchestrator.TestJobRepository.create();
         entityManager = mock(EntityManager.class);
         meters = new SimpleMeterRegistry();
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);

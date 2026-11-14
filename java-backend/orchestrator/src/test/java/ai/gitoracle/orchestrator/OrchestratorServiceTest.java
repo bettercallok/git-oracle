@@ -71,7 +71,7 @@ class OrchestratorServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        jobRepository = mock(AgentJobRepository.class);
+        jobRepository = ai.gitoracle.orchestrator.TestJobRepository.create();
         prOutcomeRepository = mock(PrOutcomeRepository.class);
         kafkaTemplate = mock(KafkaTemplate.class);
         WorkspaceService workspaceService = mock(WorkspaceService.class);

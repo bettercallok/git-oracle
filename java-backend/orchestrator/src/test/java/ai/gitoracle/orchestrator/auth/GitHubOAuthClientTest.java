@@ -107,6 +107,35 @@ class GitHubOAuthClientTest {
 
         assertThat(proof.user().id()).isEqualTo(42);
         assertThat(proof.installationIds()).containsExactlyInAnyOrder(55L, 66L);
+        assertThat(proof.administeredIds()).isEmpty();          // no account named: nothing is taken on trust
+    }
+
+    @Test
+    void onlyInstallationsOnAnAccountThePersonControlsCountAsAdministered() {
+        tokenReply("{\"access_token\":\"tok\"}");
+        server.expect(requestTo("https://api.gh.test/user"))
+            .andRespond(withSuccess("{\"id\":42,\"login\":\"alice\"}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://api.gh.test/user/installations?per_page=100&page=1"))
+            .andRespond(withSuccess("{\"installations\":["
+                + "{\"id\":1,\"account\":{\"id\":42,\"login\":\"alice\",\"type\":\"User\"}},"           // her own
+                + "{\"id\":2,\"account\":{\"id\":99,\"login\":\"bob\",\"type\":\"User\"}},"             // someone else's
+                + "{\"id\":3,\"account\":{\"id\":7,\"login\":\"acme\",\"type\":\"Organization\"}},"     // she is an admin
+                + "{\"id\":4,\"account\":{\"id\":8,\"login\":\"bigco\",\"type\":\"Organization\"}},"    // she is a member
+                + "{\"id\":5,\"account\":{\"id\":9,\"login\":\"closed\",\"type\":\"Organization\"}}"    // GitHub won't say
+                + "]}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://api.gh.test/user/memberships/orgs/acme"))
+            .andExpect(header("Authorization", "Bearer tok"))
+            .andRespond(withSuccess("{\"role\":\"admin\",\"state\":\"active\"}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://api.gh.test/user/memberships/orgs/bigco"))
+            .andRespond(withSuccess("{\"role\":\"member\",\"state\":\"active\"}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://api.gh.test/user/memberships/orgs/closed"))
+            .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators
+                .withStatus(org.springframework.http.HttpStatus.FORBIDDEN));
+
+        GitHubOAuthClient.UserInstallations proof = client.exchangeCodeForInstallations("the-code", CALLBACK);
+
+        assertThat(proof.installationIds()).containsExactlyInAnyOrder(1L, 2L, 3L, 4L, 5L);
+        assertThat(proof.administeredIds()).containsExactlyInAnyOrder(1L, 3L);
     }
 
     @Test

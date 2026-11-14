@@ -264,7 +264,7 @@ class AuthControllerTest {
     @Test
     void aCallbackForAConnectionConnectsRatherThanSigningIn() {
         when(connects.isConnecting("st")).thenReturn(true);
-        var proof = new GitHubOAuthClient.UserInstallations(new GitHubOAuthClient.GitHubUser(7, "alice"), Set.of(55L));
+        var proof = new GitHubOAuthClient.UserInstallations(new GitHubOAuthClient.GitHubUser(7, "alice"), Set.of(55L), Set.of(55L));
         when(github.exchangeCodeForInstallations(anyString(), anyString())).thenReturn(proof);
         when(connects.complete("st", proof)).thenReturn(GitHubConnectService.Outcome.CONNECTED);
 

@@ -62,15 +62,19 @@ public class AgentJob {
     @Column(name = "base_commit")
     private String baseCommit;
 
-    @Column(nullable = false)
+    // state, stateReason and stateChangedAt are written on insert and then only
+    // by JobStateService (a compare-and-set UPDATE). They are not part of an
+    // entity save: listeners hold copies of a job across slow calls, and saving
+    // such a copy used to put its old state back over a newer one.
+    @Column(nullable = false, updatable = false)
     private String state;
 
     /** Why the job is in its current state, e.g. the escalation or failure reason. */
-    @Column(name = "state_reason", columnDefinition = "TEXT")
+    @Column(name = "state_reason", columnDefinition = "TEXT", updatable = false)
     private String stateReason;
 
     /** When {@link #state} last changed — what the stalled-job watchdog reads. */
-    @Column(name = "state_changed_at")
+    @Column(name = "state_changed_at", updatable = false)
     private OffsetDateTime stateChangedAt;
 
     // TEXT, not the default varchar(255): this holds a full unified diff, which

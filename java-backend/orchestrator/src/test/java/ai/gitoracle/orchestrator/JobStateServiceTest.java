@@ -38,7 +38,7 @@ class JobStateServiceTest {
 
     @BeforeEach
     void setUp() {
-        jobRepository = mock(AgentJobRepository.class);
+        jobRepository = ai.gitoracle.orchestrator.TestJobRepository.create();
         eventRepository = mock(JobEventRepository.class);
         service = new JobStateService(jobRepository, eventRepository, Clock.fixed(NOW, ZoneOffset.UTC));
     }
@@ -187,5 +187,40 @@ class JobStateServiceTest {
         verify(eventRepository).save(event.capture());
         assertThat(event.getValue().getDetails()).isNull();
         assertThat(service.requestOverrides(job.getId())).isEmpty();
+    }
+
+    // ─── Compare-and-set: two writers can't overwrite each other's state ─────
+
+    @Test
+    void aTransitionIsDecidedAgainWhenAnotherWriterMovedTheJobFirst() {
+        // This copy says TESTING, but the watchdog has escalated the job meanwhile.
+        AgentJob job = job("TESTING");
+        org.mockito.Mockito.when(jobRepository.moveState(org.mockito.ArgumentMatchers.eq(job.getId()),
+                org.mockito.ArgumentMatchers.eq("TESTING"), any(), any(), any())).thenReturn(0);
+        org.mockito.Mockito.when(jobRepository.currentState(job.getId())).thenReturn("ESCALATED");
+
+        boolean moved = service.transition(job, "FAILED", "Tests failed", "test-runner");
+
+        assertThat(moved).isTrue();                        // ESCALATED -> FAILED is allowed, so it is retried from there
+        verify(jobRepository).moveState(org.mockito.ArgumentMatchers.eq(job.getId()),
+            org.mockito.ArgumentMatchers.eq("ESCALATED"), org.mockito.ArgumentMatchers.eq("FAILED"), any(), any());
+        ArgumentCaptor<JobEvent> event = ArgumentCaptor.forClass(JobEvent.class);
+        verify(eventRepository).save(event.capture());
+        assertThat(event.getValue().getFromState()).isEqualTo("ESCALATED");
+    }
+
+    @Test
+    void aStaleCopyCannotMoveAJobThatHasSinceFinished() {
+        // This copy says TESTING; the job has in fact opened its PR.
+        AgentJob job = job("TESTING");
+        org.mockito.Mockito.when(jobRepository.moveState(any(), org.mockito.ArgumentMatchers.eq("TESTING"),
+                any(), any(), any())).thenReturn(0);
+        org.mockito.Mockito.when(jobRepository.currentState(job.getId())).thenReturn("PR_OPENED");
+
+        boolean moved = service.transition(job, "ESCALATED", "Stalled in TESTING", "watchdog");
+
+        assertThat(moved).isFalse();
+        assertThat(job.getState()).isEqualTo("PR_OPENED");
+        verify(eventRepository, never()).save(any());
     }
 }

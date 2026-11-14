@@ -42,7 +42,7 @@ public class GitHubConnectService {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     /** What the dashboard is told, in its redirect. */
-    public enum Outcome { CONNECTED, FAILED, WRONG_USER, NOT_YOURS, TAKEN, REQUESTED }
+    public enum Outcome { CONNECTED, FAILED, WRONG_USER, NOT_YOURS, NOT_ADMIN, TAKEN, REQUESTED }
 
     private final GithubConnectRequestRepository requests;
     private final UserAccountRepository users;
@@ -145,6 +145,11 @@ public class GitHubConnectService {
             logger.warn("GitHub connection refused: {} has no access to installation {}",
                 proof.user().login(), request.getInstallationId());
             return Outcome.NOT_YOURS;
+        }
+        if (!proof.administeredIds().contains(request.getInstallationId())) {
+            logger.warn("GitHub connection refused: {} can access installation {} but does not administer its account",
+                proof.user().login(), request.getInstallationId());
+            return Outcome.NOT_ADMIN;
         }
         // The starter was an owner when they began; that may have changed since.
         organizations.requireOwner(request.getTenantId(), new OrganizationService.Actor(request.getUserId(), false));

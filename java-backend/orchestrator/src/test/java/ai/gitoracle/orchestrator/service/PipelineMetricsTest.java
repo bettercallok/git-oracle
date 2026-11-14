@@ -37,7 +37,7 @@ class PipelineMetricsTest {
 
     @Test
     void everyStateChangeThroughJobStateServiceIsCounted() {
-        JobStateService states = new JobStateService(mock(AgentJobRepository.class), mock(JobEventRepository.class),
+        JobStateService states = new JobStateService(ai.gitoracle.orchestrator.TestJobRepository.create(), mock(JobEventRepository.class),
                                                      Clock.systemUTC());
         states.setMetrics(metrics);
         AgentJob job = new AgentJob();

@@ -27,7 +27,12 @@ public class GitHubOAuthClient {
     public record GitHubUser(long id, String login) {}
 
     /** Who a GitHub sign-in was, and which App installations GitHub says they can access. */
-    public record UserInstallations(GitHubUser user, Set<Long> installationIds) {}
+    /**
+     * @param installationIds     installations the person can access at all
+     * @param administeredIds     those on an account the person controls: their own
+     *                            user account, or an organisation they are an admin of
+     */
+    public record UserInstallations(GitHubUser user, Set<Long> installationIds, Set<Long> administeredIds) {}
 
     public static class GitHubLoginException extends RuntimeException {
         public GitHubLoginException(String message) {
@@ -116,11 +121,23 @@ public class GitHubOAuthClient {
     /** As {@link #exchangeCode}, also asking which installations the person can access. */
     public UserInstallations exchangeCodeForInstallations(String code, String redirectUri) {
         String token = accessToken(code, redirectUri);
-        return new UserInstallations(userFor(token), installationsFor(token));
+        GitHubUser user = userFor(token);
+        Set<Long> administered = new HashSet<>();
+        Set<Long> ids = installationsFor(token, user, administered);
+        return new UserInstallations(user, ids, administered);
     }
 
-    private Set<Long> installationsFor(String token) {
+    /**
+     * GET /user/installations lists every installation the person can reach,
+     * including an organisation's where they only have read access to one
+     * repository. Being listed is therefore not enough to connect it: a
+     * read-only collaborator could have attached a whole organisation's
+     * installation to their own GitOracle organisation. {@code administered}
+     * collects the ones on an account they actually control.
+     */
+    private Set<Long> installationsFor(String token, GitHubUser user, Set<Long> administered) {
         Set<Long> ids = new HashSet<>();
+        java.util.Map<String, Boolean> orgAdmin = new java.util.HashMap<>();
         // Bounded: nobody has anywhere near a thousand, and this runs during a redirect.
         for (int page = 1; page <= 10; page++) {
             JsonNode reply = http.get()
@@ -131,10 +148,41 @@ public class GitHubOAuthClient {
                 .body(JsonNode.class);
             JsonNode installations = reply == null ? null : reply.path("installations");
             if (installations == null || !installations.isArray() || installations.isEmpty()) break;
-            installations.forEach(installation -> ids.add(installation.path("id").asLong()));
+            for (JsonNode installation : installations) {
+                long id = installation.path("id").asLong();
+                ids.add(id);
+                JsonNode account = installation.path("account");
+                String login = account.path("login").asText("");
+                boolean controls = "Organization".equals(account.path("type").asText(""))
+                    ? !login.isEmpty() && orgAdmin.computeIfAbsent(login, org -> isOrgAdmin(token, org))
+                    : account.path("id").asLong(-1) == user.id();
+                if (controls) administered.add(id);
+            }
             if (installations.size() < 100) break;
         }
         return ids;
+    }
+
+    /**
+     * Whether the token's owner is an active admin (owner) of the organisation.
+     * Any failure counts as "no": if GitHub won't say (the App lacks the
+     * organisation "Members: read" permission, say), connecting is refused
+     * rather than allowed on trust.
+     */
+    private boolean isOrgAdmin(String token, String org) {
+        try {
+            JsonNode membership = http.get()
+                .uri(apiUrl + "/user/memberships/orgs/{org}", org)
+                .header("Authorization", "Bearer " + token)
+                .header("Accept", "application/vnd.github+json")
+                .retrieve()
+                .body(JsonNode.class);
+            return membership != null
+                && "admin".equals(membership.path("role").asText(""))
+                && "active".equals(membership.path("state").asText(""));
+        } catch (org.springframework.web.client.RestClientException e) {
+            return false;
+        }
     }
 
     private String accessToken(String code, String redirectUri) {

@@ -11,7 +11,16 @@ public enum TestFramework {
     // bare `jest` after a PASSING npx run (|| and && have equal precedence), and
     // bare jest is not on PATH, so green suites exited 127. A global install could
     // never have worked anyway: the sandbox root filesystem is read-only.
-    NPM_JEST("(npm ci --silent 2>/dev/null || true) && npx --yes jest --no-coverage"),
+    //
+    // A project that defines its own "test" script (vitest, mocha, a jest config
+    // of its own...) is run with it; jest was forced on every package.json, so
+    // those suites failed with "no tests found". npm's placeholder script
+    // ("no test specified") and a missing one fall back to jest. CI=true keeps
+    // runners that default to watch mode from waiting for input.
+    NPM_JEST("(npm ci --silent 2>/dev/null || true) && "
+        + "if node -e \"const s=(require('./package.json').scripts||{}).test||'';"
+        + "process.exit(s&&!/no test specified/.test(s)?0:1)\" 2>/dev/null; "
+        + "then CI=true npm test; else npx --yes jest --no-coverage; fi"),
     CARGO("cargo test"),
     GO_TEST("go test ./... -v"),
     UNKNOWN(null);

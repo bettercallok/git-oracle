@@ -38,9 +38,51 @@ class JestCommandTest {
     }
 
     /** Runs the real command string with stub npm/npx on PATH; npx exits with {@code npxExit}. */
+    @Test
+    void aProjectWithItsOwnTestScriptIsRunWithIt(@TempDir Path bin) throws Exception {
+        // The node stub answers "yes, there is a test script"; npm is then the
+        // runner, so its exit code is the result and npx (jest) is never used.
+        stub(bin.resolve("node"), 0);
+        stub(bin.resolve("npm"), 3);
+        stub(bin.resolve("npx"), 0);
+        assertThat(run(bin)).isEqualTo(3);
+    }
+
+    @Test
+    void theScriptCheckReadsPackageJson(@TempDir Path dir) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(onPath("node"), "node is not installed");
+        String check = COMMAND.substring(COMMAND.indexOf("node -e"), COMMAND.indexOf("; then"));
+        Files.writeString(dir.resolve("package.json"), "{\"scripts\":{\"test\":\"vitest run\"}}");
+        assertThat(sh(dir, check)).isZero();
+        Files.writeString(dir.resolve("package.json"),
+            "{\"scripts\":{\"test\":\"echo \\\"Error: no test specified\\\" && exit 1\"}}");
+        assertThat(sh(dir, check)).isNotZero();
+        Files.writeString(dir.resolve("package.json"), "{}");
+        assertThat(sh(dir, check)).isNotZero();
+    }
+
+    private static boolean onPath(String tool) {
+        for (String dir : System.getenv("PATH").split(":")) {
+            if (Files.isExecutable(Path.of(dir, tool))) return true;
+        }
+        return false;
+    }
+
+    private static int sh(Path dir, String command) throws IOException, InterruptedException {
+        Process p = new ProcessBuilder("sh", "-c", command).directory(dir.toFile()).redirectErrorStream(true).start();
+        p.getInputStream().transferTo(java.io.OutputStream.nullOutputStream());
+        assertThat(p.waitFor(20, TimeUnit.SECONDS)).isTrue();
+        return p.exitValue();
+    }
+
     private static int runWithStubs(Path bin, int npxExit) throws IOException, InterruptedException {
         stub(bin.resolve("npm"), 0);
         stub(bin.resolve("npx"), npxExit);
+        stub(bin.resolve("node"), 1);          // no test script: jest is the runner
+        return run(bin);
+    }
+
+    private static int run(Path bin) throws IOException, InterruptedException {
         ProcessBuilder pb = new ProcessBuilder("sh", "-c", COMMAND);
         // Only the stub directory and the basic system tools: no real jest anywhere.
         pb.environment().put("PATH", bin + ":/usr/bin:/bin");

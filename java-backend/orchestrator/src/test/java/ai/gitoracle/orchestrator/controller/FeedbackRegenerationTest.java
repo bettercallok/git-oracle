@@ -47,7 +47,7 @@ class FeedbackRegenerationTest {
         entityManager = mock(EntityManager.class);
         kafkaTemplate = mock(KafkaTemplate.class);
         events = mock(JobEventRepository.class);
-        JobStateService jobState = new JobStateService(mock(AgentJobRepository.class), events, Clock.systemUTC());
+        JobStateService jobState = new JobStateService(ai.gitoracle.orchestrator.TestJobRepository.create(), events, Clock.systemUTC());
         controller = new DashboardController(entityManager, kafkaTemplate, null, null, jobState, events,
             mock(ai.gitoracle.orchestrator.service.RepoAccessService.class),
             mock(ai.gitoracle.orchestrator.service.UsageLimits.class));
@@ -88,6 +88,7 @@ class FeedbackRegenerationTest {
     @SuppressWarnings("unchecked")
     void aRegenerationKeepsTheBranchAndGoesToThePullRequestsRepository() {
         AgentJob job = job("PR_OPENED", "https://github.com/someone/fork/pull/4");
+        job.setAuthorizedFiles("src/A.java, src/B.java");
         JobEvent created = new JobEvent();
         created.setDetails("{\"request\":{\"branch\":\"case/npe\",\"target_repo\":\"other/target\"}}");
         when(events.findByJobIdOrderByCreatedAtAsc(job.getId())).thenReturn(List.of(created));
@@ -103,6 +104,9 @@ class FeedbackRegenerationTest {
             .containsEntry("target_repo", "someone/fork")        // the PR's own repository wins
             .containsEntry("tenant_id", TENANT.toString())
             .containsEntry("human_instructions", "handle null too");
+        // The files the first fix could touch, or guardrails rejects the new patch.
+        assertThat(((Map<String, Object>) ((Map<String, Object>) payload.getValue()).get("plan")).get("affected_files"))
+            .isEqualTo(List.of("src/A.java", "src/B.java"));
     }
 
     @Test

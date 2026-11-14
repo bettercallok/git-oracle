@@ -267,7 +267,10 @@ public class DashboardController {
         // Minimal plan — fixer will use human instructions as primary guide
         Map<String, Object> plan = new HashMap<>();
         plan.put("strategy", "human_directed");
-        plan.put("affected_files", List.of());
+        // The files the previous fix was allowed to touch. With none, the fixer
+        // only knew files the instruction happened to name, and guardrails then
+        // rejected the regenerated patch as touching unauthorized files.
+        plan.put("affected_files", ai.gitoracle.orchestrator.OrchestratorService.authorizedFilesOf(job));
         plan.put("affected_functions", List.of());
         plan.put("max_lines_to_change", 200);
         plan.put("reasoning", "User requested regeneration via dashboard: " + instructions);

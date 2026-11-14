@@ -43,7 +43,7 @@ class PrStatusReconcilerTest {
 
     @BeforeEach
     void setUp() {
-        jobRepository = mock(AgentJobRepository.class);
+        jobRepository = ai.gitoracle.orchestrator.TestJobRepository.create();
         orchestrator = mock(OrchestratorService.class);
         RestTemplate rest = new RestTemplate();
         github = MockRestServiceServer.createServer(rest);

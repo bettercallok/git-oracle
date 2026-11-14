@@ -4,7 +4,6 @@ import sys
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
-from injection_detector import detect_injection
 from patch_scanner import scan_patch, PatchScanResult
 
 # Ensure ai_core modules can be imported
@@ -20,19 +19,9 @@ add_health_route(app, "guardrails")
 # other agents), never from a browser. allow_origins=["*"] with
 # allow_credentials=True let any web page a developer visited call them.
 
-class TextPayload(BaseModel):
-    text: str
-
 class PatchPayload(BaseModel):
     diff: str
     allowed_files: list[str]
-
-@app.post("/validate/injection")
-async def validate_injection(payload: TextPayload):
-    is_injected = detect_injection(payload.text)
-    if is_injected:
-        raise HTTPException(status_code=400, detail="Prompt injection detected")
-    return {"status": "safe"}
 
 @app.post("/validate/patch", response_model=PatchScanResult)
 async def validate_patch(payload: PatchPayload):
