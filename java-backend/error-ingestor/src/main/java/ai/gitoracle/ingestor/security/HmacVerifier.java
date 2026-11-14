@@ -24,15 +24,28 @@ public final class HmacVerifier {
     private static final String ALGORITHM = "HmacSHA256";
 
     /**
+     * Whether a configured secret can authenticate anything. Blank, or one of the
+     * public placeholders .env.example used to ship ({@code your_*}, {@code change_me*}),
+     * counts as not configured: a placeholder is known to everyone who has read the
+     * repository, so a signature made with it proves nothing. Same rule as
+     * InternalAuthFilter's token check.
+     */
+    public static boolean isUsableSecret(String secret) {
+        if (secret == null || secret.isBlank()) return false;
+        String s = secret.trim();
+        return !s.startsWith("your_") && !s.startsWith("change_me");
+    }
+
+    /**
      * @param rawBody         the exact bytes the sender computed their signature over
      * @param secret          the shared secret configured for this integration
      * @param signatureHeader the header value as received, e.g. "sha256=<hex>"
      * @param prefix          the expected prefix, e.g. "sha256="
-     * @return true only if secret is configured, the header is present and
+     * @return true only if secret is configured (and not a placeholder), the header is present and
      *         well-formed, and the computed HMAC matches in constant time
      */
     public static boolean verify(byte[] rawBody, String secret, String signatureHeader, String prefix) {
-        if (secret == null || secret.isBlank()) return false;
+        if (!isUsableSecret(secret)) return false;
         if (signatureHeader == null || !signatureHeader.startsWith(prefix)) return false;
 
         String providedHex = signatureHeader.substring(prefix.length()).trim();

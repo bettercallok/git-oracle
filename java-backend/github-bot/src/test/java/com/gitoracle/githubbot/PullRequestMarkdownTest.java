@@ -39,7 +39,42 @@ class PullRequestMarkdownTest {
             .contains("\"causal_score\": 0.90")
             .contains("\"tests_total\": 6")
             .contains("\"token_budget_used\": 5365")
+            .contains("\"tests_verified\": true")
             .doesNotContain("null\n");
+    }
+
+    @Test
+    void coverageIsNotPrintedWhenNothingMeasuredIt() {
+        String md = GitHubController.generateMarkdown(request());
+
+        assertThat(md).doesNotContain("Coverage").doesNotContain("coverage_delta");
+    }
+
+    @Test
+    void aFixNoTestSuiteRanAgainstSaysItWasNotVerified() {
+        // The test runner's safe-pass: allPassed=true, verified=false, qualityScore=1.0.
+        PullRequestRequest req = request();
+        req.setTestsVerified(false);
+        req.setTestsPassed(null);
+        req.setTestsTotal(null);
+
+        String md = GitHubController.generateMarkdown(req);
+
+        assertThat(md).contains("### Test Results\n⚠️ No test suite ran — this change was not verified by tests.")
+            .contains("**Fix Quality:** n/a")
+            .contains("\"tests_verified\": false")
+            .contains("\"quality_score\": null")
+            .doesNotContain("✅")
+            .doesNotContain("100%")
+            .doesNotContain("Coverage");
+    }
+
+    @Test
+    void aSenderThatDoesNotSayIsTreatedAsVerified() {
+        PullRequestRequest req = request();
+        req.setTestsVerified(null);
+
+        assertThat(GitHubController.generateMarkdown(req)).contains("✅ 6/6 passed").contains("**Fix Quality:** 100%");
     }
 
     @Test
@@ -56,7 +91,7 @@ class PullRequestMarkdownTest {
         assertThat(md).contains("**Root Commit:** n/a")
             .contains("**Causal Confidence:** n/a")
             .contains("_Not investigated — this fix was requested directly._")
-            .contains("### Test Results\n✅ Passed ·")
+            .contains("### Test Results\n✅ Passed\n")
             .contains("\"causal_score\": null")
             .contains("\"root_commit\": null")
             .contains("\"tests_passed\": null");
@@ -71,7 +106,12 @@ class PullRequestMarkdownTest {
         bare.setTestsPassed(null);
         bare.setTestsTotal(null);
 
-        for (PullRequestRequest req : new PullRequestRequest[] {request(), bare}) {
+        PullRequestRequest unverified = request();
+        unverified.setTestsVerified(false);
+        unverified.setQualityScore(null);
+        unverified.setCoverageDelta(0.012);
+
+        for (PullRequestRequest req : new PullRequestRequest[] {request(), bare, unverified}) {
             String md = GitHubController.generateMarkdown(req);
             String json = md.substring(md.indexOf("{"), md.indexOf("}") + 1);
             var metadata = mapper.readTree(json);

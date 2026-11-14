@@ -38,7 +38,8 @@ public class OrchestratorService {
     private final ai.gitoracle.orchestrator.repository.PrOutcomeRepository prOutcomeRepository;
     private final JobStateService jobState;
     private final EscalationService escalations;
-    private final RestTemplate restTemplate = new RestTemplate();
+    // Timeouts per target service (InternalHttp). Was a plain RestTemplate that waited forever.
+    private final RestTemplate restTemplate = ai.gitoracle.orchestrator.service.InternalHttp.pipeline();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     // Every internal service now requires this on every request (see
@@ -267,10 +268,16 @@ public class OrchestratorService {
         // (persistInvestigationResult); filling it with HEAD made a job whose
         // Investigator never responded look like it had found a cause.
         String headSha = workspaceService.getHeadCommitSha(repoPath);
-        if (headSha != null) {
-            job.setBaseCommit(headSha);
-            jobRepository.save(job);
+        if (headSha == null) {
+            // cloneRepository returns the path even when the clone failed, and the
+            // job used to go on to the investigator with an empty directory.
+            jobState.transition(job, "FAILED", "Could not clone " + event.getRepoUrl()
+                + (branch == null || branch.isBlank() ? "" : " (branch " + branch + ")")
+                + " — check that the repository and branch exist and are public", "orchestrator");
+            return;
         }
+        job.setBaseCommit(headSha);
+        jobRepository.save(job);
 
         // 3. Publish event to Python Investigator Agent
         Map<String, Object> investigatorPayload = new HashMap<>();
@@ -292,6 +299,8 @@ public class OrchestratorService {
         investigatorPayload.put("target_repo",
             event.getTargetRepo() != null ? event.getTargetRepo() : "");
         investigatorPayload.put("branch", branch != null ? branch : "");
+        // Agents keep memory per organisation; they used to file everything under the default one.
+        investigatorPayload.put("tenant_id", job.getTenantId().toString());
 
         kafkaTemplate.send(KafkaTopics.JOB_INVESTIGATE, investigatorPayload);
     }
@@ -551,7 +560,12 @@ public class OrchestratorService {
                 testsPassedPayload.put("branch",         branch);
                 testsPassedPayload.put("isRegeneration", event.getOrDefault("isRegeneration", "false"));
                 testsPassedPayload.put("qualityScore",   String.valueOf(response.get("qualityScore")));
-                testsPassedPayload.put("coverageDelta",  String.valueOf(response.get("coverageDelta")));
+                // The runner's safe-pass (no test suite ran) is allPassed=true with
+                // verified=false. That was dropped here, so the PR said "✅ Passed"
+                // and "Fix Quality: 100%" for a fix nothing had checked. Absent
+                // (an older runner) means verified.
+                testsPassedPayload.put("testsVerified",
+                    String.valueOf(!Boolean.FALSE.equals(response.get("verified"))));
                 testsPassedPayload.put("fixAttempts",    String.valueOf(attempts[0]));
                 // Absent when the runner found no summary line it recognises.
                 if (response.get("testsTotal") instanceof Number total) {
@@ -572,8 +586,34 @@ public class OrchestratorService {
             // This used to only log, leaving the job in TESTING forever with nothing
             // to say why.
             metrics.testRun("error");
-            fail(jobIdStr, "Test runner unreachable or errored: " + e.getMessage(), "orchestrator");
+            String reason = ai.gitoracle.orchestrator.service.InternalHttp.isTimeout(e)
+                ? "Test runner timed out after "
+                    + ai.gitoracle.orchestrator.service.InternalHttp.TEST_RUNNER_TIMEOUT.toMinutes() + " minutes"
+                : "Test runner unreachable or errored: " + e.getMessage();
+            fail(jobIdStr, reason, "orchestrator");
         }
+    }
+
+    /**
+     * In a PR_OPENED reason when no test suite ran against the fix. The dashboard
+     * looks for it (JobDetail), so keep the two in step.
+     */
+    /**
+     * owner/name from a job's repository URL. Only a trailing ".git" is removed:
+     * replacing every ".git" turned user/user.github.io into user/userhub.io.
+     */
+    static String repoFullName(String repoUrl) {
+        return String.valueOf(repoUrl).trim()
+            .replaceFirst("^https://github\\.com/", "")
+            .replaceFirst("/+$", "")
+            .replaceFirst("\\.git$", "");
+    }
+
+    public static final String UNVERIFIED_MARKER ="(no test suite ran — not verified)";
+
+    /** False only when the TESTS_PASSED event says so; older events count as verified. */
+    static boolean testsVerified(Map<String, String> event) {
+        return !"false".equalsIgnoreCase(event.getOrDefault("testsVerified", "true"));
     }
 
     private void fail(String jobIdStr, String reason, String actor) {
@@ -616,7 +656,7 @@ public class OrchestratorService {
         final String existingPrUrl = hasPr ? existing.get().getPrUrl() : null;
 
         existing.ifPresent(job -> {
-            repoFullName[0] = job.getRepo().replace("https://github.com/", "").replace(".git", "");
+            repoFullName[0] = repoFullName(job.getRepo());
             errorId[0] = job.getErrorId();
         });
 
@@ -658,8 +698,11 @@ public class OrchestratorService {
             Integer testsFailed = parseIntOrNull(event.get("testsFailed"));
             prRequest.put("testsTotal", testsTotal);
             prRequest.put("testsPassed", testsTotal == null ? null : testsTotal - (testsFailed == null ? 0 : testsFailed));
-            prRequest.put("coverageDelta", parseDoubleOrDefault(event.get("coverageDelta"), 0.0));
-            prRequest.put("qualityScore", parseDoubleOrDefault(event.get("qualityScore"), 1.0));
+            // Coverage is never measured, so none is sent (the PR printed "Coverage +0.00%").
+            prRequest.put("coverageDelta", null);
+            boolean testsVerified = testsVerified(event);
+            prRequest.put("testsVerified", testsVerified);
+            prRequest.put("qualityScore", testsVerified ? parseDoubleOrDefault(event.get("qualityScore"), 1.0) : null);
             prRequest.put("tokenBudgetUsed", jobRow != null && jobRow.getTokenBudgetUsed() != null
                 ? jobRow.getTokenBudgetUsed() : 0);
             // The PR's "Root Cause" section printed the literal word "null": this
@@ -690,7 +733,8 @@ public class OrchestratorService {
                     boolean updated = existingPrUrl != null && existingPrUrl.equals(prUrl);
                     job.setPrUrl(prUrl);
                     jobState.transition(job, "PR_OPENED",
-                        (updated ? "Pull request updated with the regenerated fix: " : "Pull request opened: ") + prUrl,
+                        (updated ? "Pull request updated with the regenerated fix" : "Pull request opened")
+                            + (testsVerified ? "" : " " + UNVERIFIED_MARKER) + ": " + prUrl,
                         "github-bot");
                     logger.info("Orchestrator pipeline complete for job: {} — PR: {}", jobIdStr, prUrl);
                 } else {
@@ -785,7 +829,8 @@ public class OrchestratorService {
             reviewRequest.put("tenant_id",       job.getTenantId().toString());
             reviewRequest.put("repo_path",       "/tmp/gitoracle-workspaces/" + jobIdStr);
             reviewRequest.put("bug_description", job.getErrorId());
-            reviewRequest.put("fixer_patch",     "(stored patch not available — review based on comment only)");
+            reviewRequest.put("fixer_patch",     job.getFixPatch() != null && !job.getFixPatch().isBlank()
+                ? job.getFixPatch() : "(stored patch not available — review based on comment only)");
             reviewRequest.put("human_comment",   comment);
 
             @SuppressWarnings("unchecked")
@@ -817,6 +862,10 @@ public class OrchestratorService {
                 fixPayload.put("error_id",            job.getErrorId());
                 fixPayload.put("human_instructions",  comment);
                 fixPayload.put("target_repo",         repoForPr);
+                // The branch the job was started on: without it the regenerated fix
+                // was tested against the default branch.
+                fixPayload.put("branch",              jobState.requestOverrides(job.getId()).getOrDefault("branch", ""));
+                fixPayload.put("tenant_id",           job.getTenantId().toString());
                 // The investigator's suspect, so the fixer sees the bug-introducing diff.
                 fixPayload.put("root_commit",         job.getRootCommit() == null ? "" : job.getRootCommit());
 
@@ -873,7 +922,7 @@ public class OrchestratorService {
     }
 
     /** "owner/repo" of a GitHub pull request URL, or "" (= the job's own repo downstream). */
-    static String repositoryOfPullRequest(String prUrl) {
+    public static String repositoryOfPullRequest(String prUrl) {
         if (prUrl == null) return "";
         var m = PULL_REQUEST_URL.matcher(prUrl.trim());
         return m.matches() ? m.group(1) : "";

@@ -131,15 +131,56 @@ public class JobStateService {
      * saved before it has one).
      */
     public void recordCreated(AgentJob job, String reason, String actor) {
+        recordCreated(job, reason, actor, Map.of());
+    }
+
+    /** The key in a creation event's details that holds what the request asked for. */
+    static final String REQUEST_KEY = "request";
+
+    /**
+     * As above, also keeping the request's own overrides (branch, target_repo,
+     * human_instructions) on the creation event. They travel in every Kafka
+     * message of the first run and are deliberately not columns on the job, but a
+     * later cycle (a regeneration, an approved escalation) starts from the job
+     * alone and used to lose them: the new fix was tested against the default
+     * branch and its PR went to the source repository.
+     */
+    public void recordCreated(AgentJob job, String reason, String actor, Map<String, String> requestOverrides) {
         OffsetDateTime now = OffsetDateTime.now(clock);
         job.setStateChangedAt(now);
         job.setStateReason(truncate(reason));
         jobRepository.save(job);
 
-        JobEvent event = newEvent(job.getId(), job.getTenantId(), JobEvent.Type.STATE_CHANGE, actor, reason, null);
+        Map<String, String> kept = new java.util.LinkedHashMap<>();
+        requestOverrides.forEach((key, value) -> {
+            if (value != null && !value.isBlank()) kept.put(key, value);
+        });
+        JobEvent event = newEvent(job.getId(), job.getTenantId(), JobEvent.Type.STATE_CHANGE, actor, reason,
+            kept.isEmpty() ? null : Map.of(REQUEST_KEY, kept));
         event.setToState(job.getState());
         event.setCreatedAt(now);
         eventRepository.save(event);
+    }
+
+    /** What the job's original request asked for (see {@link #recordCreated}); empty when nothing was kept. */
+    public Map<String, String> requestOverrides(UUID jobId) {
+        java.util.List<JobEvent> events = eventRepository.findByJobIdOrderByCreatedAtAsc(jobId);
+        if (events == null) return Map.of();
+        for (JobEvent event : events) {
+            if (event.getDetails() == null || !event.getDetails().contains(REQUEST_KEY)) continue;
+            try {
+                com.fasterxml.jackson.databind.JsonNode request = objectMapper.readTree(event.getDetails()).get(REQUEST_KEY);
+                if (request == null || !request.isObject()) continue;
+                Map<String, String> out = new java.util.LinkedHashMap<>();
+                request.fields().forEachRemaining(field -> {
+                    if (field.getValue().isTextual()) out.put(field.getKey(), field.getValue().asText());
+                });
+                return out;
+            } catch (Exception e) {
+                logger.warn("Unreadable details on a timeline event of job {}: {}", jobId, e.getMessage());
+            }
+        }
+        return Map.of();
     }
 
     /** Appends a non-state entry (agent progress, an error) to the job's timeline. */

@@ -102,6 +102,10 @@ spring:
         # producer's __TypeId__) or git-oracle-core's own typed events
         # (e.g. ErrorIngestedEvent) — nothing else needs to be trusted.
         spring.json.trusted.packages: java.util,ai.gitoracle.core.kafka.event
+        # Above the longest listener: handleFixGenerated waits up to 10 minutes on
+        # the test runner (InternalHttp.TEST_RUNNER_TIMEOUT). At the 5-minute default
+        # a slow but legitimate test run triggered a rebalance and a redelivery.
+        max.poll.interval.ms: 900000
 
 # Request body size cap (L3). Nothing bounded these, so Tomcat's 2GB default
 # applied: one request could make a service buffer gigabytes and be OOM-killed,

@@ -146,7 +146,7 @@ OPENAI_API_KEY=<your provider key>`}</Code>
 
         <h3 className="guide-subheading">GitHub webhook</h3>
         <p>
-          Point your GitHub App's webhook at <Inline>/webhook/github</Inline> and set the same secret in <Inline>GITHUB_APP_WEBHOOK_SECRET</Inline>.
+          Point your GitHub App's webhook at <Inline>/webhook/github</Inline> and set the same secret in <Inline>GITHUB_APP_WEBHOOK_SECRET</Inline>. Until it is set, every delivery is rejected.
           Failed <Inline>workflow_run</Inline> events start a job, and PR comments can start another fix cycle.
           The server must be reachable from the internet, so this doesn't work on plain localhost.
         </p>

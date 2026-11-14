@@ -8,7 +8,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.kafka.core.KafkaTemplate;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import org.springframework.http.HttpStatus;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.util.HexFormat;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -69,5 +74,17 @@ class SentryWebhookSecretTest {
         assertThat(controller.sentrySecretFor(Tenant.DEFAULT_ID)).isEqualTo("shared-secret");
         tenantWithSecret(Tenant.DEFAULT_ID, "rotated");
         assertThat(controller.sentrySecretFor(Tenant.DEFAULT_ID)).isEqualTo("rotated");
+    }
+
+    @Test
+    void theDefaultTenantWithAPlaceholderSharedSecretIsRejected() throws Exception {
+        set("sentryWebhookSecret", "your_sentry_webhook_secret");
+        byte[] body = "{\"repo\":\"https://github.com/o/r\"}".getBytes(StandardCharsets.UTF_8);
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec("your_sentry_webhook_secret".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        String sig = "sha256=" + HexFormat.of().formatHex(mac.doFinal(body));
+
+        assertThat(controller.sentryWebhook(Tenant.DEFAULT_ID, body, sig).getStatusCode())
+            .isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 }

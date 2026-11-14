@@ -118,7 +118,11 @@ public class AgentJob {
     @Column(name = "escalation_report", columnDefinition = "jsonb")
     private String escalationReport;
 
-    @Column(name = "token_budget_used")
+    // Never written by an entity save. Agents add to it with a single SQL
+    // increment (AgentJobRepository.incrementTokens) while listeners hold copies
+    // of the job loaded earlier; saving such a copy used to write its old count
+    // back over the increments made in between.
+    @Column(name = "token_budget_used", updatable = false)
     private Integer tokenBudgetUsed = 0;
 
     @Column(name = "token_budget_limit")

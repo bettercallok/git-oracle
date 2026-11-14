@@ -29,9 +29,16 @@ public class SemanticDedupService {
 
     @Transactional
     public void ingest(UUID tenantId, Map<String, Object> payload) {
-        String repo = (String) payload.getOrDefault("repo", "unknown/repo");
-        String errorId = (String) payload.getOrDefault("error_id", "err-" + UUID.randomUUID().toString().substring(0, 8));
-        String stackTrace = (String) payload.getOrDefault("stacktrace", "");
+        // No repository means there is nothing to clone or fix. This used to default
+        // to "unknown/repo", so any payload without one became a job that could only
+        // fail. A Sentry-style report may omit error_id, so that default stays.
+        if (!(payload.get("repo") instanceof String repo) || repo.isBlank()) {
+            logger.warn("Ignoring report for tenant {} with no repository.", tenantId);
+            return;
+        }
+        String errorId = payload.get("error_id") instanceof String id && !id.isBlank()
+            ? id : "err-" + UUID.randomUUID().toString().substring(0, 8);
+        String stackTrace = payload.get("stacktrace") instanceof String st ? st : "";
 
         // Deduplicate by errorId. NOTE: this is exact-match dedup, not semantic —
         // vector-similarity dedup requires an embedding service (not currently deployed)

@@ -21,10 +21,19 @@ from shared.job_events import report_event, ERROR
 from shared.body_limit import BodySizeLimitMiddleware
 from shared.safe_paths import UnsafePathError, partition_safe, resolve_within, safe_read_text
 from shared.git_context import commit_diff
+from shared.limits import PATCH_LINE_LIMIT, count_changed_lines
 from shared.repo_refs import InvalidRepoRefError, is_within_workspace_root, validate_branch, validate_repo_url
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Seconds to wait for the test runner's /test (the orchestrator's InternalHttp.TEST_RUNNER_TIMEOUT).
+SELF_TEST_TIMEOUT_SECONDS = 600.0
+
+# How much of the affected files the model is shown. It was 4,000 characters,
+# so a bug further into a file could not be copied verbatim into `search` and
+# every attempt was rejected.
+SOURCE_CONTEXT_CHARS = int(os.environ.get("FIXER_SOURCE_CONTEXT_CHARS", "24000"))
 
 app = FastAPI(title="GitOracle Fixer Agent", version="1.0", dependencies=[Depends(require_internal_token)])
 app.add_middleware(BodySizeLimitMiddleware)
@@ -203,7 +212,10 @@ async def run_real_test(job_id: str, repo_path: str, repo_url: str, patch_diff: 
                     "framework": "UNKNOWN"  # let Test Runner auto-detect (pom.xml/package.json/etc.)
                 },
                 headers={"X-Internal-Token": os.environ.get("GITORACLE_INTERNAL_TOKEN", "")},
-                timeout=130.0
+                # Matches the orchestrator's read timeout on /test (InternalHttp.
+                # TEST_RUNNER_TIMEOUT): the runner may take two 180s clone attempts
+                # plus 180s of tests, so 130s gave up on suites that would have passed.
+                timeout=SELF_TEST_TIMEOUT_SECONDS
             )
             response.raise_for_status()
             data = response.json()
@@ -216,6 +228,14 @@ async def run_real_test(job_id: str, repo_path: str, repo_url: str, patch_diff: 
     except (httpx.HTTPError, ValueError) as e:  # unreachable/HTTP error, or a non-JSON reply
         logger.error(f"Error calling real test runner: {e}")
         return False, f"Could not run the tests: {e}"
+
+
+def clip_source_context(source_context: str, limit: int = 0) -> str:
+    """The source shown to the model, cut at `limit` characters with a note saying so."""
+    limit = limit or SOURCE_CONTEXT_CHARS
+    if len(source_context) <= limit:
+        return source_context
+    return source_context[:limit] + "\n[...source truncated: the rest of the file(s) is not shown]"
 
 
 def _clip(text: str, limit: int = 1200) -> str:
@@ -429,14 +449,14 @@ Bug Description: {request.bug_description}
 {human_block}
 Architect's Blueprint:
 Strategy: {request.plan.strategy}
-Max Lines to Change: {request.plan.max_lines_to_change}
+Max Lines to Change: {min(request.plan.max_lines_to_change, PATCH_LINE_LIMIT)} (a patch over {PATCH_LINE_LIMIT} changed lines is rejected)
 Reasoning: {request.plan.reasoning}
 {facts}
 Past Successful Fixes for Similar Bugs:
 {past_fixes}
 
 Source Code Context:
-{source_context[:4000]}  # Trimmed for safety
+{clip_source_context(source_context)}
 
 {hint}
 
@@ -478,6 +498,21 @@ Do not write a diff yourself — the unified diff is computed automatically from
                 f"WARNING: Your previous edit to {edit.file_path} was rejected — either the 'search' text didn't "
                 "match exactly (copy it verbatim, including whitespace/indentation, from the source context above), "
                 "or 'replace' left mismatched braces. Ensure every '{' in your replace text has a matching '}'."
+            )
+            continue
+
+        changed = count_changed_lines(diff_text)
+        if changed > PATCH_LINE_LIMIT:
+            # Guardrails would reject it after the tests had already been run.
+            logger.warning(f"Rejected edit to {edit.file_path}: {changed} changed lines (limit {PATCH_LINE_LIMIT})")
+            await report_event(request.job_id, "fixer",
+                               f"Attempt {attempt + 1}: edit changes {changed} lines, over the "
+                               f"{PATCH_LINE_LIMIT}-line limit — retrying",
+                               details={"attempt": attempt + 1, "file": edit.file_path, "lines": changed})
+            hint = (
+                f"WARNING: Your previous edit changed {changed} lines. A patch may change at most "
+                f"{PATCH_LINE_LIMIT} lines (added plus removed). Make a smaller, more targeted edit: "
+                "replace only the lines that must change."
             )
             continue
 
@@ -556,6 +591,7 @@ Do not write a diff yourself — the unified diff is computed automatically from
 
 from shared.kafka_consumer import KafkaEventConsumer
 from shared import topics
+from shared.tenancy import tenant_id_of
 from shared.kafka_producer import get_producer
 from shared.consumer_lifespan import run_consumer_with_app
 from shared.health import add_health_route
@@ -584,7 +620,7 @@ async def handle_fix_job(payload: dict):
         bug_desc = human_instructions  # user's instructions become the primary description
 
     request = FixerRequest(
-        tenant_id="00000000-0000-0000-0000-000000000000",
+        tenant_id=tenant_id_of(payload),
         repo_path=repo_path,
         bug_description=bug_desc,
         plan=plan,

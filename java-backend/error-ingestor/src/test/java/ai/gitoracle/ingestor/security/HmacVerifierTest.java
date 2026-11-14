@@ -102,4 +102,20 @@ class HmacVerifierTest {
 
         assertThat(HmacVerifier.verify(null, secret, signature, "sha256=")).isTrue();
     }
+
+    @Test
+    void aPlaceholderSecretAuthenticatesNothing() throws Exception {
+        byte[] body = "{\"event\":\"push\"}".getBytes(StandardCharsets.UTF_8);
+        // .env.example used to ship these, so anyone could sign with them.
+        for (String placeholder : new String[]{"your_webhook_secret", "your_sentry_webhook_secret", "change_me"}) {
+            assertThat(HmacVerifier.verify(body, placeholder, realSignature(body, placeholder), "sha256="))
+                .as(placeholder).isFalse();
+            assertThat(HmacVerifier.isUsableSecret(placeholder)).isFalse();
+        }
+        String real = "9f3c1e2a7b4d6f8e0a1b2c3d4e5f6a7b";
+        assertThat(HmacVerifier.verify(body, real, realSignature(body, real), "sha256=")).isTrue();
+        assertThat(HmacVerifier.isUsableSecret(real)).isTrue();
+        assertThat(HmacVerifier.isUsableSecret("  ")).isFalse();
+        assertThat(HmacVerifier.isUsableSecret(null)).isFalse();
+    }
 }

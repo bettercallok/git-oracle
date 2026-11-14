@@ -235,10 +235,18 @@ public class DashboardController {
             throw new ai.gitoracle.orchestrator.service.UsageLimitExceededException(reason);
         });
 
+        // Only a job that has stopped can be regenerated. A job still being worked
+        // on (or already regenerating) used to get a second fix cycle on top of the
+        // first, both writing the same workspace and racing to open the PR.
+        if (!REGENERABLE_STATES.contains(job.getState())) {
+            return conflict("This job is " + job.getState() + " — wait for it to finish before asking for another fix.");
+        }
+
         logger.info("Dashboard feedback received for job {} — triggering new fix cycle", jobId);
 
         jobState.transition(job, "REGENERATING", "Regeneration requested from the dashboard: " + instructions,
                             "dashboard");
+        Map<String, String> original = jobState.requestOverrides(job.getId());
 
         // Build a new fix event with the human's instructions
         String repoPath = "/tmp/gitoracle-workspaces/" + jobId;
@@ -248,6 +256,12 @@ public class DashboardController {
         fixPayload.put("repo_path", repoPath);
         fixPayload.put("error_id", job.getErrorId());
         fixPayload.put("human_instructions", instructions);
+        // Where the first run worked: the branch it was started on, and the
+        // repository its PR is in (or was asked to go to, if there is no PR yet).
+        String prRepo = ai.gitoracle.orchestrator.OrchestratorService.repositoryOfPullRequest(job.getPrUrl());
+        fixPayload.put("branch", original.getOrDefault("branch", ""));
+        fixPayload.put("target_repo", !prRepo.isEmpty() ? prRepo : original.getOrDefault("target_repo", ""));
+        fixPayload.put("tenant_id", job.getTenantId().toString());
         // The investigator's suspect, so the fixer sees the bug-introducing diff.
         fixPayload.put("root_commit", job.getRootCommit() == null ? "" : job.getRootCommit());
         // Minimal plan — fixer will use human instructions as primary guide
@@ -343,8 +357,12 @@ public class DashboardController {
         job.setTenantId(tenantId);
         entityManager.persist(job);
         entityManager.flush(); // ensure ID is assigned
+        Map<String, String> overrides = new HashMap<>();
+        overrides.put("branch", branch);
+        overrides.put("target_repo", targetRepo);
+        overrides.put("human_instructions", issue);
         jobState.recordCreated(job, (investigateFirst ? "Full pipeline" : "Direct fix")
-            + " requested: " + issue, "dashboard");
+            + " requested: " + issue, "dashboard", overrides);
 
         logger.info("Dashboard trigger: new job {} for repo {} (investigateFirst={})",
                     job.getId(), repoUrl, investigateFirst);
@@ -388,6 +406,7 @@ public class DashboardController {
         fixPayload.put("human_instructions", issue);
         fixPayload.put("target_repo", targetRepo);
         fixPayload.put("branch", branch);
+        fixPayload.put("tenant_id", tenantId.toString());
         Map<String, Object> plan = new HashMap<>();
         plan.put("strategy", "dashboard_triggered");
         plan.put("affected_files", List.of());
@@ -493,6 +512,13 @@ public class DashboardController {
             plannerPayload.put("repo_url", job.getRepo());
             plannerPayload.put("repo_path", "/tmp/gitoracle-workspaces/" + job.getId());
             plannerPayload.put("error_id", job.getErrorId());
+            // What the original request asked for, so the resumed run fixes the
+            // same branch, follows the same instruction and opens its PR in the same place.
+            Map<String, String> original = jobState.requestOverrides(job.getId());
+            plannerPayload.put("branch", original.getOrDefault("branch", ""));
+            plannerPayload.put("target_repo", original.getOrDefault("target_repo", ""));
+            plannerPayload.put("human_instructions", original.getOrDefault("human_instructions", ""));
+            plannerPayload.put("tenant_id", job.getTenantId().toString());
 
             // Resume with the real investigation result stored during the original run.
             // Fall back to a minimal synthetic one only if nothing was persisted.
@@ -525,6 +551,9 @@ public class DashboardController {
                                 "Escalation rejected: " + escalation.getReason(), "dashboard");
         return ResponseEntity.ok(Map.of("status", "REJECTED", "jobState", job.getState()));
     }
+
+    /** A job can be asked for another fix once it has stopped: finished, failed, or waiting on a human. */
+    static final Set<String> REGENERABLE_STATES = Set.of("PR_OPENED", "PR_MERGED", "PR_CLOSED", "FAILED", "ESCALATED");
 
     private static ResponseEntity<Map<String, String>> conflict(String message) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", message));

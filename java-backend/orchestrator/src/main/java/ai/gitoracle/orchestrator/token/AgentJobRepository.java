@@ -16,8 +16,11 @@ public interface AgentJobRepository extends JpaRepository<AgentJob, UUID> {
      * Atomically increments token_budget_used.
      * Returns the number of rows affected (0 if job not found).
      */
+    // Native SQL: the column is updatable=false on the entity so that saving a
+    // stale AgentJob can't overwrite the count, and this is its one writer.
     @Modifying
-    @Query("UPDATE AgentJob j SET j.tokenBudgetUsed = COALESCE(j.tokenBudgetUsed, 0) + :tokens WHERE j.id = :jobId")
+    @Query(value = "UPDATE agent_job SET token_budget_used = COALESCE(token_budget_used, 0) + :tokens WHERE id = :jobId",
+           nativeQuery = true)
     int incrementTokens(@Param("jobId") UUID jobId, @Param("tokens") int tokens);
 
     /** Jobs whose PR is open, for PrStatusReconciler. */
