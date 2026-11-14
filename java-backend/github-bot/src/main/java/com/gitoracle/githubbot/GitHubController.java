@@ -154,12 +154,9 @@ public class GitHubController {
             runCommand(workDir, auth, "git", "-c", "credential.helper=", "push", "origin", newBranchName);
             
             // Open the Pull Request
-            GHPullRequest pr = repo.createPullRequest(
+            GHPullRequest pr = openPullRequest(repo,
                 "🤖 GitOracle Autonomous Fix: " + request.getCommitMessage(),
-                newBranchName,
-                baseBranch,
-                markdown
-            );
+                newBranchName, baseBranch, markdown, !request.isVerified(), request.getJobId());
             logger.info("Successfully opened Pull Request on {}: {}", request.getRepoFullName(), pr.getHtmlUrl());
 
             return ResponseEntity.ok(new PullRequestResult(true, pr.getHtmlUrl().toString(), null));
@@ -192,6 +189,24 @@ public class GitHubController {
      * URL, or in {@code .git/config}. {@code GIT_CONFIG_COUNT}/{@code KEY_n}/
      * {@code VALUE_n} (git 2.31+) inject config for that one process only.
      */
+    /**
+     * Opens the PR. A fix no test suite verified is opened as a draft, so it
+     * can't be merged before someone has looked at it. GitHub refuses drafts on
+     * some plans (422); the PR is then opened normally, still carrying the
+     * "not verified" warning in its body.
+     */
+    static GHPullRequest openPullRequest(GHRepository repo, String title, String head, String base,
+                                         String body, boolean draft, String jobId) throws IOException {
+        if (draft) {
+            try {
+                return repo.createPullRequest(title, head, base, body, true, true);
+            } catch (IOException e) {
+                logger.warn("Job {}: could not open a draft PR ({}); opening a normal one", jobId, e.getMessage());
+            }
+        }
+        return repo.createPullRequest(title, head, base, body);
+    }
+
     static Map<String, String> gitAuthEnv(String token) {
         String basic = Base64.getEncoder()
             .encodeToString(("x-access-token:" + token).getBytes(StandardCharsets.UTF_8));

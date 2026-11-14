@@ -38,7 +38,7 @@ class BudgetRecordAuthorizationTest {
     @BeforeEach
     void setUp() {
         budget = mock(TokenBudgetManager.class);
-        jobs = mock(AgentJobRepository.class);
+        jobs = ai.gitoracle.orchestrator.TestJobRepository.create();
         promptVersions = mock(ai.gitoracle.orchestrator.repository.JobPromptVersionRepository.class);
         controller = new BudgetController(budget, jobs, promptVersions);
         jobId = UUID.randomUUID();

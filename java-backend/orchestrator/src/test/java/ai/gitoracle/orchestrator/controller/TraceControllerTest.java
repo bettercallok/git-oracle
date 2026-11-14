@@ -61,7 +61,7 @@ class TraceControllerTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        jobs = mock(AgentJobRepository.class);
+        jobs = ai.gitoracle.orchestrator.TestJobRepository.create();
         RestTemplate rest = new RestTemplate();
         langfuseApi = MockRestServiceServer.createServer(rest);
         controller = new TraceController(client(rest, "pk-lf-real", "sk-lf-real"), jobs, mock(EntityManager.class));

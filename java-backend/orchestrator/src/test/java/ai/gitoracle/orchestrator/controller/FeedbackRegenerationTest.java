@@ -47,7 +47,7 @@ class FeedbackRegenerationTest {
         entityManager = mock(EntityManager.class);
         kafkaTemplate = mock(KafkaTemplate.class);
         events = mock(JobEventRepository.class);
-        JobStateService jobState = new JobStateService(mock(AgentJobRepository.class), events, Clock.systemUTC());
+        JobStateService jobState = new JobStateService(ai.gitoracle.orchestrator.TestJobRepository.create(), events, Clock.systemUTC());
         controller = new DashboardController(entityManager, kafkaTemplate, null, null, jobState, events,
             mock(ai.gitoracle.orchestrator.service.RepoAccessService.class),
             mock(ai.gitoracle.orchestrator.service.UsageLimits.class));

@@ -69,7 +69,7 @@ class GitHubConnectServiceTest {
     }
 
     private static GitHubOAuthClient.UserInstallations proof(long userId, Long... installs) {
-        return new GitHubOAuthClient.UserInstallations(new GitHubOAuthClient.GitHubUser(userId, "someone"), Set.of(installs));
+        return new GitHubOAuthClient.UserInstallations(new GitHubOAuthClient.GitHubUser(userId, "someone"), Set.of(installs), Set.of(installs));
     }
 
     @Test
@@ -191,5 +191,14 @@ class GitHubConnectServiceTest {
         verify(organizations).requireOwner(ORG, owner);
         assertThat(tenant.getGithubAppInstallationId()).isNull();
         verify(audit).record(ORG, "github.disconnected", "55", null);
+    }
+
+    @Test
+    void someoneWhoCanOnlyAccessTheInstallationCannotConnectIt() {
+        request.setInstallationId(55L);
+        var proof = new GitHubOAuthClient.UserInstallations(
+            new GitHubOAuthClient.GitHubUser(OWNER_GITHUB, "someone"), Set.of(55L), Set.of());
+
+        assertThat(service.complete(STATE, proof)).isEqualTo(GitHubConnectService.Outcome.NOT_ADMIN);
     }
 }

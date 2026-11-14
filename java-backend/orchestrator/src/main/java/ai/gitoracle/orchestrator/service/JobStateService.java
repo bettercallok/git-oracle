@@ -92,6 +92,14 @@ public class JobStateService {
      * to FIXING if its message is processed late.
      */
     public boolean transitionFrom(AgentJob job, Set<String> allowedFrom, String to, String reason, String actor) {
+        return transitionFrom(job, allowedFrom, to, reason, actor, 0);
+    }
+
+    /** How many times a transition looks again after another writer got there first. */
+    private static final int MAX_STATE_RETRIES = 2;
+
+    private boolean transitionFrom(AgentJob job, Set<String> allowedFrom, String to, String reason, String actor,
+                                   int attempt) {
         String from = job.getState();
         if (to.equals(from)) {
             return false;
@@ -108,10 +116,26 @@ public class JobStateService {
         }
 
         OffsetDateTime now = OffsetDateTime.now(clock);
+        // Compare-and-set in the database. The caller's copy of the job may be
+        // minutes old (it was loaded before a clone, a test run, an LLM call),
+        // and two listeners used to overwrite each other's state: a watchdog
+        // escalation could replace TESTING that a listener had just written.
+        if (from != null && job.getId() != null
+                && jobRepository.moveState(job.getId(), from, to, truncate(reason), now) == 0) {
+            String actual = jobRepository.currentState(job.getId());
+            if (actual == null || actual.equals(from) || attempt >= MAX_STATE_RETRIES) {
+                logger.warn("Job {}: could not move {} -> {} ({}): the job is {} now",
+                            job.getId(), from, to, actor, actual == null ? "gone" : actual);
+                return false;
+            }
+            logger.info("Job {} is {} now, not {} — deciding {} again ({})", job.getId(), actual, from, to, actor);
+            job.setState(actual);
+            return transitionFrom(job, allowedFrom, to, reason, actor, attempt + 1);
+        }
         job.setState(to);
         job.setStateReason(truncate(reason));
         job.setStateChangedAt(now);
-        jobRepository.save(job);
+        jobRepository.save(job);   // the job's other fields (prUrl, fixPatch, ...); not its state columns
         metrics.transition(from, to);
 
         JobEvent event = newEvent(job.getId(), job.getTenantId(), JobEvent.Type.STATE_CHANGE, actor, reason, null);
@@ -150,6 +174,9 @@ public class JobStateService {
         job.setStateChangedAt(now);
         job.setStateReason(truncate(reason));
         jobRepository.save(job);
+        if (job.getId() != null) {
+            jobRepository.stampCreated(job.getId(), truncate(reason), now);
+        }
 
         Map<String, String> kept = new java.util.LinkedHashMap<>();
         requestOverrides.forEach((key, value) -> {

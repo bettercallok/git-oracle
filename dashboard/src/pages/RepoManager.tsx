@@ -28,6 +28,7 @@ const CONNECT_OUTCOME: Record<string, { tone: 'success' | 'danger' | 'info'; tex
   failed: { tone: 'danger', text: "Connecting GitHub didn't finish. Please try again." },
   wrong_user: { tone: 'danger', text: 'That was a different GitHub account from the one that started connecting.' },
   not_yours: { tone: 'danger', text: "Your GitHub account doesn't have access to that installation." },
+  not_admin: { tone: 'danger', text: "You can access that GitHub installation but don't administer its account. An owner of the GitHub organisation (or the account itself) must connect it. If you are one, the App needs the organisation \"Members: read\" permission so GitOracle can check." },
   taken: { tone: 'danger', text: 'Another organisation already uses that GitHub installation.' },
   requested: { tone: 'info', text: 'GitHub sent your request to install the App to an owner of that account. Connect again once they approve it.' },
 };
