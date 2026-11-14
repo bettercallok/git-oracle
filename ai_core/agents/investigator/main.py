@@ -127,6 +127,7 @@ Rank them and provide a causal_effect_score (0.0 to 1.0) and reasoning for each.
 # ==========================================
 from shared.kafka_consumer import KafkaEventConsumer
 from shared import topics
+from shared.tenancy import tenant_id_of
 from shared.kafka_producer import get_producer
 from shared.consumer_lifespan import run_consumer_with_app
 from shared.health import add_health_route
@@ -162,7 +163,7 @@ async def handle_investigate_job(payload: dict):
     bug_description = "\n\n".join(_parts) if _parts else f"Error {error_id} reported from ingestor."
 
     request = InvestigationRequest(
-        tenant_id="00000000-0000-0000-0000-000000000000",
+        tenant_id=tenant_id_of(payload),
         repo_path=repo_path,
         bug_description=bug_description,
         affected_files=[], # To be implemented via git diff inference
@@ -193,6 +194,7 @@ async def handle_investigate_job(payload: dict):
             "human_instructions": human_instructions,
             "target_repo": target_repo,
             "branch": branch,
+            "tenant_id": tenant_id_of(payload),
         }
         await producer.publish(topics.JOB_PLAN, plan_payload)
         logger.info(f"Published job.events.plan for job {job_id}")

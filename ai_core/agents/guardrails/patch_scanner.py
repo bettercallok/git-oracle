@@ -8,6 +8,7 @@ from pydantic import BaseModel
 # module, so this file cannot rely on it having happened yet.
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from shared.safe_paths import DENIED_GLOBS, is_denied_path  # noqa: E402,F401
+from shared.limits import PATCH_LINE_LIMIT  # noqa: E402
 
 
 class PatchScanResult(BaseModel):
@@ -61,7 +62,7 @@ CONTENT_HEURISTICS = [
 # Retained under its old name so anything importing it keeps working.
 DANGER_PATTERNS = CONTENT_HEURISTICS
 
-SCOPE_LIMIT = 50  # max lines changed per patch
+SCOPE_LIMIT = PATCH_LINE_LIMIT  # max lines changed per patch; the fixer is told the same number
 
 # DENIED_GLOBS now lives in shared/safe_paths.py (imported above) rather than
 # here. The Fixer needs the identical boundary when it *reads* files into an LLM

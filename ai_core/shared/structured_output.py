@@ -105,6 +105,16 @@ LLM_MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "qwen2.5-coder:7b-instruct-q4_
 LLM_FALLBACK_BASE_URL = os.environ.get("LLM_FALLBACK_BASE_URL")
 LLM_FALLBACK_MODEL_NAME = os.environ.get("LLM_FALLBACK_MODEL_NAME")
 
+
+def fallback_headers() -> dict:
+    """Headers for the fallback LLM: its own key (LLM_FALLBACK_API_KEY), or none.
+
+    The fallback used to be sent the primary's Authorization header, which
+    handed OPENAI_API_KEY to a different server.
+    """
+    key = os.environ.get("LLM_FALLBACK_API_KEY")
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
 # ─── Langfuse Client (singleton) ──────────────────────────────────────────────
 # Initialised once at module-load. Fails silently if env vars are missing so
 # that missing observability config never crashes a production agent.
@@ -325,6 +335,7 @@ async def _llm_structured(
                 payload["model"] = LLM_FALLBACK_MODEL_NAME
                 try:
                     # 2. Fallback Attempt
+                    headers = fallback_headers()   # also used by the JSON retry below, which goes to answered_by
                     response = await _execute_with_rate_limit_backoff(client, LLM_FALLBACK_BASE_URL, payload, headers=headers)
                     answered_by = LLM_FALLBACK_BASE_URL
                 except Exception as fallback_e:

@@ -156,4 +156,36 @@ class JobStateServiceTest {
         assertThat(service.transition(failed, "PR_MERGED", "?", "github")).isFalse();
         assertThat(service.transition(failed, "PR_CLOSED", "?", "github")).isFalse();
     }
+
+    @Test
+    void theRequestsOverridesAreKeptOnTheCreationEventAndReadBack() {
+        AgentJob job = job("QUEUED");
+        java.util.Map<String, String> overrides = new java.util.HashMap<>();
+        overrides.put("branch", "case/npe");
+        overrides.put("target_repo", "");            // blank: not kept
+        overrides.put("human_instructions", "Fix the NPE in PaymentService");
+
+        service.recordCreated(job, "Full pipeline requested", "dashboard", overrides);
+
+        ArgumentCaptor<JobEvent> event = ArgumentCaptor.forClass(JobEvent.class);
+        verify(eventRepository).save(event.capture());
+        org.mockito.Mockito.when(eventRepository.findByJobIdOrderByCreatedAtAsc(job.getId()))
+            .thenReturn(java.util.List.of(event.getValue()));
+
+        assertThat(service.requestOverrides(job.getId()))
+            .containsEntry("branch", "case/npe")
+            .containsEntry("human_instructions", "Fix the NPE in PaymentService")
+            .doesNotContainKey("target_repo");
+    }
+
+    @Test
+    void aJobCreatedWithoutOverridesHasNone() {
+        AgentJob job = job("QUEUED");
+        service.recordCreated(job, "Error reported", "error-ingestor");
+
+        ArgumentCaptor<JobEvent> event = ArgumentCaptor.forClass(JobEvent.class);
+        verify(eventRepository).save(event.capture());
+        assertThat(event.getValue().getDetails()).isNull();
+        assertThat(service.requestOverrides(job.getId())).isEmpty();
+    }
 }

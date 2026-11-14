@@ -137,6 +137,7 @@ Constrain the Fixer Agent by setting 'max_lines_to_change' to the absolute minim
 # ==========================================
 from shared.kafka_consumer import KafkaEventConsumer
 from shared import topics
+from shared.tenancy import tenant_id_of
 from shared.kafka_producer import get_producer
 from shared.consumer_lifespan import run_consumer_with_app
 from shared.health import add_health_route
@@ -180,7 +181,7 @@ async def handle_planner_job(payload: dict):
         bug_description = f"Error {error_id} occurred in the system."
 
     request = PlannerRequest(
-        tenant_id="00000000-0000-0000-0000-000000000000",
+        tenant_id=tenant_id_of(payload),
         repo_path=repo_path,
         bug_description=bug_description,
         investigation_result=investigation,
@@ -213,6 +214,7 @@ async def handle_planner_job(payload: dict):
             "human_instructions": human_instructions,
             "target_repo": target_repo,
             "branch": branch,
+            "tenant_id": tenant_id_of(payload),
             # The investigator's top suspect, so the fixer can read the same
             # bug-introducing diff the plan was based on.
             "root_commit": investigation.ranked_causes[0].commit_sha if investigation.ranked_causes else "",

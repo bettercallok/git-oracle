@@ -931,4 +931,26 @@ class OrchestratorServiceTest {
         assertThat(job.getStateReason()).contains("someone/elsewhere");
         verifyNoInteractions(kafkaTemplate);
     }
+
+    // ─── Medium review findings ───────────────────────────────────────────
+
+    @Test
+    void repoFullName_removesOnlyATrailingDotGit() {
+        assertThat(OrchestratorService.repoFullName("https://github.com/user/user.github.io"))
+            .isEqualTo("user/user.github.io");
+        assertThat(OrchestratorService.repoFullName("https://github.com/user/my.gitops.git"))
+            .isEqualTo("user/my.gitops");
+        assertThat(OrchestratorService.repoFullName("https://github.com/user/repo/")).isEqualTo("user/repo");
+    }
+
+    @Test
+    void handleErrorIngested_failsTheJobWhenTheCloneProducedNoCheckout() {
+        // The mocked WorkspaceService resolves no HEAD, as a failed clone does.
+        AgentJob job = runIngest(ai.gitoracle.core.kafka.event.ErrorIngestedEvent.builder()
+            .errorId("e-clone").repoUrl("https://github.com/someone/gone").branch("feature/x").build());
+
+        assertThat(job.getState()).isEqualTo("FAILED");
+        assertThat(job.getStateReason()).contains("Could not clone", "someone/gone", "feature/x");
+        verifyNoInteractions(kafkaTemplate);                          // the investigator is never asked
+    }
 }
