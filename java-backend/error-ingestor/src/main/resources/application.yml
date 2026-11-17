@@ -20,7 +20,7 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
-      ddl-auto: update
+      ddl-auto: none   # the orchestrator's Flyway migrations own the schema
     show-sql: false
     properties:
       hibernate:
