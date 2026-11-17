@@ -45,7 +45,7 @@ public class PrStatusReconciler {
     @Autowired
     public PrStatusReconciler(AgentJobRepository jobRepository, OrchestratorService orchestrator,
                               GitHubInstallations installations,
-                              @Value("${gitoracle.github-bot-url:http://localhost:8085}") String githubBotUrl,
+                              @Value("${gitoracle.services.github-bot:http://localhost:8085}") String githubBotUrl,
                               @Value("${gitoracle.internal-token:}") String internalToken) {
         this(jobRepository, orchestrator, installations, InternalHttp.shortCalls(), githubBotUrl, internalToken);
     }

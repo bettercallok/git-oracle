@@ -31,8 +31,14 @@ import java.util.regex.Pattern;
 public class GitHubController {
     private static final Logger logger = LoggerFactory.getLogger(GitHubController.class);
     
+    static final String DEFAULT_DASHBOARD_URL = "http://localhost:5173";
+
     private final GitHubClient githubClient;
-    
+
+    // Linked from every PR body, so it must be the address people actually use.
+    @org.springframework.beans.factory.annotation.Value("${GITORACLE_DASHBOARD_URL:" + DEFAULT_DASHBOARD_URL + "}")
+    private String dashboardUrl = DEFAULT_DASHBOARD_URL;
+
     public GitHubController(GitHubClient githubClient) {
         this.githubClient = githubClient;
     }
@@ -68,7 +74,7 @@ public class GitHubController {
                 return ResponseEntity.badRequest().body(new PullRequestResult(false, null, e.getMessage()));
             }
 
-            String markdown = generateMarkdown(request);
+            String markdown = generateMarkdown(request, dashboardUrl);
 
             // Connect to GitHub
             GitHub github = githubClient.getAuthenticatedGitHub(request.getInstallationId());
@@ -446,6 +452,11 @@ public class GitHubController {
      * root cause and change summary the orchestrator never sent.
      */
     static String generateMarkdown(PullRequestRequest req) {
+        return generateMarkdown(req, DEFAULT_DASHBOARD_URL);
+    }
+
+    static String generateMarkdown(PullRequestRequest req, String dashboardUrl) {
+        String dashboard = present(dashboardUrl) ? dashboardUrl.trim().replaceAll("/+$", "") : DEFAULT_DASHBOARD_URL;
         Double causal = req.getCausalScore();
         boolean investigated = causal != null;
         String rootCommit = req.getRootCommit() == null || req.getRootCommit().isBlank()
@@ -510,7 +521,7 @@ public class GitHubController {
             + (coverage == null ? "" : String.format(java.util.Locale.ROOT, " · Coverage %+.2f%%", coverage * 100))
             + "\n\n"
             + "---\n*This PR was generated autonomously by GitOracle. Not satisfied? Use the "
-            + "[GitOracle Dashboard](http://localhost:5173) to regenerate with your instructions.*";
+            + "[GitOracle Dashboard](" + dashboard + ") to regenerate with your instructions.*";
     }
 
     private static boolean present(String s) {

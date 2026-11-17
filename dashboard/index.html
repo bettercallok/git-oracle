@@ -28,8 +28,8 @@
         Content-Security-Policy and X-Frame-Options as headers there, which also
         lets it drop 'unsafe-inline' via a nonce.
 
-      connect-src includes localhost:8080 for local dev against the gateway. A
-      deployment pointing VITE_API_URL elsewhere must add that origin here.
+      connect-src is filled in by vite.config.ts: 'self' plus the origin of
+      VITE_API_URL, and in dev the local gateway and Vite's websocket.
     -->
     <meta
       http-equiv="Content-Security-Policy"
@@ -38,7 +38,7 @@
                style-src 'self' 'unsafe-inline';
                img-src 'self' data:;
                font-src 'self' data:;
-               connect-src 'self' http://localhost:8080 http://127.0.0.1:8080 ws://localhost:5173 ws://127.0.0.1:5173;
+               connect-src __GITORACLE_CONNECT_SRC__;
                object-src 'none';
                base-uri 'self';
                form-action 'self'"

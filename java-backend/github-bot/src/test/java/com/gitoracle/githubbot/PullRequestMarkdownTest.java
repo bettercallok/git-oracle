@@ -123,4 +123,13 @@ class PullRequestMarkdownTest {
         assertThat(GitHubController.generateMarkdown(request()))
             .startsWith("<!-- gitoracle:job_id:9e09ccf6-55b8-4b31-99b7-decbaa049ec3 -->");
     }
+
+    @Test
+    void theDashboardLinkIsTheConfiguredAddress() {
+        assertThat(GitHubController.generateMarkdown(request(), "https://gitoracle.example.com/"))
+            .contains("[GitOracle Dashboard](https://gitoracle.example.com)")
+            .doesNotContain("localhost");
+        assertThat(GitHubController.generateMarkdown(request(), " "))
+            .contains("[GitOracle Dashboard](http://localhost:5173)");
+    }
 }
