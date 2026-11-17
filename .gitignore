@@ -74,3 +74,6 @@ id_ed25519
 
 # start_local.sh restart loops: present while stop_local.sh is stopping them
 .gitoracle-stopping
+
+# Local agent-memory dumps
+memory_store/
