@@ -1,0 +1,32 @@
+# GitOracle on Kubernetes: every service, plus single-replica Postgres, Kafka,
+# Neo4j, Redis and Qdrant. Not deployable on its own: an overlay supplies the
+# public hostname, the image owner and tag, and the secrets
+# (overlays/k3s; see deploy/k8s/README.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: gitoracle
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: gitoracle
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - config.yaml
+  - infra.yaml
+  - java-services.yaml
+  - agents.yaml
+  - dashboard.yaml
+  - ingress.yaml
+  - network-policy.yaml
+  - test-sandbox.yaml
+
+configMapGenerator:
+  # Outside this directory, so deploy.sh renders with --load-restrictor LoadRestrictionsNone.
+  - name: postgres-init
+    files:
+      - 01-init.sql=../../../infrastructure/postgres/init.sql
+  - name: kafka-topics
+    files:
+      - create-topics.sh=../../../infrastructure/kafka/create-topics.sh

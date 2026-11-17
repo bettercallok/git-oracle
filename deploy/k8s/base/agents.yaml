@@ -1,0 +1,439 @@
+# The seven Python agents: one image (ai_core/Dockerfile), AGENT picks which.
+# /health is open (no token) and answers 503 while an agent's Kafka consumer
+# is down, so readiness follows the consumer. Each agent clones the repos it
+# reads into its own /tmp (shared/checkout.py), swept after
+# GITORACLE_WORKSPACE_MAX_AGE_HOURS.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: investigator
+spec:
+  selector: { app.kubernetes.io/name: investigator }
+  ports: [{ name: http, port: 9001 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: investigator
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: investigator }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: investigator }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: investigator
+          image: gitoracle-agents
+          envFrom:
+            - configMapRef: { name: gitoracle-config }
+            - secretRef: { name: gitoracle-secrets }
+          env:
+            - { name: AGENT, value: investigator }
+            - { name: PORT, value: "9001" }
+          ports: [{ containerPort: 9001 }]
+          startupProbe:
+            httpGet: { path: /health, port: 9001 }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /health, port: 9001 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 9001 }
+            periodSeconds: 30
+          resources:
+            requests: { memory: 128Mi, cpu: 50m }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 2Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fixer
+spec:
+  selector: { app.kubernetes.io/name: fixer }
+  ports: [{ name: http, port: 9002 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fixer
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: fixer }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: fixer }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: fixer
+          image: gitoracle-agents
+          envFrom:
+            - configMapRef: { name: gitoracle-config }
+            - secretRef: { name: gitoracle-secrets }
+          env:
+            - { name: AGENT, value: fixer }
+            - { name: PORT, value: "9002" }
+          ports: [{ containerPort: 9002 }]
+          startupProbe:
+            httpGet: { path: /health, port: 9002 }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /health, port: 9002 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 9002 }
+            periodSeconds: 30
+          resources:
+            requests: { memory: 128Mi, cpu: 50m }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 2Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reviewer
+spec:
+  selector: { app.kubernetes.io/name: reviewer }
+  ports: [{ name: http, port: 9003 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reviewer
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: reviewer }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: reviewer }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: reviewer
+          image: gitoracle-agents
+          envFrom:
+            - configMapRef: { name: gitoracle-config }
+            - secretRef: { name: gitoracle-secrets }
+          env:
+            - { name: AGENT, value: reviewer }
+            - { name: PORT, value: "9003" }
+          ports: [{ containerPort: 9003 }]
+          startupProbe:
+            httpGet: { path: /health, port: 9003 }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /health, port: 9003 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 9003 }
+            periodSeconds: 30
+          resources:
+            requests: { memory: 128Mi, cpu: 50m }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 2Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: commit-analyst
+spec:
+  selector: { app.kubernetes.io/name: commit-analyst }
+  ports: [{ name: http, port: 9004 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: commit-analyst
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: commit-analyst }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: commit-analyst }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: commit-analyst
+          image: gitoracle-agents
+          envFrom:
+            - configMapRef: { name: gitoracle-config }
+            - secretRef: { name: gitoracle-secrets }
+          env:
+            - { name: AGENT, value: commit_analyst }
+            - { name: PORT, value: "9004" }
+          ports: [{ containerPort: 9004 }]
+          startupProbe:
+            httpGet: { path: /health, port: 9004 }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /health, port: 9004 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 9004 }
+            periodSeconds: 30
+          resources:
+            requests: { memory: 128Mi, cpu: 50m }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 2Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prompt-registry
+spec:
+  selector: { app.kubernetes.io/name: prompt-registry }
+  ports: [{ name: http, port: 9005 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prompt-registry
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: prompt-registry }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: prompt-registry }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: prompt-registry
+          image: gitoracle-agents
+          envFrom:
+            - configMapRef: { name: gitoracle-config }
+            - secretRef: { name: gitoracle-secrets }
+          env:
+            - { name: AGENT, value: prompt_registry }
+            - { name: PORT, value: "9005" }
+          ports: [{ containerPort: 9005 }]
+          startupProbe:
+            httpGet: { path: /health, port: 9005 }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /health, port: 9005 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 9005 }
+            periodSeconds: 30
+          resources:
+            requests: { memory: 128Mi, cpu: 50m }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 2Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: guardrails
+spec:
+  selector: { app.kubernetes.io/name: guardrails }
+  ports: [{ name: http, port: 9006 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guardrails
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: guardrails }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: guardrails }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: guardrails
+          image: gitoracle-agents
+          envFrom:
+            - configMapRef: { name: gitoracle-config }
+            - secretRef: { name: gitoracle-secrets }
+          env:
+            - { name: AGENT, value: guardrails }
+            - { name: PORT, value: "9006" }
+          ports: [{ containerPort: 9006 }]
+          startupProbe:
+            httpGet: { path: /health, port: 9006 }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /health, port: 9006 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 9006 }
+            periodSeconds: 30
+          resources:
+            requests: { memory: 128Mi, cpu: 50m }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 2Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: planner
+spec:
+  selector: { app.kubernetes.io/name: planner }
+  ports: [{ name: http, port: 9007 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: planner
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: planner }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: planner }
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: planner
+          image: gitoracle-agents
+          envFrom:
+            - configMapRef: { name: gitoracle-config }
+            - secretRef: { name: gitoracle-secrets }
+          env:
+            - { name: AGENT, value: planner }
+            - { name: PORT, value: "9007" }
+          ports: [{ containerPort: 9007 }]
+          startupProbe:
+            httpGet: { path: /health, port: 9007 }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /health, port: 9007 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 9007 }
+            periodSeconds: 30
+          resources:
+            requests: { memory: 128Mi, cpu: 50m }
+            limits: { memory: 384Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 2Gi } }

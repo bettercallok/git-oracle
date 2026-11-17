@@ -1,0 +1,21 @@
+# One host: /api and /webhook go to the gateway (the only public service),
+# everything else to the dashboard. k3s ships Traefik as the ingress
+# controller; the overlay sets the host. TLS ends at the Cloudflare Tunnel.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gitoracle
+spec:
+  rules:
+    - host: gitoracle.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend: { service: { name: api-gateway, port: { number: 8080 } } }
+          - path: /webhook
+            pathType: Prefix
+            backend: { service: { name: api-gateway, port: { number: 8080 } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: dashboard, port: { number: 8080 } } }

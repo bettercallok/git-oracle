@@ -1,5 +1,7 @@
 package ai.gitoracle.orchestrator.controller;
 
+import ai.gitoracle.orchestrator.service.WorkspaceService;
+
 import ai.gitoracle.core.model.postgres.AgentJob;
 import ai.gitoracle.core.model.postgres.JobEvent;
 import ai.gitoracle.orchestrator.repository.JobEventRepository;
@@ -249,7 +251,7 @@ public class DashboardController {
         Map<String, String> original = jobState.requestOverrides(job.getId());
 
         // Build a new fix event with the human's instructions
-        String repoPath = "/tmp/gitoracle-workspaces/" + jobId;
+        String repoPath = WorkspaceService.pathFor(jobId);
         Map<String, Object> fixPayload = new HashMap<>();
         fixPayload.put("job_id", jobId.toString());
         fixPayload.put("repo_url", job.getRepo());
@@ -400,7 +402,7 @@ public class DashboardController {
         }
 
         // Fast path: synthesise a plan and go straight to the Fixer.
-        String repoPath = "/tmp/gitoracle-workspaces/" + job.getId();
+        String repoPath = WorkspaceService.pathFor(job.getId());
         Map<String, Object> fixPayload = new HashMap<>();
         fixPayload.put("job_id", job.getId().toString());
         fixPayload.put("repo_url", repoUrl);
@@ -513,7 +515,8 @@ public class DashboardController {
             Map<String, Object> plannerPayload = new HashMap<>();
             plannerPayload.put("job_id", job.getId().toString());
             plannerPayload.put("repo_url", job.getRepo());
-            plannerPayload.put("repo_path", "/tmp/gitoracle-workspaces/" + job.getId());
+            plannerPayload.put("repo_path", WorkspaceService.pathFor(job.getId()));
+            plannerPayload.put("base_commit", job.getBaseCommit() == null ? "" : job.getBaseCommit());
             plannerPayload.put("error_id", job.getErrorId());
             // What the original request asked for, so the resumed run fixes the
             // same branch, follows the same instruction and opens its PR in the same place.

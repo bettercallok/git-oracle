@@ -1,0 +1,34 @@
+# Who may connect to what. Pods in this namespace accept traffic from each
+# other, except from test-sandbox pods (untrusted repository code, which gets
+# only DNS and the internet: test-sandbox.yaml). From outside the namespace,
+# only the ingress controller, and only to the gateway and the dashboard.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: same-namespace-except-sandbox
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/component, operator: NotIn, values: [test-sandbox] }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - { key: app.kubernetes.io/component, operator: NotIn, values: [test-sandbox] }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-controller-to-public-services
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/name, operator: In, values: [api-gateway, dashboard] }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: TCP, port: 8080 }

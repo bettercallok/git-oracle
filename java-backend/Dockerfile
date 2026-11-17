@@ -37,5 +37,10 @@ RUN if [ "$SERVICE" = "test-runner" ]; then \
       apk add --no-cache docker-cli; \
     fi
 
+# test-runner clones and patches with the git CLI, and github-bot clones,
+# commits and pushes with it; the base image has none.
+RUN if [ "$SERVICE" = "test-runner" ] || [ "$SERVICE" = "github-bot" ]; then \
+      apk add --no-cache git; \
+    fi
 COPY --from=build /out/app.jar /app/app.jar
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

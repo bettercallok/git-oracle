@@ -91,6 +91,18 @@ public class OrchestratorService {
         this.metrics = metrics;
     }
 
+    private ai.gitoracle.orchestrator.service.CloneTokens cloneTokens;
+
+    /** Optional for the same reason: without it every clone is anonymous (public repos only). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setCloneTokens(ai.gitoracle.orchestrator.service.CloneTokens cloneTokens) {
+        this.cloneTokens = cloneTokens;
+    }
+
+    private String cloneTokenFor(UUID tenantId, String repoUrl) {
+        return cloneTokens == null ? null : cloneTokens.valueFor(tenantId, repoUrl);
+    }
+
     /** Wraps a request body with the X-Internal-Token header every internal-service call needs. */
     private <T> HttpEntity<T> withInternalAuth(T body) {
         HttpHeaders headers = new HttpHeaders();
@@ -272,7 +284,8 @@ public class OrchestratorService {
         // 2. Clone the repository (a specific branch, if the job requested one) into
         // a dynamic workspace
         String branch = event.getBranch();
-        String repoPath = workspaceService.cloneRepository(event.getRepoUrl(), branch, job.getId());
+        String repoPath = workspaceService.cloneRepository(event.getRepoUrl(), branch, job.getId(),
+            cloneTokenFor(job.getTenantId(), event.getRepoUrl()));
 
         // HEAD is what the patch will apply to — recorded as the base commit, NOT
         // as the root cause. rootCommit stays null until the Investigator answers
@@ -295,6 +308,8 @@ public class OrchestratorService {
         investigatorPayload.put("job_id", job.getId().toString());
         investigatorPayload.put("repo_url", event.getRepoUrl());
         investigatorPayload.put("repo_path", repoPath);
+        // Agents on another host clone the repo at this commit (shared/checkout.py).
+        investigatorPayload.put("base_commit", headSha);
         investigatorPayload.put("error_id", event.getErrorId());
         // The actual error detail (stack trace / webhook payload) captured by error-ingestor
         // was previously dropped here — the investigator only ever saw a generic templated
@@ -559,6 +574,10 @@ public class OrchestratorService {
             testRequest.put("branch",    branch);
             testRequest.put("tenantId",  tenantId[0]);           // per-tenant dependency cache
             testRequest.put("framework", "UNKNOWN");             // let runner auto-detect
+            // Read token so a private repository clones; HTTP only, never on Kafka.
+            String testCloneToken = tenantId[0] == null ? null
+                : cloneTokenFor(UUID.fromString(tenantId[0]), repoUrl[0]);
+            if (testCloneToken != null) testRequest.put("cloneToken", testCloneToken);
 
             var response = restTemplate.postForObject(testRunnerUrl + "/test", withInternalAuth(testRequest), Map.class);
 
@@ -854,7 +873,7 @@ public class OrchestratorService {
             java.util.Map<String, Object> reviewRequest = new java.util.HashMap<>();
             reviewRequest.put("job_id",          jobIdStr);
             reviewRequest.put("tenant_id",       job.getTenantId().toString());
-            reviewRequest.put("repo_path",       "/tmp/gitoracle-workspaces/" + jobIdStr);
+            reviewRequest.put("repo_path",       WorkspaceService.pathFor(job.getId()));
             reviewRequest.put("bug_description", job.getErrorId());
             reviewRequest.put("fixer_patch",     job.getFixPatch() != null && !job.getFixPatch().isBlank()
                 ? job.getFixPatch() : "(stored patch not available — review based on comment only)");
@@ -878,7 +897,7 @@ public class OrchestratorService {
                 jobState.transition(job, "REGENERATING",
                     "Reviewer agreed with a PR comment — regenerating: " + comment, "reviewer");
 
-                String repoPath    = "/tmp/gitoracle-workspaces/" + jobIdStr;
+                String repoPath    = WorkspaceService.pathFor(job.getId());
                 // From the job's own PR, never from the webhook payload.
                 String repoForPr   = repositoryOfPullRequest(job.getPrUrl());
 
