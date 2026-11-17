@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, FolderGit2, GitBranch } from 'lucide-react';
+import { Check, ExternalLink, FolderGit2, GitBranch, GitCommitHorizontal, Plus, Trash2, Wand2 } from 'lucide-react';
 import { apiClient } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useRepos } from '../context/RepoContext';
-import { Alert, EmptyState, LoadingState, PageHeader } from '../components/ui';
+import { Alert, Avatar, EmptyState, LoadingState, PageHeader } from '../components/ui';
 
 const errorMessage = (error: unknown): string => {
   const data = (error as { response?: { data?: { error?: string; message?: string; detail?: string } } }).response?.data;
@@ -34,7 +34,7 @@ const CONNECT_OUTCOME: Record<string, { tone: 'success' | 'danger' | 'info'; tex
 };
 
 export default function RepoManager() {
-  const { isPlatformAdmin, activeOrganization, canManageOrg, role } = useAuth();
+  const { isPlatformAdmin, activeOrganization, canManageOrg, canWrite, role } = useAuth();
   const { repos, activeRepo, setActiveRepo, isLoading, loadFailed, refresh } = useRepos();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
@@ -150,22 +150,26 @@ export default function RepoManager() {
       )}
 
       {isPlatformAdmin ? (
-        <form className="card api-key-form" onSubmit={e => { e.preventDefault(); if (input.trim()) add.mutate(); }}>
-          <div className="api-key-field-name">
-            <label className="form-label" htmlFor="repo-add-input">Add a repository</label>
-            <input
-              id="repo-add-input"
-              className="form-input"
-              placeholder="owner/repo or https://github.com/owner/repo"
-              autoComplete="off"
-              spellCheck={false}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-            />
+        <form className="card" style={{ marginBottom: 16 }} onSubmit={e => { e.preventDefault(); if (input.trim()) add.mutate(); }}>
+          <label className="form-label" htmlFor="repo-add-input">Add a repository</label>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div className="input-wrap" style={{ flex: 1, minWidth: 240 }}>
+              <FolderGit2 size={15} className="input-icon" />
+              <input
+                id="repo-add-input"
+                className="form-input mono-input"
+                placeholder="owner/repo"
+                autoComplete="off"
+                spellCheck={false}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+              />
+            </div>
+            <button type="submit" className="btn btn-primary" style={{ height: 38 }} disabled={!input.trim() || add.isPending}>
+              <Plus size={15} /> {add.isPending ? 'Adding…' : 'Add'}
+            </button>
           </div>
-          <button type="submit" className="btn btn-primary" disabled={!input.trim() || add.isPending}>
-            {add.isPending ? 'Adding…' : 'Add'}
-          </button>
+          <div className="form-hint">As a platform admin you can add any repository. It still needs the GitHub App installed to open pull requests.</div>
         </form>
       ) : !canManageOrg && (
         <div style={{ marginBottom: 16 }}>
@@ -176,39 +180,63 @@ export default function RepoManager() {
       {isLoading && <LoadingState />}
       {loadFailed && <Alert tone="danger">Couldn't load the repositories.</Alert>}
       {!isLoading && !loadFailed && repos.length === 0 && (
-        <EmptyState icon={<FolderGit2 size={20} />} title="No repositories yet" description="Jobs can't start until one is allowed." />
+        <div className="card dashed">
+          <EmptyState icon={<FolderGit2 size={20} />} title="No repositories yet" description="Jobs can't start until one is allowed." />
+        </div>
       )}
       {repos.length > 0 && (
-        <div className="table-container">
-          <div className="table-scroll">
-            <table className="table">
-              <thead><tr><th>Repository</th><th>Active</th><th /></tr></thead>
-              <tbody>
-                {repos.map(repo => (
-                  <tr key={repo.id}>
-                    <td className="cell-primary">
-                      {repo.fullName}{' '}
-                      <a href={repo.url} target="_blank" rel="noreferrer" aria-label={`Open ${repo.fullName} on GitHub`} style={{ color: 'var(--text-muted)' }}>
-                        <ExternalLink size={12} />
-                      </a>
-                    </td>
-                    <td>
-                      {activeRepo?.id === repo.id ? 'Active' : (
-                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setActiveRepo(repo.id)}>Set active</button>
-                      )}
-                    </td>
-                    <td className="num">
-                      {canManageOrg && (
-                        <button type="button" className="btn btn-ghost btn-sm" disabled={remove.isPending} onClick={() => confirmRemove(repo.fullName)}>
-                          Remove
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="card flush">
+          <div className="card-header">
+            <div className="card-title">Allowed <span className="muted" style={{ fontWeight: 400 }}>{repos.length}</span></div>
           </div>
+          {repos.map((repo, i) => {
+            const isActive = activeRepo?.id === repo.id;
+            const [owner] = repo.fullName.split('/');
+            return (
+              <div
+                key={repo.id}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px',
+                  borderTop: i === 0 ? 'none' : '1px solid var(--border-subtle)',
+                  background: isActive ? 'var(--accent-soft)' : undefined,
+                }}
+              >
+                <Avatar name={owner} seed={owner} size={32} />
+                <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span className="truncate" style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{repo.fullName}</span>
+                  {isActive && <span className="badge badge-accent">Active</span>}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                  {isActive ? (
+                    <>
+                      <Link to="/commits" className="btn btn-ghost btn-sm hide-mobile"><GitCommitHorizontal size={14} /> Commits</Link>
+                      {canWrite && <Link to="/fix" className="btn btn-ghost btn-sm hide-mobile"><Wand2 size={14} /> Fix</Link>}
+                    </>
+                  ) : (
+                    <button type="button" className="btn btn-sm" onClick={() => setActiveRepo(repo.id)}>
+                      <Check size={14} /> Make active
+                    </button>
+                  )}
+                  <a href={repo.url} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm btn-icon"
+                     title="Open on GitHub" aria-label={`Open ${repo.fullName} on GitHub`}>
+                    <ExternalLink size={14} />
+                  </a>
+                  {canManageOrg && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm btn-icon repo-remove"
+                      disabled={remove.isPending}
+                      onClick={() => confirmRemove(repo.fullName)}
+                      title="Remove"
+                      aria-label={`Remove ${repo.fullName}`}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </>

@@ -76,7 +76,8 @@ public class CommitController {
     private static final java.util.regex.Pattern OWNER_REPO =
         java.util.regex.Pattern.compile("^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$");
 
-    private static final String COMMIT_ANALYST_URL = "http://localhost:9004/analyze";
+    @Value("${gitoracle.services.commit-analyst:http://localhost:9004}")
+    private String commitAnalystUrl = "http://localhost:9004";
 
     private final GitHubClientService githubClientService;
     private final RestTemplate restTemplate = ai.gitoracle.orchestrator.service.InternalHttp.shortCalls();
@@ -410,7 +411,7 @@ public class CommitController {
 
             @SuppressWarnings("unchecked")
             Map<String, Object> agentResponse =
-                    restTemplate.postForObject(COMMIT_ANALYST_URL, new HttpEntity<>(agentPayload, headers), Map.class);
+                    restTemplate.postForObject(commitAnalystUrl + "/analyze", new HttpEntity<>(agentPayload, headers), Map.class);
 
             if (agentResponse == null) {
                 return ResponseEntity.status(502).body(Map.of(
@@ -422,7 +423,7 @@ public class CommitController {
 
         } catch (ResourceAccessException e) {
             // Python agent is not running
-            logger.error("Could not reach Commit Analyst agent at {}: {}", COMMIT_ANALYST_URL, e.getMessage());
+            logger.error("Could not reach Commit Analyst agent at {}: {}", commitAnalystUrl, e.getMessage());
             return ResponseEntity.status(503).body(Map.of(
                     "error", "Commit Analyst agent is not available. Start it with: cd ai_core && python -m agents.commit_analyst.main",
                     "details", e.getMessage()));
