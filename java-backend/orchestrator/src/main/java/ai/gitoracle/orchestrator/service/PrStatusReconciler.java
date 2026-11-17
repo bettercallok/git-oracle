@@ -11,6 +11,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
@@ -63,6 +64,8 @@ public class PrStatusReconciler {
 
     @Scheduled(fixedDelayString = "${gitoracle.pr-reconciler.interval:PT3M}",
                initialDelayString = "PT30S")
+    // One replica per interval; lockAtLeastFor stops another starting the same run.
+    @SchedulerLock(name = "PrStatusReconciler.reconcileOpenPullRequests", lockAtMostFor = "PT10M", lockAtLeastFor = "PT30S")
     public void reconcileOpenPullRequests() {
         for (AgentJob job : jobRepository.findByState("PR_OPENED")) {
             if (!EscalationService.hasPullRequest(job)) continue;
