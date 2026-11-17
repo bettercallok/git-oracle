@@ -24,6 +24,8 @@ Java services are launched with plain `java -jar`, never `./gradlew bootRun` —
 
 After a restart, confirm a Java service is actually ready by grepping its log for `"Started <X>Application"`, not by curling its port — a dying old process can leave a port that still answers healthchecks for a moment during the handoff.
 
+Hosting: `deploy/k8s` (Kustomize; README there) runs everything on one k3s node, with in-cluster Postgres/Kafka/Neo4j/Redis/Qdrant, test runs as Kubernetes Jobs and a Cloudflare Tunnel. Apply with `deploy/k8s/deploy.sh`, not `kubectl apply -k`: the base reads `infrastructure/postgres/init.sql` and `create-topics.sh` from outside its directory. `base/java-services.yaml` and `base/agents.yaml` are written out per service; keep their securityContext identical when adding one.
+
 Alternative: containerized java services instead of local processes: `docker compose -f docker-compose.services.yml up -d --build`.
 
 Images: `java-backend/Dockerfile` (one per service, `--build-arg SERVICE=<module>`), `ai_core/Dockerfile` (one image for all seven agents; `AGENT=<name>` picks which one `run-agent.sh` starts) and `dashboard/Dockerfile` (nginx; `VITE_API_URL` is baked in at build time, default `/api/v1`, same origin as the gateway). `.github/workflows/images.yml` builds all eight on PRs and pushes them to `ghcr.io/<owner>/gitoracle-<name>` from `main` and `v*` tags.

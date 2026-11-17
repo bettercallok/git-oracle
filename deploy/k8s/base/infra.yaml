@@ -1,0 +1,369 @@
+# Single-replica Postgres (pgvector), Kafka (KRaft), Neo4j, Redis and Qdrant,
+# each a StatefulSet with its own claim, with the memory caps from
+# docker-compose.infra.yml. No operators: at this scale they would use more
+# memory than the databases. Observability (Langfuse, Prometheus, Grafana,
+# Kafka UI) is left out, as in CI.
+#
+# Every pod runs non-root with a read-only root where the image allows it
+# (the namespace enforces the "restricted" Pod Security Standard).
+
+# ── Postgres + pgvector ─────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector: { app.kubernetes.io/name: postgres }
+  ports: [{ name: postgres, port: 5432 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: postgres }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: postgres }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg16
+          args:
+            - -c
+            - max_connections=100
+            - -c
+            - shared_buffers=128MB
+            - -c
+            - effective_cache_size=256MB
+            - -c
+            - work_mem=2MB
+          env:
+            - { name: POSTGRES_DB, valueFrom: { configMapKeyRef: { name: gitoracle-config, key: POSTGRES_DB } } }
+            - { name: POSTGRES_USER, valueFrom: { configMapKeyRef: { name: gitoracle-config, key: POSTGRES_USER } } }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: gitoracle-secrets, key: POSTGRES_PASSWORD } } }
+            - { name: POSTGRES_INITDB_ARGS, value: "--encoding=UTF8 --locale=C" }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ containerPort: 5432 }]
+          readinessProbe:
+            exec: { command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""] }
+            periodSeconds: 10
+          resources:
+            requests: { memory: 150Mi, cpu: 100m }
+            limits: { memory: 300Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+            - { name: run, mountPath: /var/run/postgresql }
+            - { name: shm, mountPath: /dev/shm }
+      volumes:
+        - { name: init, configMap: { name: postgres-init } }
+        - { name: run, emptyDir: {} }
+        - { name: shm, emptyDir: { medium: Memory, sizeLimit: 128Mi } }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 5Gi } }
+---
+# ── Kafka (KRaft, one node) ─────────────────────────────────────────────────
+# Clients use kafka:9092 with SASL/PLAIN, like the host listener locally;
+# 9094 is the PLAINTEXT inter-broker listener the topic Job uses. Topics are
+# lz4 on the broker (KAFKA_COMPRESSION_TYPE), which the agents' aiokafka[lz4] needs.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+spec:
+  selector: { app.kubernetes.io/name: kafka }
+  ports:
+    - { name: client, port: 9092 }
+    - { name: internal, port: 9094 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+spec:
+  serviceName: kafka
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: kafka }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: kafka }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      enableServiceLinks: false   # a KAFKA_PORT service link would be read as broker config
+      containers:
+        - name: kafka
+          image: apache/kafka:3.8.0
+          env:
+            - { name: KAFKA_SASL_PASSWORD, valueFrom: { secretKeyRef: { name: gitoracle-secrets, key: KAFKA_SASL_PASSWORD } } }
+            - { name: KAFKA_SASL_USERNAME, valueFrom: { configMapKeyRef: { name: gitoracle-config, key: KAFKA_SASL_USERNAME } } }
+            - { name: KAFKA_NODE_ID, value: "1" }
+            - { name: KAFKA_PROCESS_ROLES, value: "broker,controller" }
+            - { name: KAFKA_CONTROLLER_QUORUM_VOTERS, value: "1@localhost:9093" }
+            - { name: KAFKA_HEAP_OPTS, value: "-Xmx200m -Xms200m" }
+            - { name: KAFKA_LOG_CLEANER_DEDUPE_BUFFER_SIZE, value: "16777216" }
+            - { name: KAFKA_LOG_CLEANER_THREADS, value: "1" }
+            - { name: KAFKA_LOG_DIRS, value: /var/lib/kafka/data/logs }
+            - { name: KAFKA_LISTENERS, value: "INTERNAL://0.0.0.0:9094,CLIENT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093" }
+            - { name: KAFKA_ADVERTISED_LISTENERS, value: "INTERNAL://kafka:9094,CLIENT://kafka:9092" }
+            - { name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP, value: "INTERNAL:PLAINTEXT,CLIENT:SASL_PLAINTEXT,CONTROLLER:PLAINTEXT" }
+            - { name: KAFKA_SASL_ENABLED_MECHANISMS, value: PLAIN }
+            - { name: KAFKA_LISTENER_NAME_CLIENT_SASL_ENABLED_MECHANISMS, value: PLAIN }
+            - name: KAFKA_LISTENER_NAME_CLIENT_PLAIN_SASL_JAAS_CONFIG
+              value: 'org.apache.kafka.common.security.plain.PlainLoginModule required user_$(KAFKA_SASL_USERNAME)="$(KAFKA_SASL_PASSWORD)";'
+            - { name: KAFKA_CONTROLLER_LISTENER_NAMES, value: CONTROLLER }
+            - { name: KAFKA_INTER_BROKER_LISTENER_NAME, value: INTERNAL }
+            - { name: KAFKA_NUM_PARTITIONS, value: "3" }
+            - { name: KAFKA_DEFAULT_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_LOG_RETENTION_HOURS, value: "168" }
+            - { name: KAFKA_COMPRESSION_TYPE, value: lz4 }
+            - { name: KAFKA_MESSAGE_MAX_BYTES, value: "10485760" }
+            - { name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR, value: "1" }
+            - { name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "1" }
+            - { name: CLUSTER_ID, value: "MkU3OEVBNTcwNTJENDM2Qk" }
+          ports:
+            - { containerPort: 9092 }
+            - { containerPort: 9094 }
+          # A port check, not kafka-topics.sh as compose uses: that starts a
+          # second JVM every period, which a small node can't spare.
+          readinessProbe:
+            tcpSocket: { port: 9092 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: { memory: 250Mi, cpu: 100m }
+            limits: { memory: 450Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/kafka/data }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 5Gi } }
+---
+# Creates the topics once the broker answers (infrastructure/kafka/create-topics.sh,
+# the same script compose's kafka-init runs). Safe to re-run.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-topics
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: kafka-topics }
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: topics
+          image: apache/kafka:3.8.0
+          command: ["/bin/bash", "/scripts/create-topics.sh"]
+          resources:
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+      volumes:
+        - { name: scripts, configMap: { name: kafka-topics } }
+---
+# ── Neo4j ───────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: neo4j
+spec:
+  selector: { app.kubernetes.io/name: neo4j }
+  ports: [{ name: bolt, port: 7687 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: neo4j
+spec:
+  serviceName: neo4j
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: neo4j }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: neo4j }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 7474
+        runAsGroup: 7474
+        fsGroup: 7474
+        seccompProfile: { type: RuntimeDefault }
+      enableServiceLinks: false   # NEO4J_* service links would be read as Neo4j settings
+      containers:
+        - name: neo4j
+          image: neo4j:5.20-community
+          env:
+            - { name: NEO4J_AUTH, valueFrom: { secretKeyRef: { name: gitoracle-secrets, key: NEO4J_AUTH } } }
+            - { name: NEO4J_server_memory_heap_initial__size, value: 192m }
+            - { name: NEO4J_server_memory_heap_max__size, value: 192m }
+            - { name: NEO4J_server_memory_pagecache_size, value: 96m }
+          ports: [{ containerPort: 7687 }]
+          readinessProbe:
+            tcpSocket: { port: 7687 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests: { memory: 300Mi, cpu: 100m }
+            limits: { memory: 600Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: logs, mountPath: /logs }
+      volumes:
+        - { name: logs, emptyDir: {} }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 2Gi } }
+---
+# ── Redis (gateway rate limits, prompt cache) ───────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector: { app.kubernetes.io/name: redis }
+  ports: [{ name: redis, port: 6379 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: redis }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: redis }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command: ["sh", "-c"]
+          args:
+            - exec redis-server --requirepass "$REDIS_PASSWORD" --maxmemory 160mb
+              --maxmemory-policy allkeys-lru --appendonly yes --appendfsync everysec
+          env:
+            - { name: REDIS_PASSWORD, valueFrom: { secretKeyRef: { name: gitoracle-secrets, key: REDIS_PASSWORD } } }
+          ports: [{ containerPort: 6379 }]
+          readinessProbe:
+            exec: { command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"] }
+            periodSeconds: 10
+          resources:
+            requests: { memory: 64Mi, cpu: 50m }
+            limits: { memory: 200Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 1Gi } }
+---
+# ── Qdrant (RAG vectors) ────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: qdrant
+spec:
+  selector: { app.kubernetes.io/name: qdrant }
+  ports: [{ name: http, port: 6333 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: qdrant
+spec:
+  serviceName: qdrant
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: qdrant }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: qdrant }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      enableServiceLinks: false   # QDRANT_* service links would be read as Qdrant settings
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.9.3
+          env:
+            - { name: QDRANT__SERVICE__API_KEY, valueFrom: { secretKeyRef: { name: gitoracle-secrets, key: QDRANT_API_KEY } } }
+          ports: [{ containerPort: 6333 }]
+          readinessProbe:
+            tcpSocket: { port: 6333 }
+            periodSeconds: 10
+          resources:
+            requests: { memory: 100Mi, cpu: 50m }
+            limits: { memory: 200Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /qdrant/storage }
+            - { name: snapshots, mountPath: /qdrant/snapshots }
+      volumes:
+        - { name: snapshots, emptyDir: {} }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 2Gi } }
