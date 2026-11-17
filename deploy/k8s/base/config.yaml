@@ -1,0 +1,64 @@
+# Settings every GitOracle pod reads (envFrom). Secrets are separate
+# (gitoracle-secrets, made by the overlay from secrets.env).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitoracle-config
+data:
+  # Listen on the pod's address; the internal token and NetworkPolicies decide who may call.
+  SERVER_BIND_HOST: "0.0.0.0"
+  BIND_HOST: "0.0.0.0"
+
+  # Service addresses (gitoracle.services.* in the orchestrator, *_URL elsewhere).
+  API_GATEWAY_URL: http://api-gateway:8080
+  ERROR_INGESTOR_URL: http://error-ingestor:8081
+  GIT_FORENSICS_URL: http://git-forensics:8082
+  ORCHESTRATOR_URL: http://orchestrator:8083
+  TEST_RUNNER_URL: http://test-runner:8084
+  GITHUB_BOT_URL: http://github-bot:8085
+  INVESTIGATOR_URL: http://investigator:9001
+  FIXER_URL: http://fixer:9002
+  REVIEWER_URL: http://reviewer:9003
+  COMMIT_ANALYST_URL: http://commit-analyst:9004
+  PROMPT_REGISTRY_URL: http://prompt-registry:9005
+  GUARDRAILS_URL: http://guardrails:9006
+  PLANNER_URL: http://planner:9007
+
+  # Infrastructure, in this namespace (infra.yaml).
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: gitOracle
+  POSTGRES_USER: gitOracle
+  KAFKA_HOST: kafka
+  KAFKA_PORT: "9092"
+  KAFKA_SECURITY_PROTOCOL: SASL_PLAINTEXT
+  KAFKA_SASL_USERNAME: gitoracle
+  NEO4J_HOST: neo4j
+  NEO4J_PORT: "7687"
+  NEO4J_USER: neo4j
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  QDRANT_HOST: qdrant
+  QDRANT_HTTP_PORT: "6333"
+  QDRANT_URL: http://qdrant:6333
+
+  # Pipeline behaviour.
+  GITORACLE_PR_RECONCILER_ENABLED: "true"
+  GITORACLE_WATCHDOG_ENABLED: "true"
+  GITORACLE_LEGACY_API_KEY_ENABLED: "false"
+  GITORACLE_REQUIRE_GITHUB_APP: "true"
+  GITHUB_PRIVATE_KEY_PATH: /secrets/github/github-app.pem
+  # Agents' own repo checkouts (shared/checkout.py) live on scratch volumes.
+  GITORACLE_WORKSPACE_MAX_AGE_HOURS: "6"
+  # Test suites run as Kubernetes Jobs (KubernetesJobSandbox), not docker run.
+  GITORACLE_TESTRUNNER_SANDBOX: kubernetes
+  GITORACLE_TESTRUNNER_KUBERNETES_CLAIM: gitoracle-test-workspaces
+  HOME: /tmp
+
+  # The overlay sets these to the public address and the LLM.
+  GITORACLE_PUBLIC_API_URL: https://gitoracle.example.com
+  GITORACLE_DASHBOARD_URL: https://gitoracle.example.com
+  GITORACLE_ALLOWED_ORIGINS: https://gitoracle.example.com
+  GITORACLE_ALLOWED_REPOS: ""
+  LLM_BASE_URL: https://api.example.com/v1/chat/completions
+  LLM_MODEL_NAME: set-me

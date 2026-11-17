@@ -1,0 +1,49 @@
+# GitOracle on one k3s node (the Azure VM in deploy/k8s/README.md).
+# Needs three files next to this one, none of them committed:
+#   site.env        public hostname and LLM      (copy site.env.example)
+#   secrets.env     passwords, tokens, App ids   (copy secrets.env.example)
+#   tunnel.env      CLOUDFLARE_TUNNEL_TOKEN=...
+#   github-app.pem  the GitHub App's private key (PKCS#8)
+# Apply with ../../deploy.sh, not kubectl apply -k (see there).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: gitoracle
+
+resources:
+  - ../../base
+  - cloudflared.yaml
+
+# Built by .github/workflows/images.yml. Pin newTag to a commit SHA for a
+# repeatable deploy; "main" follows the latest build.
+images:
+  - { name: gitoracle-api-gateway,    newName: ghcr.io/bettercallok/gitoracle-api-gateway,    newTag: main }
+  - { name: gitoracle-error-ingestor, newName: ghcr.io/bettercallok/gitoracle-error-ingestor, newTag: main }
+  - { name: gitoracle-git-forensics,  newName: ghcr.io/bettercallok/gitoracle-git-forensics,  newTag: main }
+  - { name: gitoracle-orchestrator,   newName: ghcr.io/bettercallok/gitoracle-orchestrator,   newTag: main }
+  - { name: gitoracle-test-runner,    newName: ghcr.io/bettercallok/gitoracle-test-runner,    newTag: main }
+  - { name: gitoracle-github-bot,     newName: ghcr.io/bettercallok/gitoracle-github-bot,     newTag: main }
+  - { name: gitoracle-agents,         newName: ghcr.io/bettercallok/gitoracle-agents,         newTag: main }
+  - { name: gitoracle-dashboard,      newName: ghcr.io/bettercallok/gitoracle-dashboard,      newTag: main }
+
+configMapGenerator:
+  - name: gitoracle-config
+    behavior: merge
+    envs: [site.env]
+
+secretGenerator:
+  - name: gitoracle-secrets
+    envs: [secrets.env]
+  - name: gitoracle-github-app
+    files: [github-app.pem]
+  - name: cloudflared
+    envs: [tunnel.env]
+
+# The ingress host comes from site.env, so it is written down once.
+replacements:
+  - source:
+      kind: ConfigMap
+      name: gitoracle-config
+      fieldPath: data.GITORACLE_PUBLIC_HOST
+    targets:
+      - select: { kind: Ingress, name: gitoracle }
+        fieldPaths: [spec.rules.0.host]

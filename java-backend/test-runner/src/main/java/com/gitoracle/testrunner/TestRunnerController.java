@@ -460,7 +460,11 @@ public class TestRunnerController {
             // live: "Could not resolve host: github.com" resolved fine a second
             // later on the same machine, but a single failed attempt here escalates
             // the whole job with zero recourse.
-            RunResult cloneResult = run(workDir.getParent(), TIMEOUT_SECONDS, cloneCmd.toArray(String[]::new));
+            // A private repository clones with the orchestrator's read token. The
+            // retry goes without it, which also covers a token that doesn't
+            // include this repository (a public one still clones).
+            Map<String, String> auth = gitAuthEnv(request.getCloneToken());
+            RunResult cloneResult = run(workDir.getParent(), TIMEOUT_SECONDS, auth, cloneCmd.toArray(String[]::new));
 
             if (!cloneResult.success()) {
                 logger.warn("Clone failed for job {}, retrying once: {}", jobId, cloneResult.output());
@@ -1172,7 +1176,29 @@ public class TestRunnerController {
      * there instead left a noisy process blocked on a full pipe.
      */
     static RunResult run(Path dir, int timeoutSeconds, String... cmd) throws IOException, InterruptedException {
+        return run(dir, timeoutSeconds, Map.of(), cmd);
+    }
+
+    /**
+     * git configuration that sends {@code token} as HTTP basic auth, through
+     * environment variables (GIT_CONFIG_COUNT, git 2.31+): unlike a token in the
+     * URL or a {@code -c} argument, it is not in the clone's .git/config, the
+     * process list or git's error messages. Empty for no token.
+     */
+    static Map<String, String> gitAuthEnv(String token) {
+        if (token == null || token.isBlank()) return Map.of();
+        String basic = java.util.Base64.getEncoder()
+            .encodeToString(("x-access-token:" + token.trim()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return Map.of(
+            "GIT_CONFIG_COUNT", "1",
+            "GIT_CONFIG_KEY_0", "http.https://github.com/.extraheader",
+            "GIT_CONFIG_VALUE_0", "AUTHORIZATION: basic " + basic);
+    }
+
+    static RunResult run(Path dir, int timeoutSeconds, Map<String, String> env, String... cmd)
+            throws IOException, InterruptedException {
         ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.environment().putAll(env);
         pb.directory(dir.toFile());
         pb.redirectErrorStream(true);
         // Belt-and-braces alongside RepoRefValidator: even if a forbidden value
