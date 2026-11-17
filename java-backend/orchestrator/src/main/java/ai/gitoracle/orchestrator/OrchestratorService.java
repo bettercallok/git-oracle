@@ -48,6 +48,17 @@ public class OrchestratorService {
     @Value("${gitoracle.internal-token:}")
     private String internalToken;
 
+    // Where the services this one calls live (gitoracle.services.*). The
+    // initialisers are the local defaults, kept for tests that build this directly.
+    @Value("${gitoracle.services.guardrails:http://localhost:9006}")
+    private String guardrailsUrl = "http://localhost:9006";
+    @Value("${gitoracle.services.test-runner:http://localhost:8084}")
+    private String testRunnerUrl = "http://localhost:8084";
+    @Value("${gitoracle.services.github-bot:http://localhost:8085}")
+    private String githubBotUrl = "http://localhost:8085";
+    @Value("${gitoracle.services.reviewer:http://localhost:9003}")
+    private String reviewerUrl = "http://localhost:9003";
+
     private final ai.gitoracle.orchestrator.service.RepoAccessService repoAccess;
     private final ai.gitoracle.orchestrator.service.GitHubInstallations installations;
     private final ai.gitoracle.orchestrator.service.UsageLimits usageLimits;
@@ -493,7 +504,7 @@ public class OrchestratorService {
 
             @SuppressWarnings("unchecked")
             Map<String, Object> guardrailsResponse = restTemplate.postForObject(
-                "http://localhost:9006/validate/patch", withInternalAuth(guardrailsRequest), Map.class);
+                guardrailsUrl + "/validate/patch", withInternalAuth(guardrailsRequest), Map.class);
 
             // Guardrails' content heuristics are advisory, not a gate — they are
             // substring matches over the patch's added lines, trivially avoided by
@@ -551,7 +562,7 @@ public class OrchestratorService {
             testRequest.put("tenantId",  tenantId[0]);           // per-tenant dependency cache
             testRequest.put("framework", "UNKNOWN");             // let runner auto-detect
 
-            var response = restTemplate.postForObject("http://localhost:8084/test", withInternalAuth(testRequest), Map.class);
+            var response = restTemplate.postForObject(testRunnerUrl + "/test", withInternalAuth(testRequest), Map.class);
 
             if (response != null && Boolean.TRUE.equals(response.get("allPassed"))) {
                 // "verified": false is the runner's safe-pass — no test suite ran at all.
@@ -736,7 +747,7 @@ public class OrchestratorService {
             }
 
             ResponseEntity<Map> response = restTemplate.postForEntity(
-                "http://localhost:8085/pull-request", withInternalAuth(prRequest), Map.class);
+                githubBotUrl + "/pull-request", withInternalAuth(prRequest), Map.class);
             Map<String, Object> body = response.getBody();
             boolean success = body != null && Boolean.TRUE.equals(body.get("success"));
 
@@ -853,7 +864,7 @@ public class OrchestratorService {
 
             @SuppressWarnings("unchecked")
             java.util.Map<String, Object> reviewResponse =
-                restTemplate.postForObject("http://localhost:9003/review", withInternalAuth(reviewRequest), java.util.Map.class);
+                restTemplate.postForObject(reviewerUrl + "/review", withInternalAuth(reviewRequest), java.util.Map.class);
 
             if (reviewResponse == null) {
                 logger.warn("Reviewer Agent returned null for job {}", jobIdStr);

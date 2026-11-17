@@ -98,6 +98,25 @@ public class TestRunnerController {
     @Value("${gitoracle.testrunner.trusted-repos:}")
     private String trustedReposRaw;
 
+    // Where test containers run: "docker" (a Docker daemon, the default) or
+    // "kubernetes" (one Job per run, KubernetesJobSandbox). In Kubernetes mode
+    // workspaceRoot must be the mount of the claim named below, shared with the
+    // sandbox pods, and NODE_NAME (downward API) pins them to this node.
+    @Value("${gitoracle.testrunner.sandbox:docker}")
+    private String sandboxMode;
+
+    @Value("${gitoracle.testrunner.kubernetes.claim:gitoracle-test-workspaces}")
+    private String kubernetesClaim;
+
+    @Value("${NODE_NAME:}")
+    private String nodeName;
+
+    private KubernetesJobSandbox kubernetes;
+
+    boolean kubernetesMode() {
+        return "kubernetes".equalsIgnoreCase(sandboxMode == null ? "" : sandboxMode.trim());
+    }
+
     private Set<String> trustedRepos = Set.of();
 
     // Snapshot taken once at startup rather than re-checked per request — a
@@ -151,6 +170,30 @@ public class TestRunnerController {
                 trustedRepos.size() == 1 ? "y" : "ies");
             logger.warn("# this in an environment that clones untrusted or public repos.");
             logger.warn("################################################################");
+        }
+
+        if (kubernetesMode()) {
+            // dockerAvailable then means "the sandbox is available": every gate
+            // that refuses work without Docker refuses it without the cluster too.
+            try {
+                kubernetes = new KubernetesJobSandbox(KubeApi.inCluster(), new KubernetesJobSandbox.Settings(
+                    KubeApi.ownNamespace(), kubernetesClaim, Path.of(workspaceRoot), nodeName));
+                dockerAvailable = kubernetes.available();
+            } catch (Exception e) {
+                logger.error("Kubernetes sandbox could not be set up: {}", e.getMessage());
+                dockerAvailable = false;
+            }
+            sandboxUser = resolveSandboxUser();
+            String[] parts = sandboxUser.split(":");
+            sandboxUid = parts[0];
+            sandboxGid = parts.length > 1 ? parts[1] : parts[0];
+            if (dockerAvailable) {
+                logger.info("Kubernetes Job sandbox available (claim {}, node {}).", kubernetesClaim,
+                    nodeName == null || nodeName.isBlank() ? "<any>" : nodeName);
+            } else {
+                logger.error("Kubernetes Job sandbox is not available. Test execution will be refused (503).");
+            }
+            return;
         }
 
         try {
@@ -739,7 +782,7 @@ public class TestRunnerController {
         // sandboxNetworkReady=false means network isolation from GitOracle's own
         // containers isn't in effect for this run — see ensureSandboxNetwork()'s
         // logged error for why. Still every other hardening flag still applies.
-        if (!sandboxNetworkReady) {
+        if (!sandboxNetworkReady && !kubernetesMode()) {
             logger.warn("Running job {} on the default bridge network — sandbox network " +
                 "{} was not available.", jobId, SANDBOX_NETWORK);
         }
@@ -771,13 +814,16 @@ public class TestRunnerController {
                 logger.warn("Could not chown workspace {} to sandbox user {} for job {}: {}",
                     workDir, sandboxUser, jobId, e.getMessage());
             }
-            RunResult result = run(workDir, DOCKER_RUN_TIMEOUT_SECONDS, dockerCmd.toArray(String[]::new));
+            RunResult result = kubernetesMode()
+                ? runInKubernetes(workDir, config, containerWorkDir, dockerImage, testCommand, cacheKey, jobId)
+                : run(workDir, DOCKER_RUN_TIMEOUT_SECONDS, dockerCmd.toArray(String[]::new));
 
             // Either this service gave up on `docker run`, or the in-container
             // `timeout` stopped the tests. Killing the client does not stop the
-            // container, so kill it by name; --rm then removes it.
+            // container, so kill it by name; --rm then removes it. (A Kubernetes
+            // Job has already been deleted by the sandbox.)
             if (result.timedOut() || result.exitCode() == TIMEOUT_EXIT) {
-                if (result.timedOut()) killContainer(container, jobId);
+                if (result.timedOut() && !kubernetesMode()) killContainer(container, jobId);
                 logger.warn("Tests timed out after {}s for job {}", TIMEOUT_SECONDS, jobId);
                 return new TestResult(false, 0.0, 0.0,
                     "Tests timed out after " + TIMEOUT_SECONDS + " seconds.\n" + result.output());
@@ -852,7 +898,7 @@ public class TestRunnerController {
             // authorized via both gates in isNativeFallbackAuthorized().
             logger.error("Docker execution failed for job {}: {}", jobId, e.getMessage(), e);
             // An exception (or an interrupt) mid-run must not leave the container behind.
-            killContainer(container, jobId);
+            if (!kubernetesMode()) killContainer(container, jobId);
             if (isNativeFallbackAuthorized(repoUrl)) {
                 return runNativeUnsafe(workDir, config, jobId);
             }
@@ -860,6 +906,27 @@ public class TestRunnerController {
                 "Sandbox unavailable — test execution refused rather than run unsandboxed on the host. " +
                 "Docker error: " + e.getMessage());
         }
+    }
+
+    /**
+     * The Kubernetes counterpart of {@code docker run}: the same image, command,
+     * working directory and mounts (each a subPath of the shared claim), run as
+     * a Job under the same limits. See {@link KubernetesJobSandbox}.
+     */
+    private RunResult runInKubernetes(Path workDir, FrameworkConfig config, String containerWorkDir,
+                                      String image, String testCommand, String cacheKey, String jobId)
+            throws IOException, InterruptedException {
+        Path scratchRoot = workDir.resolve(".sandbox-scratch");
+        Path tmpDir = scratchRoot.resolve("tmp");
+        Files.createDirectories(tmpDir);
+        List<KubernetesJobSandbox.Mount> mounts = new ArrayList<>();
+        mounts.add(new KubernetesJobSandbox.Mount(workDir, "/repo"));
+        mounts.add(new KubernetesJobSandbox.Mount(tmpDir, "/tmp"));
+        mounts.addAll(KubernetesJobSandbox.fromDockerVolumes(sandboxCacheBindMounts(scratchRoot, config.framework())));
+        mounts.addAll(KubernetesJobSandbox.fromDockerVolumes(dependencyCacheMounts(cacheKey, config.framework())));
+        return kubernetes.run(jobId, image, containerWorkDir.replaceAll("/\\.$", ""),
+            guardEmptyWorkspace(withinTimeout(testCommand, TIMEOUT_SECONDS)),
+            mounts, sandboxUid, sandboxGid, TIMEOUT_SECONDS);
     }
 
     /** Best effort: the container may never have started, or may already be gone. */
