@@ -83,7 +83,7 @@ public class LoginService {
     public Optional<IssuedSession> signIn(GitHubOAuthClient.GitHubUser gitHubUser) {
         OffsetDateTime now = OffsetDateTime.now();
         boolean admin = policy.isPlatformAdmin(gitHubUser.id());
-        boolean listed = policy.isInvited(gitHubUser.login());
+        boolean listed = policy.isInvited(gitHubUser.id(), gitHubUser.login());
         List<OrgInvitation> pending =
             invitations.findByGithubIdAndAcceptedAtIsNullAndRevokedAtIsNullAndExpiresAtAfter(gitHubUser.id(), now);
 
@@ -159,7 +159,7 @@ public class LoginService {
         if (user == null) return false;
 
         boolean admin = policy.isPlatformAdmin(user.getGithubId());
-        OrgMembership target = usableMemberships(user, admin, policy.isInvited(user.getGithubLogin())).stream()
+        OrgMembership target = usableMemberships(user, admin, policy.isInvited(user.getGithubId(), user.getGithubLogin())).stream()
             .filter(m -> m.getTenantId().equals(tenantId)).findFirst().orElse(null);
         if (target == null) return false;
 
@@ -175,7 +175,7 @@ public class LoginService {
     @Transactional(readOnly = true)
     public List<OrgMembership> organizationsOf(UUID userId) {
         return users.findById(userId)
-            .map(user -> usableMemberships(user, policy.isPlatformAdmin(user.getGithubId()), policy.isInvited(user.getGithubLogin())))
+            .map(user -> usableMemberships(user, policy.isPlatformAdmin(user.getGithubId()), policy.isInvited(user.getGithubId(), user.getGithubLogin())))
             .orElse(List.of());
     }
 
@@ -283,7 +283,7 @@ public class LoginService {
         UserAccount user = users.findById(session.getUserId()).orElse(null);
         if (user == null) return false;
         boolean admin = policy.isPlatformAdmin(user.getGithubId());
-        return usableMemberships(user, admin, policy.isInvited(user.getGithubLogin())).stream()
+        return usableMemberships(user, admin, policy.isInvited(user.getGithubId(), user.getGithubLogin())).stream()
             .filter(m -> m.getTenantId().equals(session.getTenantId()))
             .anyMatch(m -> m.getRole().sessionScopes(admin).equals(ApiKey.Scopes.parse(session.getScopes())));
     }

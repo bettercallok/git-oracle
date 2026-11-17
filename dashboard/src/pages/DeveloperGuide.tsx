@@ -108,7 +108,7 @@ OPENAI_API_KEY=<your provider key>`}</Code>
           <li>In your GitHub App's settings, add the Redirect URI <Inline>http://localhost:8080/api/v1/auth/github/callback</Inline> and generate a client secret.</li>
           <li>Set <Inline>GITHUB_APP_CLIENT_ID</Inline> and <Inline>GITHUB_APP_CLIENT_SECRET</Inline>.</li>
           <li>Set <Inline>GITORACLE_ADMIN_GITHUB_IDS</Inline> to your numeric id, the <Inline>id</Inline> at <Inline>{'https://api.github.com/users/<you>'}</Inline>.</li>
-          <li>Add anyone else to <Inline>GITORACLE_INVITED_GITHUB_USERS</Inline>, then restart.</li>
+          <li>Add anyone else to <Inline>GITORACLE_INVITED_GITHUB_USERS</Inline> by numeric GitHub id (a login also works, but can be re-registered by someone else if its owner gives it up), then restart.</li>
         </ol>
         <p>The login page then offers GitHub only, without the API key form.</p>
       </Section>

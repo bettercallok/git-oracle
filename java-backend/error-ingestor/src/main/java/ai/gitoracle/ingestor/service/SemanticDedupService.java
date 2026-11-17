@@ -2,7 +2,6 @@ package ai.gitoracle.ingestor.service;
 
 import ai.gitoracle.core.kafka.KafkaTopics;
 import ai.gitoracle.core.model.postgres.AgentJob;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -12,7 +11,6 @@ import jakarta.persistence.EntityManager;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.time.OffsetDateTime;
 
 @Service
 public class SemanticDedupService {
@@ -20,7 +18,6 @@ public class SemanticDedupService {
     private static final Logger logger = LoggerFactory.getLogger(SemanticDedupService.class);
     private final EntityManager entityManager;
     private final KafkaTemplate<String, Object> kafkaTemplate;
-    private final ObjectMapper mapper = new ObjectMapper();
 
     public SemanticDedupService(EntityManager entityManager, KafkaTemplate<String, Object> kafkaTemplate) {
         this.entityManager = entityManager;
@@ -40,10 +37,9 @@ public class SemanticDedupService {
             ? id : "err-" + UUID.randomUUID().toString().substring(0, 8);
         String stackTrace = payload.get("stacktrace") instanceof String st ? st : "";
 
-        // Deduplicate by errorId. NOTE: this is exact-match dedup, not semantic —
-        // vector-similarity dedup requires an embedding service (not currently deployed)
-        // plus a pgvector column on agent_job; see generateEmbedding() below for the
-        // intended embedding call to re-enable once that infra exists.
+        // Deduplicate by errorId: exact match, not semantic. Similarity dedup would
+        // need embeddings (EMBEDDINGS_BASE_URL, as agent memory uses) and a vector
+        // column on agent_job; neither exists yet.
         try {
             logger.info("Deduplicating error in repo: {}", repo);
 
@@ -91,38 +87,5 @@ public class SemanticDedupService {
         } catch (Exception e) {
             logger.error("Failed to ingest error", e);
         }
-    }
-
-    private String generateEmbedding(String text) {
-        try {
-            org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
-            java.util.Map<String, String> request = java.util.Map.of(
-                "model", "all-minilm",
-                "prompt", text != null ? text : ""
-            );
-            
-            @SuppressWarnings("unchecked")
-            java.util.Map<String, Object> response = restTemplate.postForObject(
-                "http://localhost:11434/api/embeddings", 
-                request, 
-                java.util.Map.class
-            );
-            
-            if (response != null && response.containsKey("embedding")) {
-                Object embeddingObj = response.get("embedding");
-                return mapper.writeValueAsString(embeddingObj);
-            }
-        } catch (Exception e) {
-            logger.error("Failed to fetch real embedding from LLM server, falling back to zeros", e);
-        }
-        
-        // Fallback to zeros if LLM server is unreachable
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < 384; i++) {
-            sb.append("0.0");
-            if (i < 383) sb.append(",");
-        }
-        sb.append("]");
-        return sb.toString();
     }
 }

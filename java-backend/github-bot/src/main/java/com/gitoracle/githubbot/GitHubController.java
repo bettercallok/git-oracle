@@ -402,40 +402,74 @@ public class GitHubController {
         return newCommit;
     }
 
-    private static String runCommandOutput(String dir, String... command) throws Exception {
+    static final int GIT_TIMEOUT_SECONDS = 60;
+
+    record CommandResult(int exitCode, String stdout, String stderr) {}
+
+    /**
+     * Runs a command with a real timeout. Both streams are read on their own
+     * threads while this one waits: reading stdout to the end first (as this
+     * used to) meant the wait started only once the process had exited, so a
+     * hung git hung the request, and a process left in the pipe never stopped.
+     * On timeout the whole process tree is killed.
+     */
+    static CommandResult exec(String dir, Map<String, String> env, int timeoutSeconds, String... command)
+            throws Exception {
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(new File(dir));
+        pb.environment().putAll(env);
         Process p = pb.start();
-        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-        if (!p.waitFor(60, TimeUnit.SECONDS) || p.exitValue() != 0) {
-            String error = new String(p.getErrorStream().readAllBytes());
-            throw new RuntimeException("Command failed: " + String.join(" ", command) + " -> " + error);
+        var stdout = new java.util.concurrent.CompletableFuture<String>();
+        var stderr = new java.util.concurrent.CompletableFuture<String>();
+        Thread.ofVirtual().start(() -> stdout.complete(readQuietly(p.getInputStream())));
+        Thread.ofVirtual().start(() -> stderr.complete(readQuietly(p.getErrorStream())));
+        boolean finished;
+        try {
+            finished = p.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            killTree(p);
+            throw e;
         }
-        return out;
+        if (!finished) {
+            killTree(p);
+            throw new RuntimeException("Command timed out after " + timeoutSeconds + "s: " + String.join(" ", command));
+        }
+        return new CommandResult(p.exitValue(), stdout.get(5, TimeUnit.SECONDS), stderr.get(5, TimeUnit.SECONDS));
+    }
+
+    private static void killTree(Process p) {
+        p.descendants().forEach(ProcessHandle::destroyForcibly);
+        p.destroyForcibly();
+    }
+
+    private static String readQuietly(java.io.InputStream in) {
+        try {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    private static String runCommandOutput(String dir, String... command) throws Exception {
+        CommandResult r = exec(dir, Map.of(), GIT_TIMEOUT_SECONDS, command);
+        if (r.exitCode() != 0) {
+            throw new RuntimeException("Command failed: " + String.join(" ", command) + " -> " + r.stderr());
+        }
+        return r.stdout().trim();
     }
 
     private static int exitCode(String dir, String... command) throws Exception {
-        Process p = new ProcessBuilder(command).directory(new File(dir)).redirectErrorStream(true).start();
-        p.getInputStream().readAllBytes();
-        if (!p.waitFor(60, TimeUnit.SECONDS)) {
-            p.destroyForcibly();
-            throw new RuntimeException("Command timed out: " + String.join(" ", command));
-        }
-        return p.exitValue();
+        return exec(dir, Map.of(), GIT_TIMEOUT_SECONDS, command).exitCode();
     }
-    
+
     private static void runCommand(String dir, String... command) throws Exception {
         runCommand(dir, Map.of(), command);
     }
 
     private static void runCommand(String dir, Map<String, String> env, String... command) throws Exception {
-        ProcessBuilder pb = new ProcessBuilder(command);
-        pb.directory(new File(dir));
-        pb.environment().putAll(env);
-        Process p = pb.start();
-        if (!p.waitFor(60, TimeUnit.SECONDS) || p.exitValue() != 0) {
-            String error = new String(p.getErrorStream().readAllBytes());
-            throw new RuntimeException("Command failed: " + String.join(" ", command) + " -> " + error);
+        CommandResult r = exec(dir, env, GIT_TIMEOUT_SECONDS, command);
+        if (r.exitCode() != 0) {
+            throw new RuntimeException("Command failed: " + String.join(" ", command) + " -> " + r.stderr());
         }
     }
     

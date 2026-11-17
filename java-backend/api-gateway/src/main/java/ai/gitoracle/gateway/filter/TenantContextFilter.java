@@ -78,12 +78,10 @@ import java.util.UUID;
  * the error-ingestor instead (see {@code HmacVerifier}). Because no key is
  * presented, no tenant can be derived, so this filter injects <b>no</b>
  * {@code X-Tenant-ID} for webhook routes and merely strips any the caller sent.
- * Webhook deliveries consequently still land on the default tenant downstream.
- * That is a known remaining gap, not an oversight: resolving it properly means
- * per-installation webhook secrets stored per tenant, so the tenant is derived
- * from the <em>verified</em> installation ID. That work belongs with the
- * per-installation secret storage the webhook change already flagged as
- * deferred, and it is tracked as such.
+ * The error-ingestor picks the tenant after verifying the signature: a GitHub
+ * delivery goes to the organisation whose connected installation sent it (an
+ * installation nobody connected is dropped), and a Sentry report is checked
+ * against that tenant's own Sentry secret.
  */
 @Component
 public class TenantContextFilter implements GlobalFilter, Ordered {

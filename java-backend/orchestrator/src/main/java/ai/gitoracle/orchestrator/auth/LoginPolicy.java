@@ -18,9 +18,10 @@ import java.util.stream.Collectors;
  * <p>Sign-in is invite-only because every job spends the operator's LLM budget
  * and runs repository code on their machine.
  *
- * <p>Admins are listed by numeric GitHub id and invitees by login. A released
- * login can be claimed by a stranger: for an invitee that costs a new, empty
- * tenant, but for an admin it would hand over the whole platform.
+ * <p>Admins are listed by numeric GitHub id. Invitees may be listed by id or by
+ * login; an id is matched as an id, anything else as a login. Prefer ids: a
+ * released login can be claimed by a stranger, who would then get an
+ * organisation of their own.
  */
 @Component
 public class LoginPolicy {
@@ -28,13 +29,24 @@ public class LoginPolicy {
     private static final Logger logger = LoggerFactory.getLogger(LoginPolicy.class);
 
     private final Set<String> invitedLogins;
+    private final Set<Long> invitedIds;
     private final Set<Long> adminIds;
 
     public LoginPolicy(@Value("${gitoracle.auth.invited-github-users:}") String invitedLogins,
                        @Value("${gitoracle.auth.admin-github-ids:}") String adminIds) {
-        this.invitedLogins = entries(invitedLogins).stream()
+        Set<String> invited = entries(invitedLogins);
+        this.invitedIds = invited.stream()
+            .filter(entry -> entry.chars().allMatch(Character::isDigit))
+            .map(Long::valueOf)
+            .collect(Collectors.toSet());
+        this.invitedLogins = invited.stream()
+            .filter(entry -> !entry.chars().allMatch(Character::isDigit))
             .map(login -> login.toLowerCase(Locale.ROOT))
             .collect(Collectors.toSet());
+        if (!this.invitedLogins.isEmpty()) {
+            logger.warn("GITORACLE_INVITED_GITHUB_USERS lists {} login(s). A login someone gives up can be "
+                + "registered by anyone; list numeric GitHub ids instead.", this.invitedLogins.size());
+        }
         this.adminIds = entries(adminIds).stream()
             .map(LoginPolicy::parseId)
             .filter(id -> id != null)
@@ -45,14 +57,15 @@ public class LoginPolicy {
         return adminIds.contains(githubId);
     }
 
-    /** On the operator's list, so they get an organisation of their own. */
-    public boolean isInvited(String login) {
-        return login != null && invitedLogins.contains(login.toLowerCase(Locale.ROOT));
+    /** On the operator's list, by id or by login, so they get an organisation of their own. */
+    public boolean isInvited(long githubId, String login) {
+        return invitedIds.contains(githubId)
+            || (login != null && invitedLogins.contains(login.toLowerCase(Locale.ROOT)));
     }
 
     /** With both lists empty nobody can sign in, so GitHub sign-in can't be anyone's only way in. */
     public boolean admitsAnyone() {
-        return !invitedLogins.isEmpty() || !adminIds.isEmpty();
+        return !invitedLogins.isEmpty() || !invitedIds.isEmpty() || !adminIds.isEmpty();
     }
 
     private static Set<String> entries(String raw) {

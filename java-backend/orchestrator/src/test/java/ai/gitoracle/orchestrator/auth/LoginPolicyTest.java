@@ -10,9 +10,18 @@ class LoginPolicyTest {
 
     @Test
     void anInvitedLoginIsMatchedWhateverItsCase() {
-        assertThat(policy.isInvited("ALICE")).isTrue();
-        assertThat(policy.isInvited("mallory")).isFalse();
-        assertThat(policy.isInvited(null)).isFalse();
+        assertThat(policy.isInvited(1, "ALICE")).isTrue();
+        assertThat(policy.isInvited(1, "mallory")).isFalse();
+        assertThat(policy.isInvited(1, null)).isFalse();
+    }
+
+    @Test
+    void anInvitedIdIsMatchedAsAnIdWhateverTheLogin() {
+        LoginPolicy byId = new LoginPolicy("1234, carol", "");
+        assertThat(byId.isInvited(1234, "renamed-user")).isTrue();
+        assertThat(byId.isInvited(99, "1234")).isFalse();
+        assertThat(byId.isInvited(99, "Carol")).isTrue();
+        assertThat(new LoginPolicy("1234", "").admitsAnyone()).isTrue();
     }
 
     @Test
