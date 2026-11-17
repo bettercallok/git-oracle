@@ -49,7 +49,7 @@ async def get_db_connection():
         host=os.environ.get("POSTGRES_HOST", "localhost"),
         port=os.environ.get("POSTGRES_PORT", "5433"),
         user=os.environ.get("POSTGRES_USER", "gitOracle"),
-        password=os.environ.get("POSTGRES_PASSWORD", "GitOracle_PG_2025"),
+        password=os.environ.get("POSTGRES_PASSWORD", ""),
         database=os.environ.get("POSTGRES_DB", "gitOracle")
     )
     await register_vector(conn)
