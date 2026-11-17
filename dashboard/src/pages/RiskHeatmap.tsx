@@ -1,7 +1,9 @@
 import { motion } from 'framer-motion';
-import { Flame, Loader2, AlertCircle } from 'lucide-react';
+import { Flame, Users, DatabaseZap } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import { containerVariants, itemVariants } from '../utils/motion';
+import { PageHeader, EmptyState, LoadingState, Avatar } from '../components/ui';
 
 interface FileRisk {
   file: string;
@@ -25,14 +27,12 @@ const fetchRiskData = async (): Promise<RiskData> => {
   return data;
 };
 
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.05 } }
-};
-const itemVariants = {
-  hidden: { opacity: 0, y: 10 },
-  show: { opacity: 1, y: 0, transition: { type: 'spring' as const, stiffness: 300, damping: 24 } }
-};
+const HEAT_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
+
+const riskLevel = (rate: number) =>
+  rate > 0.12 ? { label: 'High', badge: 'badge-danger', color: 'var(--danger)' }
+  : rate > 0.08 ? { label: 'Medium', badge: 'badge-warning', color: 'var(--warning)' }
+  : { label: 'Low', badge: 'badge-success', color: 'var(--success)' };
 
 export default function RiskHeatmap() {
   const { data, isLoading, isError } = useQuery({
@@ -41,80 +41,123 @@ export default function RiskHeatmap() {
     refetchInterval: 30000,
   });
 
-  if (isLoading) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}>
-        <Loader2 size={32} className="spinner" style={{ color: 'var(--accent)' }} />
-      </div>
-    );
-  }
+  const header = (
+    <PageHeader
+      title="Risk heatmap"
+      description="Where bugs have historically come from, built from the repository graph in Neo4j. Refreshes every 30 seconds."
+    />
+  );
+
+  if (isLoading) return <motion.div variants={containerVariants} initial="hidden" animate="show">{header}<LoadingState label="Loading risk data…" /></motion.div>;
 
   if (isError || !data) {
     return (
-      <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--danger)' }}>
-        <AlertCircle size={32} style={{ marginBottom: 16 }} />
-        <h2>Error loading risk data</h2>
-        <p>Could not fetch from Neo4j backend</p>
-      </div>
+      <motion.div variants={containerVariants} initial="hidden" animate="show">
+        {header}
+        <div className="card">
+          <EmptyState
+            icon={<DatabaseZap size={20} />}
+            title="Couldn't load risk data"
+            description="The git-forensics service or its Neo4j database isn't responding."
+          />
+        </div>
+      </motion.div>
     );
   }
 
+  const files = [...data.files].sort((a, b) => HEAT_ORDER[a.heat] - HEAT_ORDER[b.heat] || b.bugs - a.bugs);
+  const developers = [...data.developers].sort((a, b) => b.bugRate - a.bugRate);
+  const maxRate = Math.max(0.01, ...developers.map(d => d.bugRate));
+
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show">
-      <motion.div variants={itemVariants} className="page-header">
-        <h1 className="page-title">Risk Heatmap</h1>
-        <p className="page-description">Files and developers ranked by historical bug rate</p>
-      </motion.div>
+      {header}
 
-      <motion.div variants={itemVariants} className="card" style={{ marginBottom: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
-          <Flame size={18} color="var(--danger)" />
-          <h2 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)' }}>File Risk Matrix</h2>
+      <motion.div variants={itemVariants} className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header" style={{ flexWrap: 'wrap' }}>
+          <div>
+            <div className="card-title"><Flame size={16} /> Files by bug count</div>
+            <div className="card-subtitle">Hottest first. Hover a file to see its full path.</div>
+          </div>
+          <div className="heat-legend">
+            {(['low', 'medium', 'high', 'critical'] as const).map(h => (
+              <span key={h} className={`heat-${h}`} style={{ background: 'none', border: 0, boxShadow: 'none' }}>
+                <i /> {h[0].toUpperCase() + h.slice(1)}
+              </span>
+            ))}
+          </div>
         </div>
-        <div className="heatmap-grid">
-          {data.files.map((f, i) => (
-            <motion.div 
-              key={f.file}
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: 0.1 + (i * 0.02) }}
-              className={`heatmap-cell heat-${f.heat}`}
-            >
-              <div className="file-name">{f.file}</div>
-              <div className="bug-count">{f.bugs}</div>
-            </motion.div>
-          ))}
-        </div>
+        {files.length === 0 ? (
+          <EmptyState icon={<Flame size={20} />} title="No file history yet" description="Files appear here once bug-fix commits are indexed." />
+        ) : (
+          <div className="heatmap-grid">
+            {files.map((f, i) => (
+              <motion.div
+                key={f.file}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: Math.min(i, 30) * 0.015 }}
+                className={`heatmap-cell heat-${f.heat}`}
+                title={f.file}
+              >
+                <div className="file-name">{f.file}</div>
+                <div className="bug-count">{f.bugs}<span className="bug-unit">{f.bugs === 1 ? 'bug' : 'bugs'}</span></div>
+              </motion.div>
+            ))}
+          </div>
+        )}
       </motion.div>
 
       <motion.div variants={itemVariants} className="table-container">
-        <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-subtle)' }}>
-          <h2 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)' }}>Developer Risk Profile</h2>
+        <div className="card-header" style={{ margin: 0, padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div>
+            <div className="card-title"><Users size={16} /> Authors by bug rate</div>
+            <div className="card-subtitle">Share of an author's commits later linked to a bug. Context for review, not a scorecard.</div>
+          </div>
         </div>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Developer</th>
-              <th>Commits</th>
-              <th>Bug Rate</th>
-              <th>Risk</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.developers.sort((a, b) => b.bugRate - a.bugRate).map(dev => (
-              <tr key={dev.name}>
-                <td className="mono" style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{dev.name}</td>
-                <td className="mono">{dev.commits}</td>
-                <td className="mono" style={{ color: 'var(--text-primary)' }}>{(dev.bugRate * 100).toFixed(1)}%</td>
-                <td>
-                  <span className={`badge ${dev.bugRate > 0.12 ? 'badge-danger' : dev.bugRate > 0.08 ? 'badge-warning' : 'badge-success'}`}>
-                    {dev.bugRate > 0.12 ? 'HIGH' : dev.bugRate > 0.08 ? 'MEDIUM' : 'LOW'}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {developers.length === 0 ? (
+          <EmptyState icon={<Users size={20} />} title="No author history yet" />
+        ) : (
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Author</th>
+                  <th className="num">Commits</th>
+                  <th style={{ width: '34%' }}>Bug rate</th>
+                  <th>Risk</th>
+                </tr>
+              </thead>
+              <tbody>
+                {developers.map(dev => {
+                  const level = riskLevel(dev.bugRate);
+                  return (
+                    <tr key={dev.name}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <Avatar name={dev.name} size={24} />
+                          <span className="cell-primary">{dev.name}</span>
+                        </div>
+                      </td>
+                      <td className="num mono tabular">{dev.commits}</td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div className="meter" style={{ flex: 1 }}>
+                            <div style={{ width: `${(dev.bugRate / maxRate) * 100}%`, background: level.color }} />
+                          </div>
+                          <span className="mono tabular" style={{ width: 48, textAlign: 'right', color: 'var(--text-primary)' }}>
+                            {(dev.bugRate * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                      </td>
+                      <td><span className={`badge ${level.badge}`}>{level.label}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </motion.div>
     </motion.div>
   );

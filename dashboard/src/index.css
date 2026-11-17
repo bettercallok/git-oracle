@@ -1597,3 +1597,6 @@ textarea.code-block:focus { border-color: var(--border-focus); box-shadow: 0 0 0
 .usage-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
 .usage-card { padding: 16px; }
 .usage-value { font-size: 1.15rem; font-weight: 600; color: var(--text-primary); margin-top: 4px; }
+
+.repo-remove { color: var(--text-muted); }
+.repo-remove:hover { color: var(--danger); }
