@@ -1,0 +1,83 @@
+# What the test runner needs to run each test suite as a Kubernetes Job
+# (GITORACLE_TESTRUNNER_SANDBOX=kubernetes, KubernetesJobSandbox.java).
+#
+# - A service account that may create and read Jobs and their pods' logs in
+#   this namespace, and nothing else.
+# - The claim the test runner clones into, shared with the sandbox pods
+#   (each mounts its job's directory as a subPath). ReadWriteOnce, so the
+#   sandbox pods are pinned to the test runner's node (NODE_NAME).
+# - A NetworkPolicy for the sandbox pods: no ingress at all, and egress only
+#   to DNS and the public internet (package registries), never to anything in
+#   the cluster or on a private network. Enforced by k3s' built-in policy
+#   controller; on a CNI without NetworkPolicy support it is silently ignored.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: test-runner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: test-runner-sandbox
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: test-runner-sandbox
+subjects:
+  - kind: ServiceAccount
+    name: test-runner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: test-runner-sandbox
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitoracle-test-workspaces
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: test-sandbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: test-sandbox
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+              - 127.0.0.0/8
