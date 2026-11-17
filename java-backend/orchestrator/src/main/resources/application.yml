@@ -82,14 +82,20 @@ spring:
     hikari:
       connection-timeout: 10000
       maximum-pool-size: 5
+  # Flyway owns the schema (db/migration). baseline-version 0 rather than the
+  # default 1: a database that ddl-auto built, or one where init.sql already
+  # made the agents' tables, still runs V1, which is all IF NOT EXISTS.
+  flyway:
+    baseline-on-migrate: true
+    baseline-version: 0
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
-      ddl-auto: update
-    show-sql: true
+      # Fails startup if an entity and the migrated schema disagree.
+      ddl-auto: validate
+    show-sql: false
     properties:
       hibernate:
-        format_sql: true
         dialect: org.hibernate.dialect.PostgreSQLDialect
   kafka:
     bootstrap-servers: ${KAFKA_HOST:127.0.0.1}:${KAFKA_PORT:9092}

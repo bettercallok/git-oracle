@@ -21,6 +21,8 @@ dependencies {
     // many orchestrators are up (ShedLockConfig).
     implementation 'net.javacrumbs.shedlock:shedlock-spring:5.16.0'
     implementation 'net.javacrumbs.shedlock:shedlock-provider-jdbc-template:5.16.0'
+    // Owns the schema (db/migration); version from Spring Boot's BOM.
+    implementation 'org.flywaydb:flyway-core'
     runtimeOnly 'org.postgresql:postgresql'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
