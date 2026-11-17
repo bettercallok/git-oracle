@@ -17,6 +17,11 @@ public class TestRequest {
     public String getRepoUrl() { return repoUrl; }
     public void setRepoUrl(String repoUrl) { this.repoUrl = repoUrl; }
 
+    // Read-only token for a private repository (orchestrator's CloneTokens); null for public ones.
+    private String cloneToken;
+    public String getCloneToken() { return cloneToken; }
+    public void setCloneToken(String cloneToken) { this.cloneToken = cloneToken; }
+
     public String getBranch() { return branch; }
     public void setBranch(String branch) { this.branch = branch; }
 

@@ -58,6 +58,31 @@ public class GitHubClientService {
      * Tokens are not cached — generate a fresh one per request to be safe.
      */
     public String getInstallationToken(String installationId) throws Exception {
+        String token = appClient().getApp()
+                .getInstallationById(Long.parseLong(installationId))
+                .createToken()
+                .create()
+                .getToken();
+        logger.debug("Generated fresh installation token for App ID: {}", appId);
+        return token;
+    }
+
+    /**
+     * A token that can only read the contents of one repository, for cloning.
+     * It leaves the orchestrator (agents and the test runner clone with it), so it
+     * carries no other permission and no other repository.
+     */
+    public org.kohsuke.github.GHAppInstallationToken getRepositoryReadToken(String installationId, String repoName)
+            throws Exception {
+        return appClient().getApp()
+                .getInstallationById(Long.parseLong(installationId))
+                .createToken()
+                .repositories(java.util.List.of(repoName))
+                .permissions(java.util.Map.of("contents", org.kohsuke.github.GHPermissionType.READ))
+                .create();
+    }
+
+    private GitHub appClient() throws Exception {
         String keyContent = new String(Files.readAllBytes(Paths.get(privateKeyPath)), StandardCharsets.UTF_8)
                 .replaceAll("-----BEGIN PRIVATE KEY-----", "")
                 .replaceAll("-----END PRIVATE KEY-----", "")
@@ -83,14 +108,7 @@ public class GitHubClientService {
         String sigB64 = Base64.getUrlEncoder().withoutPadding().encodeToString(sig.sign());
         String jwt = dataToSign + "." + sigB64;
 
-        GitHub appClient = new GitHubBuilder().withEndpoint(apiUrl).withJwtToken(jwt).build();
-        String token = appClient.getApp()
-                .getInstallationById(Long.parseLong(installationId))
-                .createToken()
-                .create()
-                .getToken();
-        logger.debug("Generated fresh installation token for App ID: {}", appId);
-        return token;
+        return new GitHubBuilder().withEndpoint(apiUrl).withJwtToken(jwt).build();
     }
 
     /** Returns a client acting as this installation. See {@link GitHubInstallations} for which one. */

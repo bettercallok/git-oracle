@@ -80,6 +80,18 @@ public class OrchestratorService {
         this.metrics = metrics;
     }
 
+    private ai.gitoracle.orchestrator.service.CloneTokens cloneTokens;
+
+    /** Optional for the same reason: without it every clone is anonymous (public repos only). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setCloneTokens(ai.gitoracle.orchestrator.service.CloneTokens cloneTokens) {
+        this.cloneTokens = cloneTokens;
+    }
+
+    private String cloneTokenFor(UUID tenantId, String repoUrl) {
+        return cloneTokens == null ? null : cloneTokens.valueFor(tenantId, repoUrl);
+    }
+
     /** Wraps a request body with the X-Internal-Token header every internal-service call needs. */
     private <T> HttpEntity<T> withInternalAuth(T body) {
         HttpHeaders headers = new HttpHeaders();
@@ -261,7 +273,8 @@ public class OrchestratorService {
         // 2. Clone the repository (a specific branch, if the job requested one) into
         // a dynamic workspace
         String branch = event.getBranch();
-        String repoPath = workspaceService.cloneRepository(event.getRepoUrl(), branch, job.getId());
+        String repoPath = workspaceService.cloneRepository(event.getRepoUrl(), branch, job.getId(),
+            cloneTokenFor(job.getTenantId(), event.getRepoUrl()));
 
         // HEAD is what the patch will apply to — recorded as the base commit, NOT
         // as the root cause. rootCommit stays null until the Investigator answers
@@ -550,6 +563,10 @@ public class OrchestratorService {
             testRequest.put("branch",    branch);
             testRequest.put("tenantId",  tenantId[0]);           // per-tenant dependency cache
             testRequest.put("framework", "UNKNOWN");             // let runner auto-detect
+            // Read token so a private repository clones; HTTP only, never on Kafka.
+            String testCloneToken = tenantId[0] == null ? null
+                : cloneTokenFor(UUID.fromString(tenantId[0]), repoUrl[0]);
+            if (testCloneToken != null) testRequest.put("cloneToken", testCloneToken);
 
             var response = restTemplate.postForObject("http://localhost:8084/test", withInternalAuth(testRequest), Map.class);
 

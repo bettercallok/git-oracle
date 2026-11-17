@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel, ValidationError
 from typing import Any, List, Optional
@@ -21,6 +22,7 @@ from shared.job_events import report_event, ERROR
 from shared.body_limit import BodySizeLimitMiddleware
 from shared.safe_paths import UnsafePathError, partition_safe, resolve_within, safe_read_text
 from shared.git_context import commit_diff
+from shared.clone_auth import fetch_clone_token, git_auth_env
 from shared.limits import PATCH_LINE_LIMIT, count_changed_lines
 from shared.repo_refs import InvalidRepoRefError, is_within_workspace_root, validate_branch, validate_repo_url
 
@@ -199,18 +201,23 @@ async def run_real_test(job_id: str, repo_path: str, repo_url: str, patch_diff: 
                         branch: str = "") -> tuple[bool, str]:
     """Run the repo's test suite with the patch applied (Test Runner). Returns
     (passed, test output) — the output is what the next attempt is shown."""
+    test_request = {
+        "jobId": job_id,
+        "repoUrl": repo_url,
+        "repoPath": repo_path,
+        "patchDiff": patch_diff,
+        "branch": branch,
+        "framework": "UNKNOWN",  # let Test Runner auto-detect (pom.xml/package.json/etc.)
+    }
+    # Lets the test runner clone a private repository (shared/clone_auth).
+    clone_token = await asyncio.to_thread(fetch_clone_token, job_id)
+    if clone_token:
+        test_request["cloneToken"] = clone_token
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "http://localhost:8084/test",
-                json={
-                    "jobId": job_id,
-                    "repoUrl": repo_url,
-                    "repoPath": repo_path,
-                    "patchDiff": patch_diff,
-                    "branch": branch,
-                    "framework": "UNKNOWN"  # let Test Runner auto-detect (pom.xml/package.json/etc.)
-                },
+                json=test_request,
                 headers={"X-Internal-Token": os.environ.get("GITORACLE_INTERNAL_TOKEN", "")},
                 # Matches the orchestrator's read timeout on /test (InternalHttp.
                 # TEST_RUNNER_TIMEOUT): the runner may take two 180s clone attempts
@@ -291,7 +298,10 @@ async def execute_fix(request: FixerRequest):
         try:
             if not os.path.isdir(os.path.join(fixer_src_path, ".git")):
                 shutil.rmtree(fixer_src_path, ignore_errors=True)
-                git.Repo.clone_from(clone_url, fixer_src_path, **clone_kwargs)
+                # A private repository needs the orchestrator's read token; the
+                # anonymous fallback below still covers a token that doesn't fit.
+                auth = git_auth_env(fetch_clone_token(request.job_id))
+                git.Repo.clone_from(clone_url, fixer_src_path, env=auth, **clone_kwargs)
             local_src_path = fixer_src_path
         except Exception as e:  # noqa: BLE001 — any clone failure falls back to a second clone below
             # request.repo_path is only populated when an earlier pipeline stage

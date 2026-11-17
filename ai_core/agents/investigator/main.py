@@ -167,7 +167,7 @@ async def handle_investigate_job(payload: dict):
     # On another host the orchestrator's clone isn't here: make our own at the
     # job's base commit (shared/checkout.py). A no-op on one machine.
     base_commit = payload.get("base_commit") or ""
-    checkout = await asyncio.to_thread(ensure_checkout, repo_path, payload.get("repo_url", ""), branch, base_commit)
+    checkout = await asyncio.to_thread(ensure_checkout, repo_path, payload.get("repo_url", ""), branch, base_commit, job_id)
     request = InvestigationRequest(
         tenant_id=tenant_id_of(payload),
         repo_path=checkout or repo_path,

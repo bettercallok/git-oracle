@@ -185,7 +185,7 @@ async def handle_planner_job(payload: dict):
     # Our own checkout at the job's base commit when the orchestrator's isn't on
     # this host (shared/checkout.py).
     base_commit = payload.get("base_commit") or ""
-    checkout = await asyncio.to_thread(ensure_checkout, repo_path, payload.get("repo_url", ""), branch, base_commit)
+    checkout = await asyncio.to_thread(ensure_checkout, repo_path, payload.get("repo_url", ""), branch, base_commit, job_id)
     request = PlannerRequest(
         tenant_id=tenant_id_of(payload),
         repo_path=checkout or repo_path,

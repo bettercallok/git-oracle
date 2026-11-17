@@ -20,6 +20,7 @@ from typing import Optional
 
 import git
 
+from shared.clone_auth import fetch_clone_token, git_auth_env
 from shared.repo_refs import InvalidRepoRefError, is_within_workspace_root, validate_branch, validate_repo_url, workspace_root
 
 logger = logging.getLogger(__name__)
@@ -28,8 +29,9 @@ _SHA = re.compile(r"[0-9a-f]{7,40}")
 _GIT_TIMEOUT_S = 120
 
 
-def _git(path: str, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", path, *args], capture_output=True, text=True, timeout=_GIT_TIMEOUT_S)
+def _git(path: str, *args: str, env: Optional[dict[str, str]] = None) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", path, *args], capture_output=True, text=True, timeout=_GIT_TIMEOUT_S,
+                          env={**os.environ, **env} if env else None)
 
 
 def head_commit(path: str) -> Optional[str]:
@@ -40,21 +42,21 @@ def head_commit(path: str) -> Optional[str]:
     return out.stdout.strip() if out.returncode == 0 else None
 
 
-def checkout_commit(path: str, sha: str) -> bool:
+def checkout_commit(path: str, sha: str, auth: Optional[dict[str, str]] = None) -> bool:
     """Detach ``path`` at ``sha``, fetching it if the clone doesn't have it. False if it can't."""
     if not _SHA.fullmatch(sha or ""):
         return False
     try:
         if _git(path, "checkout", "--quiet", "--detach", sha).returncode == 0:
             return True
-        _git(path, "fetch", "--quiet", "origin", sha)
+        _git(path, "fetch", "--quiet", "origin", sha, env=auth)
         return _git(path, "checkout", "--quiet", "--detach", sha).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
 
 
 def ensure_checkout(repo_path: str, repo_url: str, branch: Optional[str] = None,
-                    base_commit: Optional[str] = None) -> str:
+                    base_commit: Optional[str] = None, job_id: Optional[str] = None) -> str:
     """Return a directory holding the job's repository, cloning it if this host lacks it.
 
     An existing checkout at ``repo_path`` is used as it is: on one machine that
@@ -79,10 +81,20 @@ def ensure_checkout(repo_path: str, repo_url: str, branch: Optional[str] = None,
     # Clone beside the target and rename, so a crash or a concurrent clone never
     # leaves a half-written checkout where the next reader expects a whole one.
     tmp = f"{repo_path.rstrip('/')}.cloning-{uuid.uuid4().hex[:8]}"
-    kwargs = {"branch": ref} if ref else {}
+    kwargs: dict = {"branch": ref} if ref else {}
+    # A private repository needs the orchestrator's read token (shared/clone_auth).
+    auth = git_auth_env(fetch_clone_token(job_id))
     try:
-        git.Repo.clone_from(url, tmp, **kwargs)
-        if base_commit and not checkout_commit(tmp, base_commit):
+        try:
+            git.Repo.clone_from(url, tmp, env=auth, **kwargs)
+        except git.GitCommandError:
+            if not auth:
+                raise
+            # The token may not cover this repository; a public one clones without it.
+            shutil.rmtree(tmp, ignore_errors=True)
+            auth = {}
+            git.Repo.clone_from(url, tmp, **kwargs)
+        if base_commit and not checkout_commit(tmp, base_commit, auth):
             logger.warning("Could not check out base commit %s in %s; reading %s instead",
                            base_commit, repo_path, ref or "the default branch")
         try:
