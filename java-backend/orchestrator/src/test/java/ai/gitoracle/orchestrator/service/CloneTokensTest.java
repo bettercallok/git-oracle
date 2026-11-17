@@ -1,14 +1,12 @@
 package ai.gitoracle.orchestrator.service;
 
 import org.junit.jupiter.api.Test;
-import org.kohsuke.github.GHAppInstallationToken;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -29,10 +27,7 @@ class CloneTokensTest {
     private CloneTokens tokens(Clock clock) {
         return new CloneTokens(installations, (installation, repo) -> {
             minted.add(installation + ":" + repo);
-            GHAppInstallationToken token = mock(GHAppInstallationToken.class);
-            when(token.getToken()).thenReturn("ghs_" + minted.size());
-            when(token.getExpiresAt()).thenReturn(Date.from(clock.instant().plus(Duration.ofHours(1))));
-            return token;
+            return new CloneTokens.Token("ghs_" + minted.size(), clock.instant().plus(Duration.ofHours(1)));
         }, clock);
     }
 

@@ -39,9 +39,10 @@ public class CloneTokens {
         }
     }
 
+    /** Mints a read token for one repository of one installation. */
     @FunctionalInterface
     interface Minter {
-        GHAppInstallationToken mint(String installationId, String repoName) throws Exception;
+        Token mint(String installationId, String repoName) throws Exception;
     }
 
     private final GitHubInstallations installations;
@@ -51,7 +52,11 @@ public class CloneTokens {
 
     @Autowired
     public CloneTokens(GitHubInstallations installations, GitHubClientService github) {
-        this(installations, github::getRepositoryReadToken, Clock.systemUTC());
+        this(installations, (installation, repo) -> {
+            GHAppInstallationToken token = github.getRepositoryReadToken(installation, repo);
+            Instant expires = token.getExpiresAt() == null ? null : token.getExpiresAt().toInstant();
+            return new Token(token.getToken(), expires);
+        }, Clock.systemUTC());
     }
 
     CloneTokens(GitHubInstallations installations, Minter minter, Clock clock) {
@@ -76,10 +81,9 @@ public class CloneTokens {
             return Optional.of(cached);
         }
         try {
-            GHAppInstallationToken minted = minter.mint(installation.get(), slug.substring(slash + 1));
-            Instant expires = minted.getExpiresAt() == null
-                ? now.plus(Duration.ofHours(1)) : minted.getExpiresAt().toInstant();
-            Token token = new Token(minted.getToken(), expires);
+            Token minted = minter.mint(installation.get(), slug.substring(slash + 1));
+            Token token = new Token(minted.value(),
+                minted.expiresAt() == null ? now.plus(Duration.ofHours(1)) : minted.expiresAt());
             cache.put(key, token);
             return Optional.of(token);
         } catch (Exception e) {
