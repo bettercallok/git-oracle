@@ -1,3 +1,4 @@
+import os
 import click
 import time
 import requests
@@ -8,7 +9,11 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeEl
 from rich.panel import Panel
 
 console = Console()
-API_URL = "http://localhost:8080/api/v1"
+API_URL = os.environ.get("GITORACLE_API_URL", "http://localhost:8080/api/v1").rstrip("/")
+
+# The gateway refuses every request without a key (fail-closed X-API-Key auth).
+session = requests.Session()
+session.headers["X-API-Key"] = os.environ.get("GITORACLE_API_KEY", "")
 
 @click.group()
 def cli():
@@ -30,7 +35,7 @@ def analyze(repo, commit):
         progress.add_task(description="Submitting to API Gateway...", total=None)
         
         try:
-            response = requests.post(f"{API_URL}/jobs", json={"repoUrl": repo, "commitHash": commit, "jobType": "analyze"})
+            response = session.post(f"{API_URL}/jobs", json={"repoUrl": repo, "commitHash": commit, "jobType": "analyze"})
             response.raise_for_status()
             job_id = response.json().get("id", str(uuid.uuid4()))
         except Exception as e:
@@ -57,7 +62,7 @@ def fix(repo, commit, error, file, line):
     ) as progress:
         progress.add_task(description="Submitting to Fixer Agent...", total=None)
         try:
-            response = requests.post(f"{API_URL}/trigger", json={
+            response = session.post(f"{API_URL}/trigger", json={
                 "repoUrl": repo, 
                 "issueDescription": f"{error} in {file}:{line} (commit {commit})",
                 "targetRepo": repo.replace("https://github.com/", "")
@@ -92,7 +97,7 @@ def watch(job):
         
         while status not in ["SUCCESS", "FAILED", "ESCALATED"]:
             try:
-                resp = requests.get(f"{API_URL}/jobs/{job}")
+                resp = session.get(f"{API_URL}/jobs/{job}")
                 resp.raise_for_status()
                 data = resp.json()
                 status = data.get("status", "RUNNING")
@@ -145,7 +150,7 @@ def commits(repo):
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
         progress.add_task(description="Fetching from API Gateway...", total=None)
         try:
-            resp = requests.get(f"{API_URL}/commits", params={"repoUrl": repo})
+            resp = session.get(f"{API_URL}/commits", params={"repo": repo})
             resp.raise_for_status()
             commit_list = resp.json()
         except Exception as e:
