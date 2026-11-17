@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { TerminalSquare, Play, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import { Play, RotateCcw, CheckCircle2, XCircle, Loader2, Webhook, TerminalSquare } from 'lucide-react';
 import { apiClient } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useRepos } from '../context/RepoContext';
-import { Alert, EmptyState } from '../components/ui';
+import { containerVariants, itemVariants } from '../utils/motion';
+import { PageHeader, Alert, EmptyState } from '../components/ui';
 
 const buildPayload = (repo: string) => JSON.stringify({
   action: 'completed',
@@ -24,16 +25,20 @@ export default function Simulator() {
   const defaultRepo = activeRepo?.fullName ?? '<owner>/<repo>';
   const [payload, setPayload] = useState(() => buildPayload(defaultRepo));
   const [isLoading, setIsLoading] = useState(false);
+  const [response, setResponse] = useState<{ status: number; data: unknown; ms: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // The repositories arrive from the server after this page first renders.
   useEffect(() => setPayload(buildPayload(defaultRepo)), [defaultRepo]);
-  const [response, setResponse] = useState<{ status: number, data: any } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+
+  let jsonError: string | null = null;
+  try { JSON.parse(payload); } catch (e) { jsonError = (e as Error).message; }
 
   const handleTrigger = async () => {
     setIsLoading(true);
     setResponse(null);
     setError(null);
+    const t0 = performance.now();
 
     try {
       const parsed = JSON.parse(payload);
@@ -42,15 +47,15 @@ export default function Simulator() {
       // signed webhook reaches. The browser can't sign it, because that would mean
       // giving it the webhook secret.
       const res = await apiClient.post('/admin/webhook-simulator', parsed);
-      setResponse({ status: res.status, data: res.data });
+      setResponse({ status: res.status, data: res.data, ms: performance.now() - t0 });
       setPayload(buildPayload(parsed?.repository?.full_name ?? defaultRepo));
     } catch (err: any) {
       if (err instanceof SyntaxError) {
-        setError('Invalid JSON payload');
+        setError('The payload isn\'t valid JSON.');
       } else if (err.response) {
-        setResponse({ status: err.response.status, data: err.response.data });
+        setResponse({ status: err.response.status, data: err.response.data, ms: performance.now() - t0 });
       } else {
-        setError(err.message || 'Failed to connect to API Gateway');
+        setError(err.message || 'Couldn\'t reach the API gateway.');
       }
     } finally {
       setIsLoading(false);
@@ -67,150 +72,79 @@ export default function Simulator() {
     );
   }
 
+  const ok = response && response.status >= 200 && response.status < 300;
+
   return (
-    <div className="page-container">
-      <header className="page-header">
-        <div>
-          <h1 style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <TerminalSquare color="var(--accent)" /> Webhook Simulator
-          </h1>
-          <p className="page-description">Simulate a failed GitHub Actions run to start the full pipeline without waiting for a real one.</p>
-        </div>
-      </header>
-      
-      <div style={{ marginBottom: 24 }}>
+    <motion.div variants={containerVariants} initial="hidden" animate="show">
+      <PageHeader
+        title="Webhook simulator"
+        description="Simulate a failed GitHub Actions run to start the full pipeline without waiting for a real one."
+      />
+
+      <motion.div variants={itemVariants} style={{ marginBottom: 16 }}>
         <Alert tone="warning" title="This starts a real job">
           It uses your LLM provider and can open a real pull request on the repository in the payload, which must be on your allow-list.
         </Alert>
-      </div>
+      </motion.div>
 
-      <div className="grid" style={{ gridTemplateColumns: '2fr 1fr', gap: 24 }}>
+      <motion.div variants={itemVariants} className="grid-sidebar">
         <div className="card">
           <div className="card-header">
-            <h3>GitHub Payload</h3>
-            <button 
-              className="btn btn-secondary" 
-              onClick={() => setPayload(buildPayload(defaultRepo))}
-              style={{ padding: '6px 12px', fontSize: '0.85rem' }}
-            >
-              <RefreshCw size={14} style={{ marginRight: 6 }} /> Reset
+            <div>
+              <div className="card-title">Payload</div>
+              <div className="card-subtitle">A failed <span className="mono">workflow_run</span>, sent as an admin rather than signed by GitHub</div>
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={() => setPayload(buildPayload(defaultRepo))}>
+              <RotateCcw size={13} /> Reset
             </button>
           </div>
-          
-          <div style={{ marginTop: 16 }}>
-            <textarea
-              style={{
-                width: '100%',
-                height: 300,
-                background: 'var(--bg-darker)',
-                border: '1px solid var(--border)',
-                borderRadius: 8,
-                padding: 16,
-                fontFamily: 'monospace',
-                fontSize: '0.9rem',
-                color: 'var(--text)',
-                resize: 'vertical',
-                outline: 'none'
-              }}
-              value={payload}
-              onChange={(e) => setPayload(e.target.value)}
-              spellCheck={false}
-            />
-          </div>
-          
-          <div style={{ marginTop: 24, display: 'flex', justifyContent: 'flex-end' }}>
-            <button 
-              className="btn btn-primary"
-              onClick={handleTrigger}
-              disabled={isLoading}
-              style={{ padding: '12px 24px' }}
-            >
-              {isLoading ? (
-                <>
-                  <motion.div
-                    animate={{ rotate: 360 }}
-                    transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
-                    style={{ display: 'flex' }}
-                  >
-                    <RefreshCw size={18} />
-                  </motion.div>
-                  Sending...
-                </>
-              ) : (
-                <>
-                  <Play size={18} /> Trigger Webhook
-                </>
-              )}
+
+          <textarea
+            className="code-block"
+            style={{ height: 320 }}
+            value={payload}
+            onChange={(e) => setPayload(e.target.value)}
+            spellCheck={false}
+            aria-label="Webhook JSON payload"
+          />
+
+          <div style={{ marginTop: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.8rem', color: jsonError ? 'var(--danger)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              {jsonError ? <><XCircle size={13} /> Invalid JSON</> : <><CheckCircle2 size={13} color="var(--success)" /> Valid JSON</>}
+            </span>
+            <button className="btn btn-primary" onClick={handleTrigger} disabled={isLoading || !!jsonError}>
+              {isLoading ? <><Loader2 size={15} className="spinner" /> Sending…</> : <><Play size={15} /> Trigger webhook</>}
             </button>
           </div>
         </div>
-        
-        <div className="card" style={{ height: 'fit-content' }}>
+
+        <div className="card">
           <div className="card-header">
-            <h3>Response</h3>
-          </div>
-          
-          <div style={{ marginTop: 16 }}>
-            {!response && !error && !isLoading && (
-              <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)' }}>
-                Waiting for request...
-              </div>
-            )}
-            
-            {isLoading && (
-              <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)' }}>
-                <motion.div
-                  animate={{ rotate: 360 }}
-                  transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
-                  style={{ display: 'inline-block', marginBottom: 12 }}
-                >
-                  <RefreshCw size={24} color="var(--accent)" />
-                </motion.div>
-                <p>Waiting for API Gateway...</p>
-              </div>
-            )}
-            
-            {error && (
-              <div style={{ padding: 16, background: 'rgba(239, 68, 68, 0.1)', borderRadius: 8, border: '1px solid rgba(239, 68, 68, 0.2)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#ef4444', marginBottom: 8, fontWeight: 500 }}>
-                  <XCircle size={18} /> Error
-                </div>
-                <div style={{ fontSize: '0.9rem', color: 'var(--text)' }}>
-                  {error}
-                </div>
-              </div>
-            )}
-            
+            <div className="card-title">Response</div>
             {response && (
-              <motion.div 
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                style={{ padding: 16, background: 'var(--bg-darker)', borderRadius: 8, border: '1px solid var(--border)' }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: response.status >= 200 && response.status < 300 ? '#10b981' : '#ef4444', marginBottom: 12, fontWeight: 500 }}>
-                  {response.status >= 200 && response.status < 300 ? <CheckCircle2 size={18} /> : <XCircle size={18} />}
-                  Status: {response.status}
-                </div>
-                <pre style={{ 
-                  margin: 0, 
-                  fontSize: '0.85rem', 
-                  fontFamily: 'monospace', 
-                  color: 'var(--text)', 
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-all' 
-                }}>
-                  {typeof response.data === 'object' ? JSON.stringify(response.data, null, 2) : response.data}
-                </pre>
-                {response.status === 202 && (
-                  <p style={{ margin: '12px 0 0', fontSize: '0.85rem' }}>
-                    <Link to="/">Follow it on the Jobs page</Link>.
-                  </p>
-                )}
-              </motion.div>
+              <span className={`badge ${ok ? 'badge-success' : 'badge-danger'}`}>
+                Status: {response.status} · {Math.round(response.ms)} ms
+              </span>
             )}
           </div>
+
+          {!response && !error && !isLoading && (
+            <EmptyState icon={<Webhook size={20} />} title="Nothing sent yet" description="The reply will appear here." />
+          )}
+          {isLoading && <EmptyState icon={<Loader2 size={20} className="spinner" />} title="Waiting for the gateway…" />}
+          {error && <Alert tone="danger" title="Request failed">{error}</Alert>}
+          {response && (
+            <motion.pre initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="code-block" style={{ maxHeight: 360 }}>
+              {typeof response.data === 'object' ? JSON.stringify(response.data, null, 2) : String(response.data ?? '')}
+            </motion.pre>
+          )}
+          {response?.status === 202 && (
+            <p style={{ margin: '12px 0 0', fontSize: '0.85rem' }}>
+              <Link to="/" className="link">Follow it on the Jobs page</Link>.
+            </p>
+          )}
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
