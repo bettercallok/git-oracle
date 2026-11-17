@@ -6,6 +6,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,6 +52,8 @@ public class JobWatchdog {
 
     @Scheduled(fixedDelayString = "${gitoracle.watchdog.interval:PT1M}",
                initialDelayString = "${gitoracle.watchdog.interval:PT1M}")
+    // One replica per interval; lockAtLeastFor stops another starting the same run.
+    @SchedulerLock(name = "JobWatchdog.escalateStalledJobs", lockAtMostFor = "PT5M", lockAtLeastFor = "PT20S")
     @Transactional
     public void escalateStalledJobs() {
         var limits = properties.getLimits();

@@ -18,7 +18,7 @@ from shared.body_limit import BodySizeLimitMiddleware
 # DATABASE_URL, if explicitly set, still takes precedence.
 def _default_database_url() -> str:
     user = os.getenv("POSTGRES_USER", "gitOracle")
-    password = os.getenv("POSTGRES_PASSWORD", "GitOracle_PG_2025")
+    password = os.getenv("POSTGRES_PASSWORD", "")
     host = os.getenv("POSTGRES_HOST", "localhost")
     port = os.getenv("POSTGRES_PORT", "5433")
     db = os.getenv("POSTGRES_DB", "gitOracle")

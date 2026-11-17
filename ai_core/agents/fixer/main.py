@@ -202,7 +202,7 @@ async def run_real_test(job_id: str, repo_path: str, repo_url: str, patch_diff: 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                "http://localhost:8084/test",
+                os.environ.get("TEST_RUNNER_URL", "http://localhost:8084").rstrip("/") + "/test",
                 json={
                     "jobId": job_id,
                     "repoUrl": repo_url,

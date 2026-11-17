@@ -73,7 +73,7 @@ spring:
             allowCredentials: true
       routes:
         - id: error_ingestor_api
-          uri: http://127.0.0.1:8081
+          uri: ${ERROR_INGESTOR_URL:http://127.0.0.1:8081}
           predicates:
             - Path=/webhook/**
           filters:
@@ -84,7 +84,7 @@ spring:
                 redis-rate-limiter.burstCapacity: 100
         # Before orchestrator_api, whose /api/v1/** would otherwise match first.
         - id: webhook_simulator_api
-          uri: http://127.0.0.1:8081
+          uri: ${ERROR_INGESTOR_URL:http://127.0.0.1:8081}
           predicates:
             - Path=/api/v1/admin/webhook-simulator
           filters:
@@ -94,7 +94,7 @@ spring:
                 redis-rate-limiter.replenishRate: 50
                 redis-rate-limiter.burstCapacity: 100
         - id: git_forensics_api
-          uri: http://127.0.0.1:8082
+          uri: ${GIT_FORENSICS_URL:http://127.0.0.1:8082}
           predicates:
             - Path=/api/v1/risk
           filters:
@@ -104,7 +104,7 @@ spring:
                 redis-rate-limiter.replenishRate: 50
                 redis-rate-limiter.burstCapacity: 100
         - id: orchestrator_api
-          uri: http://127.0.0.1:8083
+          uri: ${ORCHESTRATOR_URL:http://127.0.0.1:8083}
           predicates:
             - Path=/api/v1/**
           filters:

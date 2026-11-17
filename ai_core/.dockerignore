@@ -1,0 +1,7 @@
+.venv/
+**/__pycache__/
+*.log
+*.pid
+tests/
+test_*.py
+scratch_*.py
