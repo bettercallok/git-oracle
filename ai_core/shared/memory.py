@@ -258,7 +258,7 @@ class ProceduralMemory:
     def __init__(self):
         redis_host = os.environ.get("REDIS_HOST", "localhost")
         redis_port = int(os.environ.get("REDIS_PORT", "6379"))
-        redis_password = os.environ.get("REDIS_PASSWORD", "GitOracle_Redis_2025")
+        redis_password = os.environ.get("REDIS_PASSWORD", "")
         self.redis = redis.Redis(
             host=redis_host, 
             port=redis_port, 
