@@ -26,6 +26,8 @@ After a restart, confirm a Java service is actually ready by grepping its log fo
 
 Alternative: containerized java services instead of local processes: `docker compose -f docker-compose.services.yml up -d --build`.
 
+Images: `java-backend/Dockerfile` (one per service, `--build-arg SERVICE=<module>`), `ai_core/Dockerfile` (one image for all seven agents; `AGENT=<name>` picks which one `run-agent.sh` starts) and `dashboard/Dockerfile` (nginx; `VITE_API_URL` is baked in at build time, default `/api/v1`, same origin as the gateway). `.github/workflows/images.yml` builds all eight on PRs and pushes them to `ghcr.io/<owner>/gitoracle-<name>` from `main` and `v*` tags.
+
 ### Build / test — Java (`java-backend/`)
 ```bash
 cd java-backend
