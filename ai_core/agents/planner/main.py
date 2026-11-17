@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, ValidationError
 from typing import List
@@ -9,6 +10,7 @@ import sys
 # Ensure ai_core modules can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
+from shared.checkout import ensure_checkout
 from shared.memory import SemanticMemory
 from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 from shared.internal_auth import require_internal_token
@@ -180,9 +182,13 @@ async def handle_planner_job(payload: dict):
     else:
         bug_description = f"Error {error_id} occurred in the system."
 
+    # Our own checkout at the job's base commit when the orchestrator's isn't on
+    # this host (shared/checkout.py).
+    base_commit = payload.get("base_commit") or ""
+    checkout = await asyncio.to_thread(ensure_checkout, repo_path, payload.get("repo_url", ""), branch, base_commit)
     request = PlannerRequest(
         tenant_id=tenant_id_of(payload),
-        repo_path=repo_path,
+        repo_path=checkout or repo_path,
         bug_description=bug_description,
         investigation_result=investigation,
         job_id=job_id,

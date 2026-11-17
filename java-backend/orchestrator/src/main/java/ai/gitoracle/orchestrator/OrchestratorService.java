@@ -284,6 +284,8 @@ public class OrchestratorService {
         investigatorPayload.put("job_id", job.getId().toString());
         investigatorPayload.put("repo_url", event.getRepoUrl());
         investigatorPayload.put("repo_path", repoPath);
+        // Agents on another host clone the repo at this commit (shared/checkout.py).
+        investigatorPayload.put("base_commit", headSha);
         investigatorPayload.put("error_id", event.getErrorId());
         // The actual error detail (stack trace / webhook payload) captured by error-ingestor
         // was previously dropped here — the investigator only ever saw a generic templated
@@ -843,7 +845,7 @@ public class OrchestratorService {
             java.util.Map<String, Object> reviewRequest = new java.util.HashMap<>();
             reviewRequest.put("job_id",          jobIdStr);
             reviewRequest.put("tenant_id",       job.getTenantId().toString());
-            reviewRequest.put("repo_path",       "/tmp/gitoracle-workspaces/" + jobIdStr);
+            reviewRequest.put("repo_path",       WorkspaceService.pathFor(job.getId()));
             reviewRequest.put("bug_description", job.getErrorId());
             reviewRequest.put("fixer_patch",     job.getFixPatch() != null && !job.getFixPatch().isBlank()
                 ? job.getFixPatch() : "(stored patch not available — review based on comment only)");
@@ -867,7 +869,7 @@ public class OrchestratorService {
                 jobState.transition(job, "REGENERATING",
                     "Reviewer agreed with a PR comment — regenerating: " + comment, "reviewer");
 
-                String repoPath    = "/tmp/gitoracle-workspaces/" + jobIdStr;
+                String repoPath    = WorkspaceService.pathFor(job.getId());
                 // From the job's own PR, never from the webhook payload.
                 String repoForPr   = repositoryOfPullRequest(job.getPrUrl());
 

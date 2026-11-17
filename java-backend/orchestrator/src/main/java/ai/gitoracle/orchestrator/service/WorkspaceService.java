@@ -23,6 +23,15 @@ public class WorkspaceService {
     }
 
     /**
+     * Where a job's checkout lives. Agents on another machine get the same path
+     * and clone into it themselves at the job's base commit (shared/checkout.py),
+     * so a path in an event names the place, not a directory they must share.
+     */
+    public static String pathFor(UUID jobId) {
+        return WORKSPACE_DIR + jobId;
+    }
+
+    /**
      * Clones the given repository's default branch into a temporary workspace
      * directory. Kept for callers with no branch selection.
      */
@@ -41,7 +50,7 @@ public class WorkspaceService {
      * @return absolute path to the cloned repository
      */
     public String cloneRepository(String repoUrl, String branch, UUID jobId) {
-        String clonePath = WORKSPACE_DIR + jobId.toString();
+        String clonePath = pathFor(jobId);
         File localPath = new File(clonePath);
 
         if (localPath.exists() && localPath.isDirectory()
