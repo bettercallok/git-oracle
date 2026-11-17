@@ -80,6 +80,20 @@ public class CommitController {
     private String commitAnalystUrl = "http://localhost:9004";
 
     private final GitHubClientService githubClientService;
+
+    /** Files/lines changed per commit, by "owner/repo@sha". A commit never changes, so these never go stale. */
+    record CommitStats(int filesChanged, int additions, int deletions, int totalChanges) {}
+
+    static final int STATS_CACHE_SIZE = 5_000;
+
+    // Access-ordered LinkedHashMap: an LRU bounded at STATS_CACHE_SIZE entries (~1MB).
+    private final Map<String, CommitStats> statsCache = Collections.synchronizedMap(
+        new LinkedHashMap<>(256, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, CommitStats> eldest) {
+                return size() > STATS_CACHE_SIZE;
+            }
+        });
     private final RestTemplate restTemplate = ai.gitoracle.orchestrator.service.InternalHttp.shortCalls();
 
     @Value("${gitoracle.internal-token:}")
@@ -184,35 +198,28 @@ public class CommitController {
                             entry.put("date",      info.getAuthor().getDate() != null
                                     ? info.getAuthor().getDate().toInstant().toString()
                                     : null);
-                            // Stats are only available in the full commit object.
-                            //
-                            // NOTE (unfixed, deliberately): this is one extra
-                            // GitHub API call PER COMMIT, so a single request at
-                            // per_page=100 costs ~100 calls on top of the list
-                            // itself. An installation's quota is 5000/hour and
-                            // is SHARED ACROSS TENANTS, so roughly 50 requests
-                            // here can exhaust commit browsing for everyone.
-                            // The page/skip bounds above cap the damage per
-                            // request but do not remove this amplification.
-                            // Fixing it properly means either dropping stats
-                            // from the list view or caching commit stats by SHA
-                            // (they are immutable, so caching is trivially
-                            // correct) — both are behaviour changes to the
-                            // dashboard's data, not a validation fix, so they
-                            // are not folded into this change. The per-tenant
-                            // GitHub quota the plan calls for belongs with them.
-                            try {
-                                GHCommit fullCommit = ghRepo.getCommit(commit.getSHA1());
-                                entry.put("filesChanged", fullCommit.getFiles().size());
-                                entry.put("additions",    fullCommit.getLinesAdded());
-                                entry.put("deletions",    fullCommit.getLinesDeleted());
-                                entry.put("totalChanges", fullCommit.getLinesChanged());
-                            } catch (Exception statsEx) {
-                                entry.put("filesChanged", 0);
-                                entry.put("additions",    0);
-                                entry.put("deletions",    0);
-                                entry.put("totalChanges", 0);
+                            // Stats need the full commit: one GitHub call each. They
+                            // never change for a SHA, so each commit costs that call
+                            // once, not on every view (the installation's 5000/hour
+                            // quota is shared by every organisation on it).
+                            // get-then-put, not computeIfAbsent: that would hold the
+                            // map's lock during the GitHub call and queue every request.
+                            String key = repo + "@" + commit.getSHA1();
+                            CommitStats stats = statsCache.get(key);
+                            if (stats == null) {
+                                try {
+                                    GHCommit fullCommit = ghRepo.getCommit(commit.getSHA1());
+                                    stats = new CommitStats(fullCommit.getFiles().size(), fullCommit.getLinesAdded(),
+                                        fullCommit.getLinesDeleted(), fullCommit.getLinesChanged());
+                                    statsCache.put(key, stats);
+                                } catch (Exception statsEx) {
+                                    // Not cached, so it is tried again next time.
+                                }
                             }
+                            entry.put("filesChanged", stats == null ? 0 : stats.filesChanged());
+                            entry.put("additions",    stats == null ? 0 : stats.additions());
+                            entry.put("deletions",    stats == null ? 0 : stats.deletions());
+                            entry.put("totalChanges", stats == null ? 0 : stats.totalChanges());
                             return entry;
                         } catch (Exception e) {
                             logger.warn("Could not map commit {}: {}", commit.getSHA1(), e.getMessage());
