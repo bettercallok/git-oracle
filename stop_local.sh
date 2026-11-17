@@ -90,6 +90,27 @@ for PORT in $APP_PORTS; do
   done < <(lsof -i :"$PORT" 2>/dev/null | tail -n +2)
 done
 
+# Agents that hold no port. An agent that lost the race for its port (a second
+# start_local.sh while one was running) stays alive on its Kafka consumer,
+# listening nowhere, and ignores SIGTERM, so the port sweep above never sees it:
+# copies from days earlier were found still running, using RAM and the old
+# passwords. Matched by script AND by working directory (this repo's ai_core),
+# so nothing outside this project is touched, and never a Docker process.
+AI_CORE_DIR="$(cd "$(dirname "$0")" && pwd)/ai_core"
+orphans=()
+for pid in $(pgrep -f 'agents/[a-z_]+/main\.py|agents\.commit_analyst\.main' 2>/dev/null); do
+  cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+  [ "$cwd" = "$AI_CORE_DIR" ] && orphans+=("$pid")
+done
+if [ ${#orphans[@]} -gt 0 ]; then
+  echo "  Stopping ${#orphans[@]} agent process(es) not bound to a port"
+  kill "${orphans[@]}" 2>/dev/null || true
+  sleep 3
+  for pid in "${orphans[@]}"; do
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+  done
+fi
+
 # Clean up stale pid files written by start_local.sh
 rm -f java-backend/*.pid ai_core/*.pid dashboard/*.pid 2>/dev/null || true
 
