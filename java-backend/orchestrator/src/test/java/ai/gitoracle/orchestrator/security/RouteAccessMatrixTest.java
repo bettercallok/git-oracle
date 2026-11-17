@@ -83,6 +83,7 @@ class RouteAccessMatrixTest {
         entry("POST /api/v1/jobs/{id}/events", Access.INTERNAL),
         entry("POST /api/v1/jobs/{jobId}/prompt-version", Access.INTERNAL),
         entry("POST /api/v1/budget/{jobId}/record", Access.INTERNAL),
+        entry("POST /api/v1/jobs/{id}/clone-token", Access.INTERNAL),
 
         entry("POST /api/v1/admin/tenants", Access.ADMIN),
         entry("POST /api/v1/admin/tenants/{id}/invitations", Access.ADMIN),

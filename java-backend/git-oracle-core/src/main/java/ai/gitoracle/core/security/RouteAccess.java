@@ -47,7 +47,9 @@ public final class RouteAccess {
     private static final List<Pattern> INTERNAL_WRITES = List.of(
         Pattern.compile("/api/v1/jobs/[^/]+/events"),
         Pattern.compile("/api/v1/jobs/[^/]+/prompt-version"),
-        Pattern.compile("/api/v1/budget/[^/]+/record"));
+        Pattern.compile("/api/v1/budget/[^/]+/record"),
+        // A read token for the job's repository (CloneTokenController): never through the gateway.
+        Pattern.compile("/api/v1/jobs/[^/]+/clone-token"));
 
     private RouteAccess() {}
 

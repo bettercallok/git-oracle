@@ -23,6 +23,15 @@ public class WorkspaceService {
     }
 
     /**
+     * Where a job's checkout lives. Agents on another machine get the same path
+     * and clone into it themselves at the job's base commit (shared/checkout.py),
+     * so a path in an event names the place, not a directory they must share.
+     */
+    public static String pathFor(UUID jobId) {
+        return WORKSPACE_DIR + jobId;
+    }
+
+    /**
      * Clones the given repository's default branch into a temporary workspace
      * directory. Kept for callers with no branch selection.
      */
@@ -30,18 +39,22 @@ public class WorkspaceService {
         return cloneRepository(repoUrl, null, jobId);
     }
 
+    public String cloneRepository(String repoUrl, String branch, UUID jobId) {
+        return cloneRepository(repoUrl, branch, jobId, null);
+    }
+
     /**
      * Clones the given repository into a temporary workspace directory.
-     * For public repositories no credentials are required.
-     * GitHub App token auth will be added in Phase 3 (PR creation).
      *
-     * @param repoUrl full HTTPS URL of the repository
-     * @param branch  branch to check out, or null/blank for the repo's default branch
-     * @param jobId   the job ID used to create an isolated workspace directory
+     * @param repoUrl    full HTTPS URL of the repository
+     * @param branch     branch to check out, or null/blank for the repo's default branch
+     * @param jobId      the job ID used to create an isolated workspace directory
+     * @param cloneToken read token for a private repository ({@link CloneTokens}), or null.
+     *                   If cloning with it fails, the clone is retried anonymously.
      * @return absolute path to the cloned repository
      */
-    public String cloneRepository(String repoUrl, String branch, UUID jobId) {
-        String clonePath = WORKSPACE_DIR + jobId.toString();
+    public String cloneRepository(String repoUrl, String branch, UUID jobId, String cloneToken) {
+        String clonePath = pathFor(jobId);
         File localPath = new File(clonePath);
 
         if (localPath.exists() && localPath.isDirectory()
@@ -69,14 +82,17 @@ public class WorkspaceService {
         try {
             logger.info("Cloning {} (branch: {}) into {} for job {}",
                         validatedRepoUrl, validatedBranch != null ? validatedBranch : "<default>", clonePath, jobId);
-            var cloneCommand = Git.cloneRepository()
-                    .setURI(validatedRepoUrl)
-                    .setDirectory(localPath);
-            if (validatedBranch != null) {
-                cloneCommand.setBranch(validatedBranch);
+            boolean withToken = cloneToken != null && !cloneToken.isBlank();
+            try {
+                clone(validatedRepoUrl, validatedBranch, localPath, withToken ? cloneToken : null);
+            } catch (Exception first) {
+                if (!withToken) throw first;
+                // The token may not cover this repository; a public one still clones without it.
+                logger.warn("Authenticated clone failed for job {}, retrying anonymously: {}", jobId, first.getMessage());
+                deleteRecursively(localPath);
+                clone(validatedRepoUrl, validatedBranch, localPath, null);
             }
-            cloneCommand.call().close();
-            logger.info("Successfully cloned {} for job {}", repoUrl, jobId);
+            logger.info("Successfully cloned {} for job {}{}", repoUrl, jobId, withToken ? " (authenticated)" : "");
             return clonePath;
         } catch (Exception e) {
             logger.error("Failed to clone repository {} (branch: {}) for job {}: {}",
@@ -84,6 +100,31 @@ public class WorkspaceService {
             // Return the path anyway so the pipeline continues; agents can handle missing workspace
             return clonePath;
         }
+    }
+
+    /**
+     * The token goes to JGit as a credential, never into the URL, so it is not
+     * written to the clone's .git/config or to any log line that prints the URL.
+     */
+    private static void clone(String url, String branch, File into, String token) throws Exception {
+        var cloneCommand = Git.cloneRepository().setURI(url).setDirectory(into);
+        if (branch != null) cloneCommand.setBranch(branch);
+        if (token != null) {
+            cloneCommand.setCredentialsProvider(
+                new org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider("x-access-token", token));
+        }
+        cloneCommand.call().close();
+    }
+
+    private static void deleteRecursively(File dir) {
+        File[] children = dir.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                if (child.isDirectory() && !java.nio.file.Files.isSymbolicLink(child.toPath())) deleteRecursively(child);
+                else child.delete();
+            }
+        }
+        dir.delete();
     }
 
     /**

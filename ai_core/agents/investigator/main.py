@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
@@ -9,6 +10,7 @@ import sys
 # Ensure ai_core modules can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from shared.structured_output import llm_structured
+from shared.checkout import ensure_checkout
 from shared.prompt_registry import fetch_prompt_versioned, report_prompt_version
 from shared.internal_auth import require_internal_token
 from shared.job_events import report_event
@@ -162,9 +164,13 @@ async def handle_investigate_job(payload: dict):
         _parts.append(f"User instruction: {human_instructions}")
     bug_description = "\n\n".join(_parts) if _parts else f"Error {error_id} reported from ingestor."
 
+    # On another host the orchestrator's clone isn't here: make our own at the
+    # job's base commit (shared/checkout.py). A no-op on one machine.
+    base_commit = payload.get("base_commit") or ""
+    checkout = await asyncio.to_thread(ensure_checkout, repo_path, payload.get("repo_url", ""), branch, base_commit, job_id)
     request = InvestigationRequest(
         tenant_id=tenant_id_of(payload),
-        repo_path=repo_path,
+        repo_path=checkout or repo_path,
         bug_description=bug_description,
         affected_files=[], # To be implemented via git diff inference
         job_id=job_id
@@ -188,6 +194,7 @@ async def handle_investigate_job(payload: dict):
             "job_id": job_id,
             "repo_url": payload.get("repo_url", ""),
             "repo_path": repo_path,
+            "base_commit": base_commit,
             "error_id": error_id,
             "investigation_result": investigation_result.dict(),
             # Pass-through so the Fixer, two hops downstream, still receives them.
